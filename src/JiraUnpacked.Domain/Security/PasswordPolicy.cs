@@ -7,7 +7,7 @@ public sealed class PasswordPolicy
     public int MinLength { get; init; } = 12;
     public int MinCharacterClasses { get; init; } = 3;
 
-    public PasswordValidationResult Validate(string password)
+    public PasswordValidationResult Validate(string? password)
     {
         var errors = new List<string>();
         password ??= string.Empty;

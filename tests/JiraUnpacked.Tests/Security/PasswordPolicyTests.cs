@@ -2,7 +2,7 @@ using JiraUnpacked.Domain.Security;
 
 namespace JiraUnpacked.Tests.Security;
 
-public class PasswordPolicyTests
+public sealed class PasswordPolicyTests
 {
     private readonly PasswordPolicy _policy = new(); // defaults: min 12, >=3 classes
 
@@ -10,6 +10,14 @@ public class PasswordPolicyTests
     public void Validate_Accepts_StrongPassword()
     {
         var result = _policy.Validate("Correct-Horse-9!");
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Errors);
+    }
+
+    [Fact]
+    public void Validate_Accepts_ExactlyMinLength_WithEnoughClasses()
+    {
+        var result = _policy.Validate("Abcdef1!ghij"); // exactly 12 chars, 4 classes
         Assert.True(result.IsValid);
         Assert.Empty(result.Errors);
     }
@@ -28,5 +36,13 @@ public class PasswordPolicyTests
         var result = _policy.Validate("alllowercaseletters"); // 1 class, long enough
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, e => e.Contains("character"));
+    }
+
+    [Fact]
+    public void Validate_Rejects_Null()
+    {
+        var result = _policy.Validate(null);
+        Assert.False(result.IsValid);
+        Assert.NotEmpty(result.Errors);
     }
 }
