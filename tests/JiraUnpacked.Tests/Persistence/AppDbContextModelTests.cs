@@ -56,4 +56,15 @@ public class AppDbContextModelTests
         Assert.Equal(typeof(string),
             user.FindProperty(nameof(Domain.Entities.User.Status))!.GetProviderClrType());
     }
+
+    [Fact]
+    public void Model_Includes_RefreshToken_With_Unique_TokenHash()
+    {
+        using var ctx = CreateContext();
+        var entity = ctx.Model.FindEntityType(typeof(Domain.Entities.RefreshToken))!;
+
+        Assert.NotNull(entity);
+        Assert.Contains(entity.GetIndexes(),
+            i => i.IsUnique && i.Properties.Any(p => p.Name == nameof(Domain.Entities.RefreshToken.TokenHash)));
+    }
 }
