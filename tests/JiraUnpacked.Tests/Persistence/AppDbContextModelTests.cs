@@ -31,6 +31,7 @@ public class AppDbContextModelTests
         Assert.Contains(nameof(Domain.Entities.User), entities);
         Assert.Contains(nameof(Domain.Entities.InviteCode), entities);
         Assert.Contains(nameof(Domain.Entities.EmailVerification), entities);
+        Assert.Contains(nameof(Domain.Entities.RefreshToken), entities);
     }
 
     [Fact]
@@ -55,5 +56,16 @@ public class AppDbContextModelTests
             user.FindProperty(nameof(Domain.Entities.User.Role))!.GetProviderClrType());
         Assert.Equal(typeof(string),
             user.FindProperty(nameof(Domain.Entities.User.Status))!.GetProviderClrType());
+    }
+
+    [Fact]
+    public void Model_Includes_RefreshToken_With_Unique_TokenHash()
+    {
+        using var ctx = CreateContext();
+        var entity = ctx.Model.FindEntityType(typeof(Domain.Entities.RefreshToken))!;
+
+        Assert.NotNull(entity);
+        Assert.Contains(entity.GetIndexes(),
+            i => i.IsUnique && i.Properties.Any(p => p.Name == nameof(Domain.Entities.RefreshToken.TokenHash)));
     }
 }

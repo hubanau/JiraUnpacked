@@ -1,4 +1,7 @@
+using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Infrastructure.Persistence;
+using JiraUnpacked.Infrastructure.Security;
+using JiraUnpacked.Infrastructure.Time;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -16,6 +19,10 @@ public static class DependencyInjection
         }
 
         services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
+
+        services.AddSingleton<IClock, SystemClock>();
+        services.AddSingleton<IPasswordHasher, BcryptPasswordHasher>();
+        services.AddSingleton<ITokenService, JwtTokenService>();
 
         return services;
     }
