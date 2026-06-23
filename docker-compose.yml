@@ -1,0 +1,22 @@
+# Local development database only. Production uses AWS RDS (see REQUIREMENTS.md).
+# Credentials here are throwaway local-dev values, intentionally not secret.
+services:
+  postgres:
+    image: postgres:16
+    container_name: jiraunpacked-db
+    environment:
+      POSTGRES_DB: jiraunpacked
+      POSTGRES_USER: jiraunpacked
+      POSTGRES_PASSWORD: localdev
+    ports:
+      - "5432:5432"
+    volumes:
+      - jiraunpacked-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jiraunpacked -d jiraunpacked"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  jiraunpacked-pgdata:

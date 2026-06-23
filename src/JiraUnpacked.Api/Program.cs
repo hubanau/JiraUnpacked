@@ -1,4 +1,10 @@
+using JiraUnpacked.Infrastructure;
+
 var builder = WebApplication.CreateBuilder(args);
+
+// EF Core (Npgsql) + AppDbContext. Connection string resolved per environment;
+// locally it points at the docker-compose Postgres (see README).
+builder.Services.AddInfrastructure(builder.Configuration.GetConnectionString("Default"));
 
 // Controllers and OpenAPI. Feature endpoints (identity, connections, reports)
 // are added in later phases.
