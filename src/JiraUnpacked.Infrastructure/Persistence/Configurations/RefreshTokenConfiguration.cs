@@ -19,6 +19,7 @@ public class RefreshTokenConfiguration : IEntityTypeConfiguration<RefreshToken>
 
         builder.HasIndex(t => t.UserId);
 
+        // Tokens belong to a user — cascade delete with the user.
         builder.HasOne<User>()
             .WithMany()
             .HasForeignKey(t => t.UserId)

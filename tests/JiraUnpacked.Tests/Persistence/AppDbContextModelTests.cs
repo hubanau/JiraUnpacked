@@ -31,6 +31,7 @@ public class AppDbContextModelTests
         Assert.Contains(nameof(Domain.Entities.User), entities);
         Assert.Contains(nameof(Domain.Entities.InviteCode), entities);
         Assert.Contains(nameof(Domain.Entities.EmailVerification), entities);
+        Assert.Contains(nameof(Domain.Entities.RefreshToken), entities);
     }
 
     [Fact]
