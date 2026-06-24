@@ -54,8 +54,14 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
 
     public async Task EnsureDatabaseAsync()
     {
-        using var scope = Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        // Migrate via a standalone context so the database exists and is migrated
+        // BEFORE the host is built. The app's startup admin-seeder runs during host
+        // construction; accessing Services here (to migrate) would build the host and
+        // run that seeder against a not-yet-created database (fails on a fresh CI DB).
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseNpgsql(TestConnectionString)
+            .Options;
+        await using var db = new AppDbContext(options);
         await db.Database.MigrateAsync();
     }
 }
