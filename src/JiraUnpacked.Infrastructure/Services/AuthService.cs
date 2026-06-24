@@ -29,8 +29,11 @@ public sealed class AuthService : IAuthService
 
     public async Task<LoginResult> LoginAsync(string emailOrUsername, string password, CancellationToken ct = default)
     {
+        // Email is stored normalized, so match the normalized form for the email branch
+        // (case-insensitive); username stays an exact match.
+        var normalizedEmail = User.NormalizeEmail(emailOrUsername);
         var user = await _db.Users.FirstOrDefaultAsync(
-            u => u.Email == emailOrUsername || u.Username == emailOrUsername, ct);
+            u => u.Email == normalizedEmail || u.Username == emailOrUsername, ct);
 
         // Always perform exactly one bcrypt verification (against a dummy hash when the
         // user is absent) so response timing is uniform and login can't enumerate accounts.
@@ -80,9 +83,21 @@ public sealed class AuthService : IAuthService
         var access = _tokens.CreateAccessToken(user);
         var newRefresh = _tokens.CreateRefreshToken();
 
-        // Rotate: revoke the presented token and link it to its replacement.
-        existing.RevokedAt = now;
-        existing.ReplacedByTokenHash = newRefresh.TokenHash;
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+
+        // Rotate atomically: revoke the presented token only if it's still active. Two
+        // concurrent refreshes with the same token serialize here — the loser updates
+        // zero rows and is rejected, so a single token can never mint two replacements.
+        var revoked = await _db.RefreshTokens
+            .Where(t => t.Id == existing.Id && t.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.RevokedAt, now)
+                .SetProperty(t => t.ReplacedByTokenHash, newRefresh.TokenHash), ct);
+
+        if (revoked == 0)
+        {
+            return new LoginResult(false, null, null, null);
+        }
 
         _db.RefreshTokens.Add(new RefreshToken
         {
@@ -94,6 +109,7 @@ public sealed class AuthService : IAuthService
         });
 
         await _db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
 
         return new LoginResult(true, access.Token, access.ExpiresAtUtc, newRefresh.Token);
     }
