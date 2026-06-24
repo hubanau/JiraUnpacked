@@ -41,10 +41,4 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.MigrateAsync();
     }
-
-    public AppDbContext CreateDbContext()
-    {
-        var scope = Services.CreateScope();
-        return scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    }
 }
