@@ -10,6 +10,11 @@ public class User
 {
     public Guid Id { get; set; }
 
+    /// <summary>
+    /// Stored normalized (lowercased, trimmed) via <see cref="NormalizeEmail"/> so the
+    /// unique index gives case-insensitive uniqueness and login lookups match regardless
+    /// of the casing the client typed. Writers must normalize before persisting.
+    /// </summary>
     public string Email { get; set; } = null!;
 
     public string Username { get; set; } = null!;
@@ -22,4 +27,11 @@ public class User
     public UserStatus Status { get; set; }
 
     public DateTime CreatedAt { get; set; }
+
+    /// <summary>
+    /// Canonical form of an email for storage and lookup: trimmed and lowercased
+    /// (invariant). Centralized so registration and login agree on one normalization.
+    /// </summary>
+    public static string NormalizeEmail(string email) =>
+        (email ?? string.Empty).Trim().ToLowerInvariant();
 }
