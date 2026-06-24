@@ -79,4 +79,34 @@ public sealed class AdminSeederTests : IClassFixture<JiraUnpackedApiFactory>, IA
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
+
+    [Fact]
+    public async Task Seed_NormalizesEmail_BeforeStoring()
+    {
+        var unique = Guid.NewGuid().ToString("N");
+        var mixedCaseEmail = $"Admin-{unique}@Example.COM";
+        var normalized = $"admin-{unique}@example.com";
+
+        await RunSeederAsync(OneAdmin(mixedCaseEmail, $"admin-{unique}", "Seeded-Admin-9!"));
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.True(await db.Users.AnyAsync(u => u.Email == normalized));
+    }
+
+    [Fact]
+    public async Task SeededAdmin_CanLogIn_WithMixedCaseEmail()
+    {
+        var unique = Guid.NewGuid().ToString("N");
+        var mixedCaseEmail = $"Admin-{unique}@Example.COM";
+        const string password = "Seeded-Admin-9!";
+
+        await RunSeederAsync(OneAdmin(mixedCaseEmail, $"admin-{unique}", password));
+
+        var client = _factory.CreateClient();
+        var response = await client.PostAsJsonAsync("/api/auth/login",
+            new { emailOrUsername = mixedCaseEmail, password });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
 }

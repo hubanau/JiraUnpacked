@@ -36,8 +36,12 @@ public sealed class AdminSeeder
                 continue; // skip incomplete entries
             }
 
+            // Store the canonical (normalized) email so the unique index and login
+            // lookups are case-insensitive (login matches User.NormalizeEmail).
+            var email = User.NormalizeEmail(admin.Email);
+
             var exists = await _db.Users.AnyAsync(
-                u => u.Email == admin.Email || u.Username == admin.Username, ct);
+                u => u.Email == email || u.Username == admin.Username, ct);
             if (exists)
             {
                 continue; // idempotent: already seeded
@@ -46,7 +50,7 @@ public sealed class AdminSeeder
             _db.Users.Add(new User
             {
                 Id = Guid.NewGuid(),
-                Email = admin.Email,
+                Email = email,
                 Username = admin.Username,
                 PasswordHash = _hasher.Hash(admin.Password),
                 Role = UserRole.Admin,
