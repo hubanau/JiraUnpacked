@@ -110,4 +110,93 @@ public sealed class AuthEndpointsTests : IClassFixture<JiraUnpackedApiFactory>, 
 
         Assert.Equal(HttpStatusCode.OK, meResponse.StatusCode);
     }
+
+    private async Task<TokenResponseDto> LoginAndGetTokensAsync()
+    {
+        var (login, password) = await SeedUserAsync();
+        var client = _factory.CreateClient();
+        var response = await client.PostAsJsonAsync("/api/auth/login",
+            new { emailOrUsername = login, password });
+        return (await response.Content.ReadFromJsonAsync<TokenResponseDto>())!;
+    }
+
+    [Fact]
+    public async Task Refresh_WithValidToken_RotatesAndReturnsNewTokens()
+    {
+        var tokens = await LoginAndGetTokensAsync();
+        var client = _factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/auth/refresh",
+            new { refreshToken = tokens.RefreshToken });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var rotated = await response.Content.ReadFromJsonAsync<TokenResponseDto>();
+        Assert.NotNull(rotated);
+        Assert.False(string.IsNullOrWhiteSpace(rotated!.RefreshToken));
+        Assert.NotEqual(tokens.RefreshToken, rotated.RefreshToken);
+    }
+
+    [Fact]
+    public async Task Refresh_WithUnknownToken_Returns401()
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/auth/refresh",
+            new { refreshToken = "not-a-real-token" });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Refresh_WithRotatedToken_Returns401()
+    {
+        var tokens = await LoginAndGetTokensAsync();
+        var client = _factory.CreateClient();
+
+        await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = tokens.RefreshToken });
+
+        var reuse = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = tokens.RefreshToken });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, reuse.StatusCode);
+    }
+
+    [Fact]
+    public async Task Logout_ThenRefresh_Returns401_AndIsIdempotent()
+    {
+        var tokens = await LoginAndGetTokensAsync();
+        var client = _factory.CreateClient();
+
+        var logout1 = await client.PostAsJsonAsync("/api/auth/logout", new { refreshToken = tokens.RefreshToken });
+        Assert.Equal(HttpStatusCode.NoContent, logout1.StatusCode);
+
+        var logout2 = await client.PostAsJsonAsync("/api/auth/logout", new { refreshToken = tokens.RefreshToken });
+        Assert.Equal(HttpStatusCode.NoContent, logout2.StatusCode);
+
+        var refresh = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = tokens.RefreshToken });
+        Assert.Equal(HttpStatusCode.Unauthorized, refresh.StatusCode);
+    }
+
+    [Fact]
+    public async Task Refresh_WhenUserBlocked_Returns401()
+    {
+        var (login, password) = await SeedUserAsync();
+        var client = _factory.CreateClient();
+        var loginResponse = await client.PostAsJsonAsync("/api/auth/login",
+            new { emailOrUsername = login, password });
+        var tokens = (await loginResponse.Content.ReadFromJsonAsync<TokenResponseDto>())!;
+
+        // Block the user after login (synchronous Single/SaveChanges via System.Linq).
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var user = db.Users.Single(u => u.Email == login);
+            user.Status = UserStatus.Blocked;
+            db.SaveChanges();
+        }
+
+        var response = await client.PostAsJsonAsync("/api/auth/refresh",
+            new { refreshToken = tokens.RefreshToken });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
 }

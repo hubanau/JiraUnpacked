@@ -1,9 +1,12 @@
 using JiraUnpacked.Infrastructure.Persistence;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using System.Threading.RateLimiting;
 
 namespace JiraUnpacked.Tests.Integration;
 
@@ -32,6 +35,20 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
             }
 
             services.AddDbContext<AppDbContext>(options => options.UseNpgsql(TestConnectionString));
+
+            // Replace the "auth" fixed-window limiter with an unlimited policy so
+            // integration tests are never throttled by repeated requests from 127.0.0.1.
+            // Remove all previously registered IConfigureOptions<RateLimiterOptions> and
+            // re-register with a no-op policy so AddPolicy("auth") doesn't throw a duplicate.
+            var rateLimiterDescriptors = services
+                .Where(d => d.ServiceType == typeof(IConfigureOptions<Microsoft.AspNetCore.RateLimiting.RateLimiterOptions>))
+                .ToList();
+            foreach (var d in rateLimiterDescriptors)
+                services.Remove(d);
+
+            services.AddRateLimiter(options =>
+                options.AddPolicy("auth", _ =>
+                    RateLimitPartition.GetNoLimiter(string.Empty)));
         });
     }
 
