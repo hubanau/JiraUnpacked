@@ -1,6 +1,6 @@
 using JiraUnpacked.Domain.Entities;
 
-namespace JiraUnpacked.Tests.Domain;
+namespace JiraUnpacked.Tests.DomainTests;
 
 public class UserTests
 {
