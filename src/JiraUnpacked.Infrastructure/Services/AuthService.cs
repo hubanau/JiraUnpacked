@@ -57,4 +57,58 @@ public sealed class AuthService : IAuthService
 
         return new LoginResult(true, access.Token, access.ExpiresAtUtc, refresh.Token);
     }
+
+    public async Task<LoginResult> RefreshAsync(string refreshToken, CancellationToken ct = default)
+    {
+        var hash = _tokens.HashRefreshToken(refreshToken);
+        var existing = await _db.RefreshTokens.FirstOrDefaultAsync(t => t.TokenHash == hash, ct);
+
+        var now = _clock.UtcNow;
+
+        // Reject unknown, already-revoked (incl. rotated), or expired tokens.
+        if (existing is null || existing.RevokedAt is not null || existing.ExpiresAt <= now)
+        {
+            return new LoginResult(false, null, null, null);
+        }
+
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == existing.UserId, ct);
+        if (user is null || user.Status != UserStatus.Active)
+        {
+            return new LoginResult(false, null, null, null);
+        }
+
+        var access = _tokens.CreateAccessToken(user);
+        var newRefresh = _tokens.CreateRefreshToken();
+
+        // Rotate: revoke the presented token and link it to its replacement.
+        existing.RevokedAt = now;
+        existing.ReplacedByTokenHash = newRefresh.TokenHash;
+
+        _db.RefreshTokens.Add(new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            UserId = user.Id,
+            TokenHash = newRefresh.TokenHash,
+            CreatedAt = now,
+            ExpiresAt = newRefresh.ExpiresAtUtc
+        });
+
+        await _db.SaveChangesAsync(ct);
+
+        return new LoginResult(true, access.Token, access.ExpiresAtUtc, newRefresh.Token);
+    }
+
+    public async Task LogoutAsync(string refreshToken, CancellationToken ct = default)
+    {
+        var hash = _tokens.HashRefreshToken(refreshToken);
+        var existing = await _db.RefreshTokens
+            .FirstOrDefaultAsync(t => t.TokenHash == hash && t.RevokedAt == null, ct);
+
+        if (existing is not null)
+        {
+            existing.RevokedAt = _clock.UtcNow;
+            await _db.SaveChangesAsync(ct);
+        }
+        // Idempotent: unknown or already-revoked tokens are a no-op (no error, no info leak).
+    }
 }
