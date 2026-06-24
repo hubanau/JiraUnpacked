@@ -2,12 +2,18 @@ using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Domain.Enums;
 using JiraUnpacked.Infrastructure.Persistence;
+using JiraUnpacked.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 
 namespace JiraUnpacked.Infrastructure.Services;
 
 public sealed class AuthService : IAuthService
 {
+    // A valid bcrypt hash (same work factor) verified on the no-such-user path so login
+    // timing doesn't reveal whether an account exists. Computed once; not a secret.
+    private static readonly string DummyPasswordHash =
+        new BcryptPasswordHasher().Hash("login-timing-equalizer");
+
     private readonly AppDbContext _db;
     private readonly IPasswordHasher _hasher;
     private readonly ITokenService _tokens;
@@ -26,9 +32,12 @@ public sealed class AuthService : IAuthService
         var user = await _db.Users.FirstOrDefaultAsync(
             u => u.Email == emailOrUsername || u.Username == emailOrUsername, ct);
 
-        // Uniform failure for unknown user, non-active status, or wrong password
-        // (no enumeration; same response for every reason).
-        if (user is null || user.Status != UserStatus.Active || !_hasher.Verify(password, user.PasswordHash))
+        // Always perform exactly one bcrypt verification (against a dummy hash when the
+        // user is absent) so response timing is uniform and login can't enumerate accounts.
+        var passwordValid = _hasher.Verify(password, user?.PasswordHash ?? DummyPasswordHash);
+
+        // Uniform failure for unknown user, non-active status, or wrong password.
+        if (user is null || user.Status != UserStatus.Active || !passwordValid)
         {
             return new LoginResult(false, null, null, null);
         }
