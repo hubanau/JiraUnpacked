@@ -46,6 +46,7 @@ public sealed class AuthController : ControllerBase
 
     [HttpPost("logout")]
     [AllowAnonymous]
+    [EnableRateLimiting("auth")]
     public async Task<IActionResult> Logout(RefreshTokenRequest request, CancellationToken ct)
     {
         await _auth.LogoutAsync(request.RefreshToken, ct);
