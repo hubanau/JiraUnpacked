@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+# Minimal token; this workflow only needs to read the repo.
+permissions:
+  contents: read
+
+# A new push to a PR cancels the previous in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: jiraunpacked
+          POSTGRES_USER: jiraunpacked
+          POSTGRES_PASSWORD: localdev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jiraunpacked -d jiraunpacked"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore JiraUnpacked.sln
+
+      - name: Build
+        run: dotnet build JiraUnpacked.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test JiraUnpacked.sln --configuration Release --no-build --verbosity normal

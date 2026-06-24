@@ -31,6 +31,29 @@ dotnet build            # build the solution
 dotnet test             # run the test suite
 ```
 
+## Local development database
+
+Production uses AWS RDS PostgreSQL; locally we run Postgres in Docker.
+
+```bash
+docker compose up -d          # start Postgres 16 (named volume persists data)
+docker compose ps             # check health
+docker compose down           # stop (add -v to also delete the data volume)
+```
+
+Dev connection string (matches `docker-compose.yml`):
+
+```
+Host=localhost;Port=5432;Database=jiraunpacked;Username=jiraunpacked;Password=localdev
+```
+
+EF Core migrations use the local `dotnet-ef` tool:
+
+```bash
+dotnet tool restore                       # once, after clone
+dotnet ef database update --project src/JiraUnpacked.Infrastructure --startup-project src/JiraUnpacked.Api
+```
+
 ## Branching & CI
 
 - `develop` — integration branch; CI deploys to **test** on merge.
