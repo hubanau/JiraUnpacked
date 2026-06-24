@@ -9,4 +9,8 @@ public sealed record LoginResult(
 public interface IAuthService
 {
     Task<LoginResult> LoginAsync(string emailOrUsername, string password, CancellationToken ct = default);
+
+    Task<LoginResult> RefreshAsync(string refreshToken, CancellationToken ct = default);
+
+    Task LogoutAsync(string refreshToken, CancellationToken ct = default);
 }

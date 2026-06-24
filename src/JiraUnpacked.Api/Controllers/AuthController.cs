@@ -29,6 +29,29 @@ public sealed class AuthController : ControllerBase
             result.AccessToken!, result.AccessTokenExpiresAtUtc!.Value, result.RefreshToken!));
     }
 
+    [HttpPost("refresh")]
+    [AllowAnonymous]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> Refresh(RefreshTokenRequest request, CancellationToken ct)
+    {
+        var result = await _auth.RefreshAsync(request.RefreshToken, ct);
+        if (!result.Succeeded)
+        {
+            return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid or expired refresh token.");
+        }
+
+        return Ok(new TokenResponse(
+            result.AccessToken!, result.AccessTokenExpiresAtUtc!.Value, result.RefreshToken!));
+    }
+
+    [HttpPost("logout")]
+    [AllowAnonymous]
+    public async Task<IActionResult> Logout(RefreshTokenRequest request, CancellationToken ct)
+    {
+        await _auth.LogoutAsync(request.RefreshToken, ct);
+        return NoContent();
+    }
+
     [HttpGet("me")]
     [Authorize]
     public IActionResult Me() => Ok(new
