@@ -1,5 +1,6 @@
 using System.Text;
 using JiraUnpacked.Infrastructure;
+using JiraUnpacked.Infrastructure.Identity;
 using JiraUnpacked.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
@@ -16,6 +17,8 @@ builder.Services.AddOptions<JwtOptions>()
     .Validate(o => !string.IsNullOrWhiteSpace(o.SigningKey) && o.SigningKey.Length >= 32,
         "Jwt:SigningKey must be configured with at least 32 characters.")
     .ValidateOnStart();
+
+builder.Services.Configure<SeedOptions>(builder.Configuration.GetSection(SeedOptions.SectionName));
 
 var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()!;
 
@@ -59,6 +62,12 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
+
+// Seed configured Admin accounts before serving requests (idempotent; FR-A3).
+using (var scope = app.Services.CreateScope())
+{
+    await scope.ServiceProvider.GetRequiredService<AdminSeeder>().SeedAsync();
+}
 
 if (app.Environment.IsDevelopment())
 {
