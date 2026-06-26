@@ -1,4 +1,5 @@
 using JiraUnpacked.Domain.Abstractions;
+using JiraUnpacked.Infrastructure.Identity;
 using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Security;
 using JiraUnpacked.Infrastructure.Services;
@@ -25,6 +26,8 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, BcryptPasswordHasher>();
         services.AddSingleton<ITokenService, JwtTokenService>();
         services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<AdminSeeder>();
+        services.AddScoped<IInviteCodeService, InviteCodeService>();
 
         return services;
     }
