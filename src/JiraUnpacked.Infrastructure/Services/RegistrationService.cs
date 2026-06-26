@@ -5,6 +5,7 @@ using JiraUnpacked.Domain.Enums;
 using JiraUnpacked.Domain.Security;
 using JiraUnpacked.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace JiraUnpacked.Infrastructure.Services;
 
@@ -71,7 +72,19 @@ public sealed class RegistrationService : IRegistrationService
             Status = UserStatus.PendingVerification,
             CreatedAt = now
         });
-        await _db.SaveChangesAsync(ct);
+
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            // A concurrent registration claimed the same email/username between the
+            // pre-check and this insert; the unique index is the real guard, so map
+            // the race to the same clean result as the pre-check.
+            await tx.RollbackAsync(ct);
+            return RegistrationResult.Fail(RegistrationError.EmailOrUsernameTaken);
+        }
 
         // Atomically consume the invite; if a concurrent registration already claimed
         // it, zero rows update and we roll back — a code can never be used twice.
@@ -101,4 +114,7 @@ public sealed class RegistrationService : IRegistrationService
 
         return RegistrationResult.Ok();
     }
+
+    private static bool IsUniqueViolation(DbUpdateException ex) =>
+        ex.InnerException is PostgresException { SqlState: "23505" };
 }
