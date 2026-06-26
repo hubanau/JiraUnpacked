@@ -1,5 +1,7 @@
 using JiraUnpacked.Domain.Abstractions;
+using JiraUnpacked.Domain.Security;
 using JiraUnpacked.Infrastructure.Identity;
+using JiraUnpacked.Infrastructure.Messaging;
 using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Security;
 using JiraUnpacked.Infrastructure.Services;
@@ -28,6 +30,9 @@ public static class DependencyInjection
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<AdminSeeder>();
         services.AddScoped<IInviteCodeService, InviteCodeService>();
+        services.AddSingleton<PasswordPolicy>();
+        services.AddSingleton<IEmailSender, LoggingEmailSender>();
+        services.AddScoped<IRegistrationService, RegistrationService>();
 
         return services;
     }
