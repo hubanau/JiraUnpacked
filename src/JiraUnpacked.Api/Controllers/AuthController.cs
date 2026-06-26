@@ -11,8 +11,35 @@ namespace JiraUnpacked.Api.Controllers;
 public sealed class AuthController : ControllerBase
 {
     private readonly IAuthService _auth;
+    private readonly IRegistrationService _registration;
 
-    public AuthController(IAuthService auth) => _auth = auth;
+    public AuthController(IAuthService auth, IRegistrationService registration)
+    {
+        _auth = auth;
+        _registration = registration;
+    }
+
+    [HttpPost("register")]
+    [AllowAnonymous]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> Register(RegisterRequest request, CancellationToken ct)
+    {
+        var result = await _registration.RegisterAsync(
+            request.InviteCode, request.Email, request.Username, request.Password, ct);
+
+        return result.Error switch
+        {
+            RegistrationError.None => Ok(new { message = "Registration received. Check your email for a verification code." }),
+            RegistrationError.InvalidInviteCode => Problem(
+                statusCode: StatusCodes.Status422UnprocessableEntity, title: "Invalid, expired, or already-used invite code."),
+            RegistrationError.WeakPassword => Problem(
+                statusCode: StatusCodes.Status400BadRequest, title: "Password does not meet the strength policy.",
+                detail: string.Join(" ", result.Errors)),
+            RegistrationError.EmailOrUsernameTaken => Problem(
+                statusCode: StatusCodes.Status409Conflict, title: "Email or username is already in use."),
+            _ => Problem(statusCode: StatusCodes.Status500InternalServerError)
+        };
+    }
 
     [HttpPost("login")]
     [AllowAnonymous]
