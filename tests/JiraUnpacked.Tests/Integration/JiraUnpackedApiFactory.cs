@@ -49,6 +49,17 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
             services.AddRateLimiter(options =>
                 options.AddPolicy("auth", _ =>
                     RateLimitPartition.GetNoLimiter(string.Empty)));
+
+            // Replace the dev email sender with a capturing one so tests can read the code.
+            var emailDescriptor = services.SingleOrDefault(
+                d => d.ServiceType == typeof(JiraUnpacked.Domain.Abstractions.IEmailSender));
+            if (emailDescriptor is not null)
+            {
+                services.Remove(emailDescriptor);
+            }
+            services.AddSingleton<CapturingEmailSender>();
+            services.AddSingleton<JiraUnpacked.Domain.Abstractions.IEmailSender>(
+                sp => sp.GetRequiredService<CapturingEmailSender>());
         });
     }
 
