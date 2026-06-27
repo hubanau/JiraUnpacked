@@ -49,7 +49,10 @@ public sealed class EmailVerificationService : IEmailVerificationService
             return VerificationResult.Fail(VerificationError.TooManyAttempts);
         }
 
-        if (verification.CodeHash != EmailVerification.HashCode(code))
+        // Constant-time compare of the SHA-256 hashes (avoid a timing side-channel).
+        var submittedHash = Convert.FromBase64String(EmailVerification.HashCode(code));
+        var storedHash = Convert.FromBase64String(verification.CodeHash);
+        if (!CryptographicOperations.FixedTimeEquals(submittedHash, storedHash))
         {
             verification.Attempts++;
             await _db.SaveChangesAsync(ct);
