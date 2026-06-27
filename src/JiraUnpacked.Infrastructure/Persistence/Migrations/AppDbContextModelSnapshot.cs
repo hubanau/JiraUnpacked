@@ -28,6 +28,9 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
                     b.Property<string>("CodeHash")
                         .IsRequired()
                         .HasColumnType("text");
