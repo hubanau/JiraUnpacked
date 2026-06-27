@@ -33,6 +33,7 @@ public static class DependencyInjection
         services.AddSingleton<PasswordPolicy>();
         services.AddSingleton<IEmailSender, LoggingEmailSender>();
         services.AddScoped<IRegistrationService, RegistrationService>();
+        services.AddScoped<IEmailVerificationService, EmailVerificationService>();
 
         return services;
     }
