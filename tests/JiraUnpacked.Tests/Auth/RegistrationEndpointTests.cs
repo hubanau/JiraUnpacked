@@ -170,4 +170,22 @@ public sealed class RegistrationEndpointTests : IClassFixture<JiraUnpackedApiFac
             RegisterBody(code2, email.ToUpperInvariant(), $"second-{unique}", "Correct-Horse-9!"));
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
     }
+
+    [Fact]
+    public async Task Register_WithDuplicateUsername_Returns409()
+    {
+        var unique = Guid.NewGuid().ToString("N");
+        var username = $"dupe-{unique}";
+
+        var code1 = await SeedInviteAsync();
+        var client = _factory.CreateClient();
+        var first = await client.PostAsJsonAsync("/api/auth/register",
+            RegisterBody(code1, $"first-{unique}@example.com", username, "Correct-Horse-9!"));
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+
+        var code2 = await SeedInviteAsync();
+        var second = await client.PostAsJsonAsync("/api/auth/register",
+            RegisterBody(code2, $"second-{unique}@example.com", username, "Correct-Horse-9!"));
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+    }
 }
