@@ -18,6 +18,9 @@ public class EmailVerification
     /// <summary>When the code was redeemed; null until consumed.</summary>
     public DateTime? ConsumedAt { get; set; }
 
+    /// <summary>Number of incorrect code submissions; capped to throttle guessing.</summary>
+    public int Attempts { get; set; }
+
     /// <summary>
     /// Canonical hash of a verification code for storage/comparison. Codes are
     /// low-entropy, so online attempts are additionally rate-limited and expire.

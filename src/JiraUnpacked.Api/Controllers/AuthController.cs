@@ -12,11 +12,14 @@ public sealed class AuthController : ControllerBase
 {
     private readonly IAuthService _auth;
     private readonly IRegistrationService _registration;
+    private readonly IEmailVerificationService _verification;
 
-    public AuthController(IAuthService auth, IRegistrationService registration)
+    public AuthController(
+        IAuthService auth, IRegistrationService registration, IEmailVerificationService verification)
     {
         _auth = auth;
         _registration = registration;
+        _verification = verification;
     }
 
     [HttpPost("register")]
@@ -39,6 +42,32 @@ public sealed class AuthController : ControllerBase
                 statusCode: StatusCodes.Status409Conflict, title: "Email or username is already in use."),
             _ => Problem(statusCode: StatusCodes.Status500InternalServerError)
         };
+    }
+
+    [HttpPost("verify")]
+    [AllowAnonymous]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> Verify(VerifyRequest request, CancellationToken ct)
+    {
+        var result = await _verification.VerifyAsync(request.Email, request.Code, ct);
+        return result.Error switch
+        {
+            VerificationError.None => Ok(new { message = "Email verified. You can now sign in." }),
+            VerificationError.TooManyAttempts => Problem(
+                statusCode: StatusCodes.Status429TooManyRequests, title: "Too many attempts. Request a new code."),
+            _ => Problem(
+                statusCode: StatusCodes.Status400BadRequest, title: "Invalid or expired verification code.")
+        };
+    }
+
+    [HttpPost("verify/resend")]
+    [AllowAnonymous]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> ResendVerification(ResendVerificationRequest request, CancellationToken ct)
+    {
+        await _verification.ResendAsync(request.Email, ct);
+        // Always 202 — never reveal whether the account exists or is pending.
+        return Accepted(new { message = "If the account is awaiting verification, a new code has been sent." });
     }
 
     [HttpPost("login")]
