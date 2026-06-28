@@ -1,4 +1,5 @@
 using JiraUnpacked.Infrastructure.Persistence;
+using JiraUnpacked.Infrastructure.Tenancy;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -72,7 +73,7 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseNpgsql(TestConnectionString)
             .Options;
-        await using var db = new AppDbContext(options);
+        await using var db = new AppDbContext(options, new NullCurrentTenant());
         await db.Database.MigrateAsync();
     }
 }

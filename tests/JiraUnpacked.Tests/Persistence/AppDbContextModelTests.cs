@@ -1,4 +1,5 @@
 using JiraUnpacked.Infrastructure.Persistence;
+using JiraUnpacked.Infrastructure.Tenancy;
 using Microsoft.EntityFrameworkCore;
 
 namespace JiraUnpacked.Tests.Persistence;
@@ -16,7 +17,7 @@ public class AppDbContextModelTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseNpgsql("Host=localhost;Database=model-only;Username=u;Password=p")
             .Options;
-        return new AppDbContext(options);
+        return new AppDbContext(options, new NullCurrentTenant());
     }
 
     [Fact]
