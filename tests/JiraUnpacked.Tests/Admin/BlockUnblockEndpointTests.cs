@@ -1,0 +1,148 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using JiraUnpacked.Domain.Abstractions;
+using JiraUnpacked.Domain.Entities;
+using JiraUnpacked.Domain.Enums;
+using JiraUnpacked.Infrastructure.Persistence;
+using JiraUnpacked.Tests.Integration;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace JiraUnpacked.Tests.Admin;
+
+public sealed class BlockUnblockEndpointTests : IClassFixture<JiraUnpackedApiFactory>, IAsyncLifetime
+{
+    private readonly JiraUnpackedApiFactory _factory;
+
+    public BlockUnblockEndpointTests(JiraUnpackedApiFactory factory) => _factory = factory;
+
+    public Task InitializeAsync() => _factory.EnsureDatabaseAsync();
+    public Task DisposeAsync() => Task.CompletedTask;
+
+    private sealed record TokenResponseDto(string AccessToken, DateTime ExpiresAtUtc, string RefreshToken);
+
+    private const string Password = "Correct-Horse-9!";
+
+    private async Task<(Guid id, string email)> SeedUserAsync(UserRole role)
+    {
+        var unique = Guid.NewGuid().ToString("N");
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
+
+        var user = new User
+        {
+            Id = Guid.NewGuid(),
+            Email = $"user-{unique}@example.com",
+            Username = $"user-{unique}",
+            PasswordHash = hasher.Hash(Password),
+            Role = role,
+            Status = UserStatus.Active,
+            CreatedAt = DateTime.UtcNow
+        };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+        return (user.Id, user.Email);
+    }
+
+    private async Task<TokenResponseDto> LoginAsync(HttpClient client, string email)
+    {
+        var resp = await client.PostAsJsonAsync("/api/auth/login",
+            new { emailOrUsername = email, password = Password });
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        return (await resp.Content.ReadFromJsonAsync<TokenResponseDto>())!;
+    }
+
+    private async Task<HttpClient> AdminClientAsync()
+    {
+        var (_, email) = await SeedUserAsync(UserRole.Admin);
+        var client = _factory.CreateClient();
+        var tokens = await LoginAsync(client, email);
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+        return client;
+    }
+
+    [Fact]
+    public async Task Block_SetsBlocked_RevokesRefreshTokens_AndStopsAuth()
+    {
+        var (endUserId, endUserEmail) = await SeedUserAsync(UserRole.EndUser);
+        var endUserClient = _factory.CreateClient();
+        var endUserTokens = await LoginAsync(endUserClient, endUserEmail); // active session before block
+
+        var admin = await AdminClientAsync();
+        var block = await admin.PostAsync($"/api/admin/users/{endUserId}/block", content: null);
+        Assert.Equal(HttpStatusCode.NoContent, block.StatusCode);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var user = await db.Users.SingleAsync(u => u.Id == endUserId);
+            Assert.Equal(UserStatus.Blocked, user.Status);
+            Assert.False(await db.RefreshTokens.AnyAsync(t => t.UserId == endUserId && t.RevokedAt == null));
+        }
+
+        var reLogin = await _factory.CreateClient().PostAsJsonAsync("/api/auth/login",
+            new { emailOrUsername = endUserEmail, password = Password });
+        Assert.Equal(HttpStatusCode.Unauthorized, reLogin.StatusCode);
+
+        var refresh = await _factory.CreateClient().PostAsJsonAsync("/api/auth/refresh",
+            new { refreshToken = endUserTokens.RefreshToken });
+        Assert.Equal(HttpStatusCode.Unauthorized, refresh.StatusCode);
+    }
+
+    [Fact]
+    public async Task Unblock_RestoresLogin()
+    {
+        var (endUserId, endUserEmail) = await SeedUserAsync(UserRole.EndUser);
+        var admin = await AdminClientAsync();
+
+        await admin.PostAsync($"/api/admin/users/{endUserId}/block", content: null);
+        var unblock = await admin.PostAsync($"/api/admin/users/{endUserId}/unblock", content: null);
+        Assert.Equal(HttpStatusCode.NoContent, unblock.StatusCode);
+
+        var login = await _factory.CreateClient().PostAsJsonAsync("/api/auth/login",
+            new { emailOrUsername = endUserEmail, password = Password });
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+    }
+
+    [Fact]
+    public async Task Block_NonExistentUser_Returns404()
+    {
+        var admin = await AdminClientAsync();
+        var block = await admin.PostAsync($"/api/admin/users/{Guid.NewGuid()}/block", content: null);
+        Assert.Equal(HttpStatusCode.NotFound, block.StatusCode);
+    }
+
+    [Fact]
+    public async Task Block_AnAdmin_Returns400()
+    {
+        var (adminId, _) = await SeedUserAsync(UserRole.Admin);
+        var admin = await AdminClientAsync();
+        var block = await admin.PostAsync($"/api/admin/users/{adminId}/block", content: null);
+        Assert.Equal(HttpStatusCode.BadRequest, block.StatusCode);
+    }
+
+    [Fact]
+    public async Task Block_AsEndUser_Returns403()
+    {
+        var (targetId, _) = await SeedUserAsync(UserRole.EndUser);
+        var (_, endUserEmail) = await SeedUserAsync(UserRole.EndUser);
+        var client = _factory.CreateClient();
+        var tokens = await LoginAsync(client, endUserEmail);
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+
+        var block = await client.PostAsync($"/api/admin/users/{targetId}/block", content: null);
+        Assert.Equal(HttpStatusCode.Forbidden, block.StatusCode);
+    }
+
+    [Fact]
+    public async Task Block_Anonymous_Returns401()
+    {
+        var (targetId, _) = await SeedUserAsync(UserRole.EndUser);
+        var block = await _factory.CreateClient().PostAsync($"/api/admin/users/{targetId}/block", content: null);
+        Assert.Equal(HttpStatusCode.Unauthorized, block.StatusCode);
+    }
+}
