@@ -34,6 +34,7 @@ public static class DependencyInjection
         services.AddSingleton<IEmailSender, LoggingEmailSender>();
         services.AddScoped<IRegistrationService, RegistrationService>();
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
+        services.AddScoped<IUserAdminService, UserAdminService>();
 
         return services;
     }
