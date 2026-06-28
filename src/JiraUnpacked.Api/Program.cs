@@ -11,7 +11,7 @@ using Microsoft.IdentityModel.Tokens;
 var builder = WebApplication.CreateBuilder(args);
 
 // EF Core (Npgsql) + AppDbContext. Connection string resolved per environment.
-builder.Services.AddInfrastructure(builder.Configuration.GetConnectionString("Default"));
+builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentTenant, HttpContextCurrentTenant>();
 

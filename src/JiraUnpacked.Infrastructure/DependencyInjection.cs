@@ -5,8 +5,10 @@ using JiraUnpacked.Infrastructure.Messaging;
 using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Security;
 using JiraUnpacked.Infrastructure.Services;
+using JiraUnpacked.Infrastructure.Tenancy;
 using JiraUnpacked.Infrastructure.Time;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace JiraUnpacked.Infrastructure;
@@ -14,15 +16,19 @@ namespace JiraUnpacked.Infrastructure;
 public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(
-        this IServiceCollection services, string? connectionString)
+        this IServiceCollection services, IConfiguration configuration)
     {
+        var connectionString = configuration.GetConnectionString("Default");
         if (string.IsNullOrWhiteSpace(connectionString))
         {
             throw new InvalidOperationException(
                 "Connection string 'Default' is not configured.");
         }
 
-        services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
+        services.AddScoped<TenantConnectionInterceptor>();
+        services.AddDbContext<AppDbContext>((sp, options) =>
+            options.UseNpgsql(configuration.GetConnectionString("App") ?? connectionString)
+                   .AddInterceptors(sp.GetRequiredService<TenantConnectionInterceptor>()));
 
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<IPasswordHasher, BcryptPasswordHasher>();
