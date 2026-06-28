@@ -86,6 +86,39 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.ToTable("InviteCodes", (string)null);
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.JiraConnection", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ApiTokenEncrypted")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("BaseUrl")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.ToTable("JiraConnections", (string)null);
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.RefreshToken", b =>
                 {
                     b.Property<Guid>("Id")

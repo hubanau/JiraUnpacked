@@ -13,6 +13,7 @@ public class AppDbContext : DbContext
     public DbSet<InviteCode> InviteCodes => Set<InviteCode>();
     public DbSet<EmailVerification> EmailVerifications => Set<EmailVerification>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<JiraConnection> JiraConnections => Set<JiraConnection>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
