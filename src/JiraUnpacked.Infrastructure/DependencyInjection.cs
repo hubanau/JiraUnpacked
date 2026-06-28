@@ -35,6 +35,7 @@ public static class DependencyInjection
         services.AddScoped<IRegistrationService, RegistrationService>();
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
         services.AddScoped<IUserAdminService, UserAdminService>();
+        services.AddScoped<IJiraConnectionService, JiraConnectionService>();
 
         return services;
     }
