@@ -25,9 +25,18 @@ public static class DependencyInjection
                 "Connection string 'Default' is not configured.");
         }
 
+        // The runtime context MUST use the RLS-enforced 'App' role. Never fall back to
+        // 'Default' (the privileged owner) — that would silently bypass RLS (Layer 2).
+        var appConnectionString = configuration.GetConnectionString("App");
+        if (string.IsNullOrWhiteSpace(appConnectionString))
+        {
+            throw new InvalidOperationException(
+                "Connection string 'App' (the RLS-enforced role) is not configured.");
+        }
+
         services.AddScoped<TenantConnectionInterceptor>();
         services.AddDbContext<AppDbContext>((sp, options) =>
-            options.UseNpgsql(configuration.GetConnectionString("App") ?? connectionString)
+            options.UseNpgsql(appConnectionString)
                    .AddInterceptors(sp.GetRequiredService<TenantConnectionInterceptor>()));
 
         services.AddSingleton<IClock, SystemClock>();
