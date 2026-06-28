@@ -1,4 +1,6 @@
 using System.Text;
+using JiraUnpacked.Api.Tenancy;
+using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Infrastructure;
 using JiraUnpacked.Infrastructure.Identity;
 using JiraUnpacked.Infrastructure.Security;
@@ -9,7 +11,9 @@ using Microsoft.IdentityModel.Tokens;
 var builder = WebApplication.CreateBuilder(args);
 
 // EF Core (Npgsql) + AppDbContext. Connection string resolved per environment.
-builder.Services.AddInfrastructure(builder.Configuration.GetConnectionString("Default"));
+builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICurrentTenant, HttpContextCurrentTenant>();
 
 // Bind + validate JWT options at startup (fail fast if the signing key is unsafe).
 builder.Services.AddOptions<JwtOptions>()
