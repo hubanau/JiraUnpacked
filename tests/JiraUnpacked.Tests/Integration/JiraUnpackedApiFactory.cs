@@ -21,6 +21,10 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
     public const string TestConnectionString =
         "Host=localhost;Port=5432;Database=jiraunpacked_test;Username=jiraunpacked;Password=localdev";
 
+    // Runtime role: RLS-enforced (set up by the AddTenantRls migration).
+    public const string TestAppConnectionString =
+        "Host=localhost;Port=5432;Database=jiraunpacked_test;Username=jiraunpacked_app;Password=localapp";
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
@@ -35,7 +39,10 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
                 services.Remove(descriptor);
             }
 
-            services.AddDbContext<AppDbContext>(options => options.UseNpgsql(TestConnectionString));
+            services.AddScoped<TenantConnectionInterceptor>();
+            services.AddDbContext<AppDbContext>((sp, options) =>
+                options.UseNpgsql(TestAppConnectionString)
+                       .AddInterceptors(sp.GetRequiredService<TenantConnectionInterceptor>()));
 
             // Replace the "auth" fixed-window limiter with an unlimited policy so
             // integration tests are never throttled by repeated requests from 127.0.0.1.

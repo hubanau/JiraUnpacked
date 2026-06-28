@@ -1,0 +1,122 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using JiraUnpacked.Domain.Abstractions;
+using JiraUnpacked.Domain.Entities;
+using JiraUnpacked.Domain.Enums;
+using JiraUnpacked.Infrastructure.Persistence;
+using JiraUnpacked.Tests.Integration;
+using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
+
+namespace JiraUnpacked.Tests.Tenancy;
+
+public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFactory>, IAsyncLifetime
+{
+    private readonly JiraUnpackedApiFactory _factory;
+
+    public TenantIsolationGateTests(JiraUnpackedApiFactory factory) => _factory = factory;
+
+    public Task InitializeAsync() => _factory.EnsureDatabaseAsync();
+    public Task DisposeAsync() => Task.CompletedTask;
+
+    private sealed record TokenResponseDto(string AccessToken, DateTime ExpiresAtUtc, string RefreshToken);
+    private sealed record ConnectionDto(Guid Id, string BaseUrl, string Email, DateTime CreatedAtUtc);
+
+    private const string Password = "Correct-Horse-9!";
+
+    private async Task<HttpClient> NewTenantClientAsync()
+    {
+        var unique = Guid.NewGuid().ToString("N");
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
+            db.Users.Add(new User
+            {
+                Id = Guid.NewGuid(),
+                Email = $"tenant-{unique}@example.com",
+                Username = $"tenant-{unique}",
+                PasswordHash = hasher.Hash(Password),
+                Role = UserRole.EndUser,
+                Status = UserStatus.Active,
+                CreatedAt = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var client = _factory.CreateClient();
+        var login = await client.PostAsJsonAsync("/api/auth/login",
+            new { emailOrUsername = $"tenant-{unique}@example.com", password = Password });
+        var tokens = await login.Content.ReadFromJsonAsync<TokenResponseDto>();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", tokens!.AccessToken);
+        return client;
+    }
+
+    private static async Task<ConnectionDto> CreateConnectionAsync(HttpClient client)
+    {
+        var resp = await client.PostAsJsonAsync("/api/connections",
+            new { baseUrl = "https://acme.atlassian.net", email = "ops@acme.com", apiToken = "secret-token" });
+        Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
+        return (await resp.Content.ReadFromJsonAsync<ConnectionDto>())!;
+    }
+
+    [Fact]
+    public async Task Tenant_CannotReadAnotherTenantsConnections_ThroughAnyReadPath()
+    {
+        var a = await NewTenantClientAsync();
+        var b = await NewTenantClientAsync();
+
+        var aConn = await CreateConnectionAsync(a);
+        var bConn = await CreateConnectionAsync(b);
+
+        // List (both layers): B sees only B's connection.
+        var bList = await (await b.GetAsync("/api/connections"))
+            .Content.ReadFromJsonAsync<List<ConnectionDto>>();
+        Assert.Single(bList!);
+        Assert.Equal(bConn.Id, bList![0].Id);
+        Assert.DoesNotContain(bList, c => c.Id == aConn.Id);
+
+        // Get-by-id (both layers): B cannot fetch A's connection => 404 (no existence leak).
+        var bGetA = await b.GetAsync($"/api/connections/{aConn.Id}");
+        Assert.Equal(HttpStatusCode.NotFound, bGetA.StatusCode);
+
+        // RLS proven independently of EF: connect as the app role, set the GUC to B,
+        // and query A's row directly => RLS must hide it even with no EF filter involved.
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestAppConnectionString);
+        await conn.OpenAsync();
+        var bTenantId = await TenantOf(bConn.Id);
+        await SetTenantAsync(conn, bTenantId);
+
+        Assert.Equal(0L, await CountConnectionById(conn, aConn.Id)); // A hidden from B at the DB
+        Assert.Equal(1L, await CountConnectionById(conn, bConn.Id)); // B sees its own row (sanity)
+    }
+
+    private static async Task SetTenantAsync(NpgsqlConnection conn, Guid tenantId)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT set_config('app.current_tenant', @t, false)";
+        cmd.Parameters.AddWithValue("t", tenantId.ToString());
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    // Reads the owning tenant of a connection via the privileged superuser (bypasses RLS for setup).
+    private async Task<Guid> TenantOf(Guid connectionId)
+    {
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT ""EndUserId"" FROM ""JiraConnections"" WHERE ""Id"" = @id";
+        cmd.Parameters.AddWithValue("id", connectionId);
+        return (Guid)(await cmd.ExecuteScalarAsync())!;
+    }
+
+    private static async Task<long> CountConnectionById(NpgsqlConnection conn, Guid id)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT count(*) FROM ""JiraConnections"" WHERE ""Id"" = @id";
+        cmd.Parameters.AddWithValue("id", id);
+        return (long)(await cmd.ExecuteScalarAsync())!;
+    }
+}
