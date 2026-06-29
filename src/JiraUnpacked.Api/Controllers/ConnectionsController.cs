@@ -17,8 +17,15 @@ public sealed class ConnectionsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create(CreateConnectionRequest request, CancellationToken ct)
     {
-        var view = await _connections.CreateAsync(request.BaseUrl, request.Email, request.ApiToken, ct);
-        return CreatedAtAction(nameof(Get), new { id = view.Id }, ToResponse(view));
+        var result = await _connections.CreateAsync(request.BaseUrl, request.Email, request.ApiToken, ct);
+        return result.Status switch
+        {
+            CreateConnectionStatus.Created =>
+                CreatedAtAction(nameof(Get), new { id = result.View!.Id }, ToResponse(result.View)),
+            CreateConnectionStatus.InvalidCredentials =>
+                Problem(statusCode: StatusCodes.Status400BadRequest, title: "Jira credentials could not be validated."),
+            _ => Problem(statusCode: StatusCodes.Status502BadGateway, title: "Jira could not be reached.")
+        };
     }
 
     [HttpGet]

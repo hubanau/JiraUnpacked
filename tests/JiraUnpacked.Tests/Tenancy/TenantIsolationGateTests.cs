@@ -8,17 +8,27 @@ using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Tests.Integration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
 
 namespace JiraUnpacked.Tests.Tenancy;
 
-public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFactory>, IAsyncLifetime
+public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFactory>, IAsyncLifetime, IDisposable
 {
     private readonly JiraUnpackedApiFactory _factory;
+    private readonly WireMockServer _jira = WireMockServer.Start();
 
-    public TenantIsolationGateTests(JiraUnpackedApiFactory factory) => _factory = factory;
+    public TenantIsolationGateTests(JiraUnpackedApiFactory factory)
+    {
+        _factory = factory;
+        _jira.Given(Request.Create().WithPath("/rest/api/3/myself").UsingGet())
+             .RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { accountId = "a" }));
+    }
 
     public Task InitializeAsync() => _factory.EnsureDatabaseAsync();
     public Task DisposeAsync() => Task.CompletedTask;
+    public void Dispose() => _jira.Stop();
 
     private sealed record TokenResponseDto(string AccessToken, DateTime ExpiresAtUtc, string RefreshToken);
     private sealed record ConnectionDto(Guid Id, string BaseUrl, string Email, DateTime CreatedAtUtc);
@@ -54,10 +64,10 @@ public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFact
         return client;
     }
 
-    private static async Task<ConnectionDto> CreateConnectionAsync(HttpClient client)
+    private async Task<ConnectionDto> CreateConnectionAsync(HttpClient client, string baseUrl)
     {
         var resp = await client.PostAsJsonAsync("/api/connections",
-            new { baseUrl = "https://acme.atlassian.net", email = "ops@acme.com", apiToken = "secret-token" });
+            new { baseUrl, email = "ops@acme.com", apiToken = "secret-token" });
         Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
         return (await resp.Content.ReadFromJsonAsync<ConnectionDto>())!;
     }
@@ -68,8 +78,8 @@ public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFact
         var a = await NewTenantClientAsync();
         var b = await NewTenantClientAsync();
 
-        var aConn = await CreateConnectionAsync(a);
-        var bConn = await CreateConnectionAsync(b);
+        var aConn = await CreateConnectionAsync(a, _jira.Url!);
+        var bConn = await CreateConnectionAsync(b, _jira.Url!);
 
         // List (both layers): B sees only B's connection.
         var bList = await (await b.GetAsync("/api/connections"))
