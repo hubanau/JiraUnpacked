@@ -52,7 +52,8 @@ public static class DependencyInjection
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
         services.AddScoped<IUserAdminService, UserAdminService>();
         services.AddScoped<IJiraConnectionService, JiraConnectionService>();
-        services.AddHttpClient<IJiraApiClient, JiraApiClient>();
+        services.AddHttpClient<IJiraApiClient, JiraApiClient>()
+                .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
 
         services.AddOptions<TokenProtectionOptions>()
             .Configure(o =>

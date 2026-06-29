@@ -37,9 +37,12 @@ public sealed partial class JiraApiClient : IJiraApiClient
     }
 
     // Builds a request to {baseUrl}{path} with Basic auth + JSON accept.
+    // Normalises BaseUrl to a trailing slash so sub-path bases (e.g. https://proxy/jira/)
+    // are preserved; strips any leading slash from path so Uri combination is additive.
     private static HttpRequestMessage Build(HttpMethod method, JiraCredentials creds, string path)
     {
-        var uri = new Uri(new Uri(creds.BaseUrl, UriKind.Absolute), path);
+        var baseUri = new Uri(creds.BaseUrl.EndsWith("/") ? creds.BaseUrl : creds.BaseUrl + "/", UriKind.Absolute);
+        var uri = new Uri(baseUri, path.TrimStart('/'));
         var req = new HttpRequestMessage(method, uri);
         var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{creds.Email}:{creds.ApiToken}"));
         req.Headers.Authorization = new AuthenticationHeaderValue("Basic", basic);
