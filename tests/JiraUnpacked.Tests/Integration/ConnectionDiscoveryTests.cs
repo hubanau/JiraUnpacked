@@ -17,6 +17,7 @@ public sealed class ConnectionDiscoveryTests : IClassFixture<JiraUnpackedApiFact
 
     private sealed record ConnectionDto(Guid Id, string BaseUrl, string Email, DateTime CreatedAtUtc);
     private sealed record FieldDto(string Id, string Name, bool Custom);
+    private sealed record ProjectSummaryDto(string Id, string Key, string Name);
 
     [Fact]
     public async Task Lists_jira_fields_for_a_connection()
@@ -35,6 +36,25 @@ public sealed class ConnectionDiscoveryTests : IClassFixture<JiraUnpackedApiFact
         var fields = await (await client.GetAsync($"/api/connections/{conn.Id}/fields"))
             .Content.ReadFromJsonAsync<List<FieldDto>>();
         Assert.Contains(fields!, f => f.Id == "customfield_10020");
+    }
+
+    [Fact]
+    public async Task Lists_jira_projects_for_a_connection()
+    {
+        _jira.Given(Request.Create().WithPath("/rest/api/3/myself").UsingGet())
+             .RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { accountId = "a" }));
+        _jira.Given(Request.Create().WithPath("/rest/api/3/project/search").UsingGet())
+             .RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(
+                 new { values = new object[] { new { id = "10001", key = "ACME", name = "Acme" } } }));
+
+        var client = await TestData.AuthedClientAsync(_factory);
+        var conn = (await (await client.PostAsJsonAsync("/api/connections",
+            new { baseUrl = _jira.Url, email = "ops@acme.com", apiToken = "t" }))
+            .Content.ReadFromJsonAsync<ConnectionDto>())!;
+
+        var projects = await (await client.GetAsync($"/api/connections/{conn.Id}/projects-available"))
+            .Content.ReadFromJsonAsync<List<ProjectSummaryDto>>();
+        Assert.Contains(projects!, p => p.Key == "ACME");
     }
 
     [Fact]
