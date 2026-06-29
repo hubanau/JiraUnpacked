@@ -52,6 +52,23 @@ public static class DependencyInjection
         services.AddScoped<IUserAdminService, UserAdminService>();
         services.AddScoped<IJiraConnectionService, JiraConnectionService>();
 
+        services.AddOptions<TokenProtectionOptions>()
+            .Configure(o =>
+            {
+                var section = configuration.GetSection(TokenProtectionOptions.SectionName);
+                o.Key = section["Key"];
+            })
+            .Validate(o => !string.IsNullOrWhiteSpace(o.Key) && IsThirtyTwoByteBase64(o.Key),
+                "TokenProtection:Key must be a base64-encoded 32-byte key.")
+            .ValidateOnStart();
+        services.AddSingleton<ITokenProtector, AesGcmTokenProtector>();
+
         return services;
+    }
+
+    private static bool IsThirtyTwoByteBase64(string value)
+    {
+        try { return Convert.FromBase64String(value).Length == 32; }
+        catch (FormatException) { return false; }
     }
 }
