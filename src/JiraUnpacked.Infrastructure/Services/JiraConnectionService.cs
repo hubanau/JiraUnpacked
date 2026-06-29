@@ -51,5 +51,24 @@ public sealed class JiraConnectionService : IJiraConnectionService
         return c is null ? null : ToView(c);
     }
 
+    public async Task<IReadOnlyList<JiraField>?> GetFieldsAsync(Guid connectionId, CancellationToken ct = default)
+    {
+        var creds = await CredsAsync(connectionId, ct);
+        return creds is null ? null : await _jira.GetFieldsAsync(creds, ct);
+    }
+
+    public async Task<IReadOnlyList<JiraProjectSummary>?> GetAvailableProjectsAsync(Guid connectionId, CancellationToken ct = default)
+    {
+        var creds = await CredsAsync(connectionId, ct);
+        return creds is null ? null : await _jira.GetProjectsAsync(creds, ct);
+    }
+
+    // Loads a tenant-scoped connection and decrypts its token; null if not found.
+    private async Task<JiraCredentials?> CredsAsync(Guid connectionId, CancellationToken ct)
+    {
+        var c = await _db.JiraConnections.FirstOrDefaultAsync(x => x.Id == connectionId, ct);
+        return c is null ? null : new JiraCredentials(c.BaseUrl, c.Email, _protector.Unprotect(c.ApiTokenEncrypted));
+    }
+
     private static ConnectionView ToView(JiraConnection c) => new(c.Id, c.BaseUrl, c.Email, c.CreatedAt);
 }

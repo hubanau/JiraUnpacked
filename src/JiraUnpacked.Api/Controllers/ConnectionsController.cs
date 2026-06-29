@@ -42,6 +42,20 @@ public sealed class ConnectionsController : ControllerBase
         return view is null ? NotFound() : Ok(ToResponse(view));
     }
 
+    [HttpGet("{id:guid}/fields")]
+    public async Task<IActionResult> Fields(Guid id, CancellationToken ct)
+    {
+        var fields = await _connections.GetFieldsAsync(id, ct);
+        return fields is null ? NotFound() : Ok(fields);
+    }
+
+    [HttpGet("{id:guid}/projects-available")]
+    public async Task<IActionResult> AvailableProjects(Guid id, CancellationToken ct)
+    {
+        var projects = await _connections.GetAvailableProjectsAsync(id, ct);
+        return projects is null ? NotFound() : Ok(projects);
+    }
+
     private static ConnectionResponse ToResponse(ConnectionView v) =>
         new(v.Id, v.BaseUrl, v.Email, v.CreatedAtUtc);
 }
