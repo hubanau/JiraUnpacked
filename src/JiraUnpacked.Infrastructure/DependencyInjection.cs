@@ -1,6 +1,7 @@
 using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Security;
 using JiraUnpacked.Infrastructure.Identity;
+using JiraUnpacked.Infrastructure.Jira;
 using JiraUnpacked.Infrastructure.Messaging;
 using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Security;
@@ -51,6 +52,7 @@ public static class DependencyInjection
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
         services.AddScoped<IUserAdminService, UserAdminService>();
         services.AddScoped<IJiraConnectionService, JiraConnectionService>();
+        services.AddHttpClient<IJiraApiClient, JiraApiClient>();
 
         services.AddOptions<TokenProtectionOptions>()
             .Configure(o =>
