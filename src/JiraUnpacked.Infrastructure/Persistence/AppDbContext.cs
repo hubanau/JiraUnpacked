@@ -20,6 +20,10 @@ public class AppDbContext : DbContext
     public DbSet<EmailVerification> EmailVerifications => Set<EmailVerification>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<JiraConnection> JiraConnections => Set<JiraConnection>();
+    public DbSet<JiraProject> JiraProjects => Set<JiraProject>();
+    public DbSet<JiraQuery> JiraQueries => Set<JiraQuery>();
+    public DbSet<FieldMapping> FieldMappings => Set<FieldMapping>();
+    public DbSet<StatusSemantic> StatusSemantics => Set<StatusSemantic>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -28,6 +32,10 @@ public class AppDbContext : DbContext
         // Layer 1 (primary): central tenant filter on every tenant-owned entity.
         // No current tenant => _currentTenantId is Guid.Empty, which matches no real row.
         modelBuilder.Entity<JiraConnection>().HasQueryFilter(c => c.EndUserId == _currentTenantId);
+        modelBuilder.Entity<JiraProject>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<JiraQuery>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<FieldMapping>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<StatusSemantic>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
     }
 
     public override int SaveChanges()

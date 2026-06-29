@@ -8,17 +8,27 @@ using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Tests.Integration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
 
 namespace JiraUnpacked.Tests.Tenancy;
 
-public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFactory>, IAsyncLifetime
+public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFactory>, IAsyncLifetime, IDisposable
 {
     private readonly JiraUnpackedApiFactory _factory;
+    private readonly WireMockServer _jira = WireMockServer.Start();
 
-    public TenantIsolationGateTests(JiraUnpackedApiFactory factory) => _factory = factory;
+    public TenantIsolationGateTests(JiraUnpackedApiFactory factory)
+    {
+        _factory = factory;
+        _jira.Given(Request.Create().WithPath("/rest/api/3/myself").UsingGet())
+             .RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { accountId = "a" }));
+    }
 
     public Task InitializeAsync() => _factory.EnsureDatabaseAsync();
     public Task DisposeAsync() => Task.CompletedTask;
+    public void Dispose() => _jira.Stop();
 
     private sealed record TokenResponseDto(string AccessToken, DateTime ExpiresAtUtc, string RefreshToken);
     private sealed record ConnectionDto(Guid Id, string BaseUrl, string Email, DateTime CreatedAtUtc);
@@ -54,10 +64,10 @@ public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFact
         return client;
     }
 
-    private static async Task<ConnectionDto> CreateConnectionAsync(HttpClient client)
+    private async Task<ConnectionDto> CreateConnectionAsync(HttpClient client, string baseUrl)
     {
         var resp = await client.PostAsJsonAsync("/api/connections",
-            new { baseUrl = "https://acme.atlassian.net", email = "ops@acme.com", apiToken = "secret-token" });
+            new { baseUrl, email = "ops@acme.com", apiToken = "secret-token" });
         Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
         return (await resp.Content.ReadFromJsonAsync<ConnectionDto>())!;
     }
@@ -68,8 +78,8 @@ public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFact
         var a = await NewTenantClientAsync();
         var b = await NewTenantClientAsync();
 
-        var aConn = await CreateConnectionAsync(a);
-        var bConn = await CreateConnectionAsync(b);
+        var aConn = await CreateConnectionAsync(a, _jira.Url!);
+        var bConn = await CreateConnectionAsync(b, _jira.Url!);
 
         // List (both layers): B sees only B's connection.
         var bList = await (await b.GetAsync("/api/connections"))
@@ -116,6 +126,59 @@ public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFact
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = @"SELECT count(*) FROM ""JiraConnections"" WHERE ""Id"" = @id";
+        cmd.Parameters.AddWithValue("id", id);
+        return (long)(await cmd.ExecuteScalarAsync())!;
+    }
+
+    [Fact]
+    public async Task Tenant_cannot_read_another_tenants_projects_via_rls()
+    {
+        // Two tenants with one project row each (seed via privileged conn; capture ids).
+        var (tenantA, projA) = await SeedProjectAsync();
+        var (tenantB, projB) = await SeedProjectAsync();
+
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestAppConnectionString);
+        await conn.OpenAsync();
+        await SetTenantAsync(conn, tenantB);
+
+        Assert.Equal(0L, await CountProjectById(conn, projA)); // A hidden from B
+        Assert.Equal(1L, await CountProjectById(conn, projB)); // B sees its own
+    }
+
+    // Inserts a JiraProject for a fresh tenant via the privileged (RLS-bypassing) connection.
+    private async Task<(Guid tenant, Guid project)> SeedProjectAsync()
+    {
+        var tenant = Guid.NewGuid();
+        var project = Guid.NewGuid();
+        var connectionId = Guid.NewGuid();
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
+        await conn.OpenAsync();
+        await using (var c1 = conn.CreateCommand())
+        {
+            c1.CommandText = @"INSERT INTO ""JiraConnections""
+                (""Id"",""EndUserId"",""BaseUrl"",""Email"",""ApiTokenEncrypted"",""CreatedAt"")
+                VALUES (@id,@t,'https://x','e','c',now())";
+            c1.Parameters.AddWithValue("id", connectionId);
+            c1.Parameters.AddWithValue("t", tenant);
+            await c1.ExecuteNonQueryAsync();
+        }
+        await using (var c2 = conn.CreateCommand())
+        {
+            c2.CommandText = @"INSERT INTO ""JiraProjects""
+                (""Id"",""EndUserId"",""JiraConnectionId"",""JiraProjectKey"",""JiraProjectId"",""SyncIntervalMinutes"",""CreatedAt"")
+                VALUES (@id,@t,@conn,'ACME','10001',60,now())";
+            c2.Parameters.AddWithValue("id", project);
+            c2.Parameters.AddWithValue("t", tenant);
+            c2.Parameters.AddWithValue("conn", connectionId);
+            await c2.ExecuteNonQueryAsync();
+        }
+        return (tenant, project);
+    }
+
+    private static async Task<long> CountProjectById(NpgsqlConnection conn, Guid id)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT count(*) FROM ""JiraProjects"" WHERE ""Id"" = @id";
         cmd.Parameters.AddWithValue("id", id);
         return (long)(await cmd.ExecuteScalarAsync())!;
     }

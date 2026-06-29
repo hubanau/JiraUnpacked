@@ -51,6 +51,38 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.ToTable("EmailVerifications", (string)null);
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.FieldMapping", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("JiraFieldId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<Guid>("JiraProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraProjectId", "Role")
+                        .IsUnique();
+
+                    b.ToTable("FieldMappings", (string)null);
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.InviteCode", b =>
                 {
                     b.Property<Guid>("Id")
@@ -119,6 +151,73 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.ToTable("JiraConnections", (string)null);
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.JiraProject", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("JiraConnectionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("JiraProjectId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("JiraProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<int>("SyncIntervalMinutes")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraConnectionId", "JiraProjectKey")
+                        .IsUnique();
+
+                    b.ToTable("JiraProjects", (string)null);
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.JiraQuery", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("JiraProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Jql")
+                        .IsRequired()
+                        .HasMaxLength(4096)
+                        .HasColumnType("character varying(4096)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraProjectId");
+
+                    b.ToTable("JiraQueries", (string)null);
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.RefreshToken", b =>
                 {
                     b.Property<Guid>("Id")
@@ -152,6 +251,43 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("RefreshTokens", (string)null);
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.StatusSemantic", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Class")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("JiraProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("JiraStatusId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("StatusName")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraProjectId", "JiraStatusId")
+                        .IsUnique();
+
+                    b.ToTable("StatusSemantics", (string)null);
                 });
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.User", b =>
@@ -207,6 +343,15 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.FieldMapping", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
+                        .WithMany()
+                        .HasForeignKey("JiraProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.InviteCode", b =>
                 {
                     b.HasOne("JiraUnpacked.Domain.Entities.User", null)
@@ -221,11 +366,38 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.JiraProject", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraConnection", null)
+                        .WithMany()
+                        .HasForeignKey("JiraConnectionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.JiraQuery", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
+                        .WithMany()
+                        .HasForeignKey("JiraProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.RefreshToken", b =>
                 {
                     b.HasOne("JiraUnpacked.Domain.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.StatusSemantic", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
+                        .WithMany()
+                        .HasForeignKey("JiraProjectId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

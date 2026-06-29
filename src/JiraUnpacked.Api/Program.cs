@@ -61,7 +61,10 @@ builder.Services.AddRateLimiter(options =>
     });
 });
 
-builder.Services.AddControllers();
+builder.Services
+    .AddControllers(o => o.Filters.Add<JiraUnpacked.Api.Filters.JiraApiExceptionFilter>())
+    .AddJsonOptions(o => o.JsonSerializerOptions.Converters.Add(
+        new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
