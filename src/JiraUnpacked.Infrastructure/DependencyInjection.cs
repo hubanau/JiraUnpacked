@@ -54,6 +54,7 @@ public static class DependencyInjection
         services.AddScoped<IJiraConnectionService, JiraConnectionService>();
         services.AddScoped<IJiraProjectService, JiraProjectService>();
         services.AddScoped<IJiraQueryService, JiraQueryService>();
+        services.AddScoped<IProjectMappingService, ProjectMappingService>();
         services.AddHttpClient<IJiraApiClient, JiraApiClient>()
                 .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
 
