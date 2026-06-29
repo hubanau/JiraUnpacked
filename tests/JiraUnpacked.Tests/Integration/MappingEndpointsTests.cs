@@ -19,6 +19,7 @@ public sealed class MappingEndpointsTests : IClassFixture<JiraUnpackedApiFactory
     private sealed record ProjectDto(Guid Id, Guid JiraConnectionId, string JiraProjectKey, string JiraProjectId, int SyncIntervalMinutes, DateTime CreatedAtUtc);
     private sealed record StatusDto(string Id, string Name);
     private sealed record FieldMappingDto(string Role, string JiraFieldId);
+    private sealed record StatusSemanticDto(string JiraStatusId, string StatusName, string Class);
 
     private async Task<(HttpClient client, Guid projectId)> WithProjectAsync()
     {
@@ -79,7 +80,9 @@ public sealed class MappingEndpointsTests : IClassFixture<JiraUnpackedApiFactory
     public async Task Status_semantics_persist()
     {
         var (client, projectId) = await WithProjectAsync();
-        var put = await client.PutAsJsonAsync($"/api/projects/{projectId}/status-semantics", new
+
+        // First PUT: two items.
+        var put1 = await client.PutAsJsonAsync($"/api/projects/{projectId}/status-semantics", new
         {
             statuses = new[]
             {
@@ -87,8 +90,27 @@ public sealed class MappingEndpointsTests : IClassFixture<JiraUnpackedApiFactory
                 new { jiraStatusId = "1", statusName = "To Do", @class = "Active" }
             }
         });
-        Assert.Equal(HttpStatusCode.NoContent, put.StatusCode);
-        var read = await (await client.GetAsync($"/api/projects/{projectId}/status-semantics")).Content.ReadAsStringAsync();
-        Assert.Contains("Done", read);
+        Assert.Equal(HttpStatusCode.NoContent, put1.StatusCode);
+
+        var read1 = await (await client.GetAsync($"/api/projects/{projectId}/status-semantics"))
+            .Content.ReadFromJsonAsync<List<StatusSemanticDto>>();
+        Assert.Equal(2, read1!.Count);
+        Assert.Contains(read1, s => s.JiraStatusId == "3" && s.Class == "Done");
+
+        // Second PUT: disjoint single item — proves replace, not append.
+        var put2 = await client.PutAsJsonAsync($"/api/projects/{projectId}/status-semantics", new
+        {
+            statuses = new[]
+            {
+                new { jiraStatusId = "99", statusName = "Archived", @class = "Other" }
+            }
+        });
+        Assert.Equal(HttpStatusCode.NoContent, put2.StatusCode);
+
+        var read2 = await (await client.GetAsync($"/api/projects/{projectId}/status-semantics"))
+            .Content.ReadFromJsonAsync<List<StatusSemanticDto>>();
+        Assert.Single(read2!);
+        Assert.Contains(read2!, s => s.JiraStatusId == "99" && s.Class == "Other");
+        Assert.DoesNotContain(read2!, s => s.JiraStatusId == "3");
     }
 }
