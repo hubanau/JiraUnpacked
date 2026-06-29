@@ -1,6 +1,7 @@
 using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Security;
 using JiraUnpacked.Infrastructure.Identity;
+using JiraUnpacked.Infrastructure.Jira;
 using JiraUnpacked.Infrastructure.Messaging;
 using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Security;
@@ -51,7 +52,29 @@ public static class DependencyInjection
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
         services.AddScoped<IUserAdminService, UserAdminService>();
         services.AddScoped<IJiraConnectionService, JiraConnectionService>();
+        services.AddScoped<IJiraProjectService, JiraProjectService>();
+        services.AddScoped<IJiraQueryService, JiraQueryService>();
+        services.AddScoped<IProjectMappingService, ProjectMappingService>();
+        services.AddHttpClient<IJiraApiClient, JiraApiClient>()
+                .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
+
+        services.AddOptions<TokenProtectionOptions>()
+            .Configure(o =>
+            {
+                var section = configuration.GetSection(TokenProtectionOptions.SectionName);
+                o.Key = section["Key"];
+            })
+            .Validate(o => !string.IsNullOrWhiteSpace(o.Key) && IsThirtyTwoByteBase64(o.Key),
+                "TokenProtection:Key must be a base64-encoded 32-byte key.")
+            .ValidateOnStart();
+        services.AddSingleton<ITokenProtector, AesGcmTokenProtector>();
 
         return services;
+    }
+
+    private static bool IsThirtyTwoByteBase64(string value)
+    {
+        try { return Convert.FromBase64String(value).Length == 32; }
+        catch (FormatException) { return false; }
     }
 }

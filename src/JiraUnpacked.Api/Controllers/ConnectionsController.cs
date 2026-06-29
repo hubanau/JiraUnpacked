@@ -17,8 +17,15 @@ public sealed class ConnectionsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create(CreateConnectionRequest request, CancellationToken ct)
     {
-        var view = await _connections.CreateAsync(request.BaseUrl, request.Email, request.ApiToken, ct);
-        return CreatedAtAction(nameof(Get), new { id = view.Id }, ToResponse(view));
+        var result = await _connections.CreateAsync(request.BaseUrl, request.Email, request.ApiToken, ct);
+        return result.Status switch
+        {
+            CreateConnectionStatus.Created =>
+                CreatedAtAction(nameof(Get), new { id = result.View!.Id }, ToResponse(result.View)),
+            CreateConnectionStatus.InvalidCredentials =>
+                Problem(statusCode: StatusCodes.Status400BadRequest, title: "Jira credentials could not be validated."),
+            _ => Problem(statusCode: StatusCodes.Status502BadGateway, title: "Jira could not be reached.")
+        };
     }
 
     [HttpGet]
@@ -33,6 +40,20 @@ public sealed class ConnectionsController : ControllerBase
     {
         var view = await _connections.GetAsync(id, ct);
         return view is null ? NotFound() : Ok(ToResponse(view));
+    }
+
+    [HttpGet("{id:guid}/fields")]
+    public async Task<IActionResult> Fields(Guid id, CancellationToken ct)
+    {
+        var fields = await _connections.GetFieldsAsync(id, ct);
+        return fields is null ? NotFound() : Ok(fields);
+    }
+
+    [HttpGet("{id:guid}/projects-available")]
+    public async Task<IActionResult> AvailableProjects(Guid id, CancellationToken ct)
+    {
+        var projects = await _connections.GetAvailableProjectsAsync(id, ct);
+        return projects is null ? NotFound() : Ok(projects);
     }
 
     private static ConnectionResponse ToResponse(ConnectionView v) =>
