@@ -129,4 +129,57 @@ public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFact
         cmd.Parameters.AddWithValue("id", id);
         return (long)(await cmd.ExecuteScalarAsync())!;
     }
+
+    [Fact]
+    public async Task Tenant_cannot_read_another_tenants_projects_via_rls()
+    {
+        // Two tenants with one project row each (seed via privileged conn; capture ids).
+        var (tenantA, projA) = await SeedProjectAsync();
+        var (tenantB, projB) = await SeedProjectAsync();
+
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestAppConnectionString);
+        await conn.OpenAsync();
+        await SetTenantAsync(conn, tenantB);
+
+        Assert.Equal(0L, await CountProjectById(conn, projA)); // A hidden from B
+        Assert.Equal(1L, await CountProjectById(conn, projB)); // B sees its own
+    }
+
+    // Inserts a JiraProject for a fresh tenant via the privileged (RLS-bypassing) connection.
+    private async Task<(Guid tenant, Guid project)> SeedProjectAsync()
+    {
+        var tenant = Guid.NewGuid();
+        var project = Guid.NewGuid();
+        var connectionId = Guid.NewGuid();
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
+        await conn.OpenAsync();
+        await using (var c1 = conn.CreateCommand())
+        {
+            c1.CommandText = @"INSERT INTO ""JiraConnections""
+                (""Id"",""EndUserId"",""BaseUrl"",""Email"",""ApiTokenEncrypted"",""CreatedAt"")
+                VALUES (@id,@t,'https://x','e','c',now())";
+            c1.Parameters.AddWithValue("id", connectionId);
+            c1.Parameters.AddWithValue("t", tenant);
+            await c1.ExecuteNonQueryAsync();
+        }
+        await using (var c2 = conn.CreateCommand())
+        {
+            c2.CommandText = @"INSERT INTO ""JiraProjects""
+                (""Id"",""EndUserId"",""JiraConnectionId"",""JiraProjectKey"",""JiraProjectId"",""SyncIntervalMinutes"",""CreatedAt"")
+                VALUES (@id,@t,@conn,'ACME','10001',60,now())";
+            c2.Parameters.AddWithValue("id", project);
+            c2.Parameters.AddWithValue("t", tenant);
+            c2.Parameters.AddWithValue("conn", connectionId);
+            await c2.ExecuteNonQueryAsync();
+        }
+        return (tenant, project);
+    }
+
+    private static async Task<long> CountProjectById(NpgsqlConnection conn, Guid id)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT count(*) FROM ""JiraProjects"" WHERE ""Id"" = @id";
+        cmd.Parameters.AddWithValue("id", id);
+        return (long)(await cmd.ExecuteScalarAsync())!;
+    }
 }
