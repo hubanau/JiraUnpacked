@@ -118,6 +118,189 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.ToTable("InviteCodes", (string)null);
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.Issue", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AssigneeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("IssueTypeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("JiraCreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("JiraIssueId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("JiraKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid>("JiraProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("JiraUpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("LastSyncedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ParentIssueId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ParentJiraIssueId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid?>("PriorityId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("SprintId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("StatusId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("StoryPoints")
+                        .HasPrecision(9, 2)
+                        .HasColumnType("numeric(9,2)");
+
+                    b.Property<string>("Summary")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("TeamId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AssigneeId");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("IssueTypeId");
+
+                    b.HasIndex("JiraProjectId");
+
+                    b.HasIndex("ParentIssueId");
+
+                    b.HasIndex("PriorityId");
+
+                    b.HasIndex("SprintId");
+
+                    b.HasIndex("StatusId");
+
+                    b.HasIndex("TeamId");
+
+                    b.HasIndex("EndUserId", "JiraIssueId")
+                        .IsUnique();
+
+                    b.HasIndex("EndUserId", "JiraProjectId");
+
+                    b.HasIndex("EndUserId", "ParentJiraIssueId");
+
+                    b.ToTable("Issues", (string)null);
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.IssueChangeHistory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Author")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<DateTime>("ChangedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Field")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("FromValue")
+                        .HasColumnType("text");
+
+                    b.Property<string>("JiraHistoryId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("JiraIssueId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid>("JiraProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ToValue")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraProjectId");
+
+                    b.HasIndex("EndUserId", "JiraProjectId", "JiraIssueId");
+
+                    b.HasIndex("JiraIssueId", "Field", "ChangedAt");
+
+                    b.HasIndex("EndUserId", "JiraIssueId", "JiraHistoryId", "Field")
+                        .IsUnique();
+
+                    b.ToTable("IssueChangeHistory", (string)null);
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.IssueType", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("JiraConnectionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("JiraIssueTypeId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraConnectionId");
+
+                    b.HasIndex("EndUserId", "JiraConnectionId", "JiraIssueTypeId")
+                        .IsUnique();
+
+                    b.ToTable("IssueTypes", (string)null);
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.JiraConnection", b =>
                 {
                     b.Property<Guid>("Id")
@@ -218,6 +401,110 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.ToTable("JiraQueries", (string)null);
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.JiraUser", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("JiraAccountId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<Guid>("JiraConnectionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraConnectionId");
+
+                    b.HasIndex("EndUserId", "JiraConnectionId", "JiraAccountId")
+                        .IsUnique();
+
+                    b.ToTable("JiraUsers", (string)null);
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.Priority", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("JiraConnectionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("JiraPriorityId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraConnectionId");
+
+                    b.HasIndex("EndUserId", "JiraConnectionId", "JiraPriorityId")
+                        .IsUnique();
+
+                    b.ToTable("Priorities", (string)null);
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.RawIssueSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("FetchedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("JiraIssueId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid>("JiraProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraProjectId");
+
+                    b.HasIndex("EndUserId", "JiraIssueId")
+                        .IsUnique();
+
+                    b.ToTable("RawIssueSnapshots", (string)null);
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.RefreshToken", b =>
                 {
                     b.Property<Guid>("Id")
@@ -251,6 +538,88 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("RefreshTokens", (string)null);
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.Sprint", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("EndDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("JiraProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("JiraSprintId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<DateTime?>("StartDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("State")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraProjectId");
+
+                    b.HasIndex("EndUserId", "JiraProjectId", "JiraSprintId")
+                        .IsUnique();
+
+                    b.ToTable("Sprints", (string)null);
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.Status", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("JiraConnectionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("JiraStatusId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("StatusCategory")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraConnectionId");
+
+                    b.HasIndex("EndUserId", "JiraConnectionId", "JiraStatusId")
+                        .IsUnique();
+
+                    b.ToTable("Statuses", (string)null);
                 });
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.StatusSemantic", b =>
@@ -288,6 +657,83 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("StatusSemantics", (string)null);
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.SyncRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("FinishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("IssuesProcessed")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("JiraProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("NextRunAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraProjectId");
+
+                    b.HasIndex("EndUserId", "JiraProjectId", "StartedAt");
+
+                    b.ToTable("SyncRuns", (string)null);
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.Team", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("JiraProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("JiraTeamId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraProjectId");
+
+                    b.HasIndex("EndUserId", "JiraProjectId", "JiraTeamId")
+                        .IsUnique();
+
+                    b.ToTable("Teams", (string)null);
                 });
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.User", b =>
@@ -366,6 +812,68 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.Issue", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraUser", null)
+                        .WithMany()
+                        .HasForeignKey("AssigneeId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("JiraUnpacked.Domain.Entities.IssueType", null)
+                        .WithMany()
+                        .HasForeignKey("IssueTypeId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
+                        .WithMany()
+                        .HasForeignKey("JiraProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("JiraUnpacked.Domain.Entities.Issue", null)
+                        .WithMany()
+                        .HasForeignKey("ParentIssueId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("JiraUnpacked.Domain.Entities.Priority", null)
+                        .WithMany()
+                        .HasForeignKey("PriorityId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("JiraUnpacked.Domain.Entities.Sprint", null)
+                        .WithMany()
+                        .HasForeignKey("SprintId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("JiraUnpacked.Domain.Entities.Status", null)
+                        .WithMany()
+                        .HasForeignKey("StatusId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("JiraUnpacked.Domain.Entities.Team", null)
+                        .WithMany()
+                        .HasForeignKey("TeamId")
+                        .OnDelete(DeleteBehavior.NoAction);
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.IssueChangeHistory", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
+                        .WithMany()
+                        .HasForeignKey("JiraProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.IssueType", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraConnection", null)
+                        .WithMany()
+                        .HasForeignKey("JiraConnectionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.JiraProject", b =>
                 {
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraConnection", null)
@@ -384,6 +892,33 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.JiraUser", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraConnection", null)
+                        .WithMany()
+                        .HasForeignKey("JiraConnectionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.Priority", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraConnection", null)
+                        .WithMany()
+                        .HasForeignKey("JiraConnectionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.RawIssueSnapshot", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
+                        .WithMany()
+                        .HasForeignKey("JiraProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.RefreshToken", b =>
                 {
                     b.HasOne("JiraUnpacked.Domain.Entities.User", null)
@@ -393,7 +928,43 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.Sprint", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
+                        .WithMany()
+                        .HasForeignKey("JiraProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.Status", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraConnection", null)
+                        .WithMany()
+                        .HasForeignKey("JiraConnectionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.StatusSemantic", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
+                        .WithMany()
+                        .HasForeignKey("JiraProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.SyncRun", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
+                        .WithMany()
+                        .HasForeignKey("JiraProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.Team", b =>
                 {
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
                         .WithMany()
