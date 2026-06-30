@@ -88,7 +88,7 @@ Every entity has a surrogate `Id` (Guid) PK and implements `ITenantOwned` (`Guid
 
 ## 7. Success criteria
 
-- All 12 tables migrated with the correct grains and unique keys.
+- All 10 new tables migrated with the correct grains and unique keys (RawIssueSnapshots; Statuses/IssueTypes/Priorities/JiraUsers; Sprints/Teams; Issues; IssueChangeHistory; SyncRuns).
 - Every new table tenant-isolated at both layers; the FR-B2 gate covers `Issues`.
 - Full solution suite green; no EF migration drift; Release build 0 warnings/0 errors.
 
