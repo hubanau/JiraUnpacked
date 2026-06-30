@@ -24,6 +24,16 @@ public class AppDbContext : DbContext
     public DbSet<JiraQuery> JiraQueries => Set<JiraQuery>();
     public DbSet<FieldMapping> FieldMappings => Set<FieldMapping>();
     public DbSet<StatusSemantic> StatusSemantics => Set<StatusSemantic>();
+    public DbSet<Status> Statuses => Set<Status>();
+    public DbSet<IssueType> IssueTypes => Set<IssueType>();
+    public DbSet<Priority> Priorities => Set<Priority>();
+    public DbSet<JiraUser> JiraUsers => Set<JiraUser>();
+    public DbSet<Sprint> Sprints => Set<Sprint>();
+    public DbSet<Team> Teams => Set<Team>();
+    public DbSet<RawIssueSnapshot> RawIssueSnapshots => Set<RawIssueSnapshot>();
+    public DbSet<Issue> Issues => Set<Issue>();
+    public DbSet<IssueChangeHistory> IssueChangeHistory => Set<IssueChangeHistory>();
+    public DbSet<SyncRun> SyncRuns => Set<SyncRun>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -36,6 +46,16 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<JiraQuery>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
         modelBuilder.Entity<FieldMapping>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
         modelBuilder.Entity<StatusSemantic>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<Status>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<IssueType>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<Priority>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<JiraUser>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<Sprint>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<Team>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<RawIssueSnapshot>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<Issue>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<IssueChangeHistory>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<SyncRun>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
     }
 
     public override int SaveChanges()
