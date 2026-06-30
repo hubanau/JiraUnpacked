@@ -1,6 +1,6 @@
 namespace JiraUnpacked.Domain.Abstractions;
 
-public enum AddQueryStatus { Created, ProjectNotFound, InvalidJql, JiraUnreachable }
+public enum AddQueryStatus { Created, ProjectNotFound, InvalidJql }
 public sealed record QueryView(Guid Id, Guid JiraProjectId, string Jql, DateTime CreatedAtUtc);
 public sealed record AddQueryResult(AddQueryStatus Status, QueryView? View, IReadOnlyList<string> Errors);
 
