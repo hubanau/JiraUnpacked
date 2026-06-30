@@ -72,6 +72,35 @@ public sealed class ProjectEndpointsTests : IClassFixture<JiraUnpackedApiFactory
     }
 
     [Fact]
+    public async Task Add_project_with_blank_key_is_rejected_without_contacting_jira()
+    {
+        var (client, connId) = await ConnectedAsync();
+
+        var resp = await client.PostAsJsonAsync($"/api/connections/{connId}/projects",
+            new { projectKey = "", syncIntervalMinutes = 60 });
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        // Request validation must reject a blank key before any Jira project lookup.
+        Assert.DoesNotContain(_jira.LogEntries,
+            e => e.RequestMessage.Path.StartsWith("/rest/api/3/project"));
+    }
+
+    [Fact]
+    public async Task Add_project_maps_jira_upstream_error_to_502()
+    {
+        // Upstream Jira failures surface as JiraApiException and are mapped to 502 by
+        // JiraApiExceptionFilter — the controller has no JiraUnreachable status of its own.
+        var (client, connId) = await ConnectedAsync();
+        _jira.Given(Request.Create().WithPath("/rest/api/3/project/BOOM").UsingGet())
+             .RespondWith(Response.Create().WithStatusCode(500));
+
+        var resp = await client.PostAsJsonAsync($"/api/connections/{connId}/projects",
+            new { projectKey = "BOOM", syncIntervalMinutes = 60 });
+
+        Assert.Equal(HttpStatusCode.BadGateway, resp.StatusCode);
+    }
+
+    [Fact]
     public async Task Interval_below_60_is_rejected()
     {
         var (client, connId) = await ConnectedAsync();

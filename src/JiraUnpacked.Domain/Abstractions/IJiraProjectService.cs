@@ -1,6 +1,6 @@
 namespace JiraUnpacked.Domain.Abstractions;
 
-public enum AddProjectStatus { Created, ConnectionNotFound, UnknownProjectKey, Duplicate, InvalidInterval, JiraUnreachable }
+public enum AddProjectStatus { Created, ConnectionNotFound, UnknownProjectKey, Duplicate, InvalidInterval }
 public sealed record ProjectView(Guid Id, Guid JiraConnectionId, string JiraProjectKey, string JiraProjectId, int SyncIntervalMinutes, DateTime CreatedAtUtc);
 public sealed record AddProjectResult(AddProjectStatus Status, ProjectView? View);
 
