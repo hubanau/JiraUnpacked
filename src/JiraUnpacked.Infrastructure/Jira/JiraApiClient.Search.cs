@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using JiraUnpacked.Domain.Abstractions.Jira;
 
 namespace JiraUnpacked.Infrastructure.Jira;
@@ -11,10 +11,8 @@ public sealed partial class JiraApiClient
     private const int MaxRateLimitRetries = 3;
     private const int SearchPageSize = 100;
 
-    private static readonly JsonSerializerOptions SearchJson = new(JsonSerializerDefaults.Web)
-    {
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-    };
+    private static readonly JsonSerializerOptions SearchJson =
+        new(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
 
     public async Task<SearchPage> SearchIssuesPageAsync(
         JiraCredentials creds, string jql, string? nextPageToken, CancellationToken ct = default)

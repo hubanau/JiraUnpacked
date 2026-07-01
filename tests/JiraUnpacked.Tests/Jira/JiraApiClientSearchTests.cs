@@ -58,8 +58,11 @@ public sealed class JiraApiClientSearchTests : IDisposable
         await Client().SearchIssuesPageAsync(Creds(), "project = ACME AND updated >= \"2024-01-01 10:00\"", null, CancellationToken.None);
 
         var body = Assert.Single(_server.LogEntries).RequestMessage.Body!;
-        Assert.Contains("updated >=", body);
-        Assert.Contains("changelog", body);
+        using var doc = System.Text.Json.JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        Assert.Contains("updated >=", root.GetProperty("jql").GetString());
+        Assert.Contains("changelog", root.GetProperty("expand").EnumerateArray().Select(e => e.GetString()));
+        Assert.DoesNotContain("nextPageToken", body);
     }
 
     [Fact]
