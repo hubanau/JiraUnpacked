@@ -35,6 +35,10 @@ public static class DependencyInjection
                 "Connection string 'App' (the RLS-enforced role) is not configured.");
         }
 
+        services.AddSingleton<AmbientCurrentTenant>();
+        services.AddSingleton<ICurrentTenant>(sp => sp.GetRequiredService<AmbientCurrentTenant>());
+        services.AddSingleton<ITenantScope>(sp => sp.GetRequiredService<AmbientCurrentTenant>());
+
         services.AddScoped<TenantConnectionInterceptor>();
         services.AddDbContext<AppDbContext>((sp, options) =>
             options.UseNpgsql(appConnectionString)
