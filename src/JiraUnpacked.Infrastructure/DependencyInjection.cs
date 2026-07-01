@@ -6,6 +6,7 @@ using JiraUnpacked.Infrastructure.Messaging;
 using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Security;
 using JiraUnpacked.Infrastructure.Services;
+using JiraUnpacked.Infrastructure.Sync;
 using JiraUnpacked.Infrastructure.Tenancy;
 using JiraUnpacked.Infrastructure.Time;
 using Microsoft.EntityFrameworkCore;
@@ -61,6 +62,9 @@ public static class DependencyInjection
         services.AddScoped<IProjectMappingService, ProjectMappingService>();
         services.AddHttpClient<IJiraApiClient, JiraApiClient>()
                 .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
+
+        services.AddSingleton<IPrivilegedDbContextFactory, PrivilegedDbContextFactory>();
+        services.AddScoped<IDueProjectFinder, DueProjectFinder>();
 
         services.AddOptions<TokenProtectionOptions>()
             .Configure(o =>
