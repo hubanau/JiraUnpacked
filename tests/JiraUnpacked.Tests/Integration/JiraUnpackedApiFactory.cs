@@ -29,6 +29,15 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
     {
         builder.UseEnvironment("Development");
 
+        // Disable the Quartz tick scheduler in tests: a stray tick could sync real
+        // WireMock-configured projects concurrently with test assertions, causing flakes.
+        // UseSetting (not ConfigureAppConfiguration) is required here: Program.cs reads
+        // builder.Configuration synchronously in its top-level statements (to decide whether
+        // to register Quartz) before WebApplicationFactory's ConfigureAppConfiguration hooks
+        // are woven into the host build pipeline. UseSetting seeds WebApplicationBuilder's
+        // configuration at construction time, the same mechanism UseEnvironment relies on above.
+        builder.UseSetting("Sync:SchedulerEnabled", "false");
+
         // Override the DbContext registration to point at the test database.
         builder.ConfigureTestServices(services =>
         {

@@ -6,6 +6,7 @@ using JiraUnpacked.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
+using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,6 +22,21 @@ builder.Services.AddOptions<JwtOptions>()
     .ValidateOnStart();
 
 builder.Services.Configure<SeedOptions>(builder.Configuration.GetSection(SeedOptions.SectionName));
+
+builder.Services.Configure<JiraUnpacked.Infrastructure.Sync.SyncSchedulerOptions>(
+    builder.Configuration.GetSection(JiraUnpacked.Infrastructure.Sync.SyncSchedulerOptions.SectionName));
+
+if (builder.Configuration.GetValue("Sync:SchedulerEnabled", true))
+{
+    builder.Services.AddQuartz(q =>
+    {
+        var key = new Quartz.JobKey("sync-tick");
+        q.AddJob<JiraUnpacked.Infrastructure.Sync.SyncTickJob>(key);
+        q.AddTrigger(t => t.ForJob(key)
+            .WithSimpleSchedule(s => s.WithIntervalInMinutes(1).RepeatForever()));
+    });
+    builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
+}
 
 var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()!;
 
