@@ -70,27 +70,12 @@ public class AppDbContext : DbContext
         return base.SaveChangesAsync(cancellationToken);
     }
 
-    // Auto-stamp EndUserId on new tenant-owned rows so a caller can never create a
-    // row owned by another tenant; writing one with no current tenant fails closed.
-    // Exception: if a current tenant is absent (privileged/NullCurrentTenant context) but the
-    // entity already has an explicit EndUserId set, allow it through — this supports the
-    // privileged seeder (DueProjectFinder tests) that pre-stamps rows directly.
     private void StampTenant()
     {
         foreach (var entry in ChangeTracker.Entries<ITenantOwned>().Where(e => e.State == EntityState.Added))
         {
-            var currentTenant = _tenant.EndUserId;
-            if (currentTenant.HasValue)
-            {
-                // Normal path: stamp with the current tenant (enforces ownership).
-                entry.Entity.EndUserId = currentTenant.Value;
-            }
-            else if (entry.Entity.EndUserId == Guid.Empty)
-            {
-                // No tenant and no explicit EndUserId — fail closed.
-                throw new InvalidOperationException("A current tenant is required to create tenant-owned data.");
-            }
-            // else: privileged context, entity has an explicit EndUserId — allow through.
+            entry.Entity.EndUserId = _tenant.EndUserId
+                ?? throw new InvalidOperationException("A current tenant is required to create tenant-owned data.");
         }
     }
 }
