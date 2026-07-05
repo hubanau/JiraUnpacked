@@ -1,19 +1,18 @@
 using System.Text;
 using JiraUnpacked.Api.Tenancy;
-using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Infrastructure;
 using JiraUnpacked.Infrastructure.Identity;
 using JiraUnpacked.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
+using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // EF Core (Npgsql) + AppDbContext. Connection string resolved per environment.
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddScoped<ICurrentTenant, HttpContextCurrentTenant>();
 
 // Bind + validate JWT options at startup (fail fast if the signing key is unsafe).
 builder.Services.AddOptions<JwtOptions>()
@@ -23,6 +22,21 @@ builder.Services.AddOptions<JwtOptions>()
     .ValidateOnStart();
 
 builder.Services.Configure<SeedOptions>(builder.Configuration.GetSection(SeedOptions.SectionName));
+
+builder.Services.Configure<JiraUnpacked.Infrastructure.Sync.SyncSchedulerOptions>(
+    builder.Configuration.GetSection(JiraUnpacked.Infrastructure.Sync.SyncSchedulerOptions.SectionName));
+
+if (builder.Configuration.GetValue("Sync:SchedulerEnabled", true))
+{
+    builder.Services.AddQuartz(q =>
+    {
+        var key = new Quartz.JobKey("sync-tick");
+        q.AddJob<JiraUnpacked.Infrastructure.Sync.SyncTickJob>(key);
+        q.AddTrigger(t => t.ForJob(key)
+            .WithSimpleSchedule(s => s.WithIntervalInMinutes(1).RepeatForever()));
+    });
+    builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
+}
 
 var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()!;
 
@@ -86,6 +100,7 @@ app.UseHttpsRedirection();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseMiddleware<JiraUnpacked.Api.Tenancy.TenantScopeMiddleware>();
 app.MapControllers();
 
 app.Run();
