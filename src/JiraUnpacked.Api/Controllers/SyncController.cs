@@ -9,7 +9,12 @@ namespace JiraUnpacked.Api.Controllers;
 public sealed class SyncController : ControllerBase
 {
     private readonly ISyncOrchestrator _orchestrator;
-    public SyncController(ISyncOrchestrator orchestrator) => _orchestrator = orchestrator;
+    private readonly ISyncRunQuery _runs;
+    public SyncController(ISyncOrchestrator orchestrator, ISyncRunQuery runs)
+    {
+        _orchestrator = orchestrator;
+        _runs = runs;
+    }
 
     [HttpPost("api/projects/{projectId:guid}/sync")]
     public async Task<IActionResult> Sync(Guid projectId, CancellationToken ct)
@@ -22,4 +27,8 @@ public sealed class SyncController : ControllerBase
             _ => Ok(result.Run)
         };
     }
+
+    [HttpGet("api/projects/{projectId:guid}/sync-runs")]
+    public async Task<IActionResult> Runs(Guid projectId, CancellationToken ct) =>
+        Ok(await _runs.ListAsync(projectId, ct));
 }

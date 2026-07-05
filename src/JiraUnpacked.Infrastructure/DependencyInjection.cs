@@ -66,6 +66,7 @@ public static class DependencyInjection
         services.AddSingleton<IPrivilegedDbContextFactory, PrivilegedDbContextFactory>();
         services.AddScoped<IDueProjectFinder, DueProjectFinder>();
         services.AddScoped<ISyncOrchestrator, SyncOrchestrator>();
+        services.AddScoped<ISyncRunQuery, SyncRunQuery>();
 
         services.AddOptions<TokenProtectionOptions>()
             .Configure(o =>
