@@ -46,10 +46,10 @@ public sealed class SyncEndpointTests : IClassFixture<JiraUnpackedApiFactory>, I
 
     private void StubSearchTwoPages()
     {
-        _jira.Given(Request.Create().WithPath("/rest/api/3/search/jql").UsingPost().WithBody(b => !b.Contains("TOKEN2")))
+        _jira.Given(Request.Create().WithPath("/rest/api/3/search/jql").UsingPost().WithBody(b => b?.Contains("TOKEN2") != true))
              .RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new
              { issues = new object[] { new { id = "10001", key = "ACME-1" }, new { id = "10002", key = "ACME-2" } }, nextPageToken = "TOKEN2" }));
-        _jira.Given(Request.Create().WithPath("/rest/api/3/search/jql").UsingPost().WithBody(b => b.Contains("TOKEN2")))
+        _jira.Given(Request.Create().WithPath("/rest/api/3/search/jql").UsingPost().WithBody(b => b?.Contains("TOKEN2") == true))
              .RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new
              { issues = new object[] { new { id = "10003", key = "ACME-3" } } }));
     }
