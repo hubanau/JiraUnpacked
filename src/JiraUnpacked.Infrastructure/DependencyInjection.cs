@@ -6,6 +6,7 @@ using JiraUnpacked.Infrastructure.Messaging;
 using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Security;
 using JiraUnpacked.Infrastructure.Services;
+using JiraUnpacked.Infrastructure.Sync;
 using JiraUnpacked.Infrastructure.Tenancy;
 using JiraUnpacked.Infrastructure.Time;
 using Microsoft.EntityFrameworkCore;
@@ -35,6 +36,10 @@ public static class DependencyInjection
                 "Connection string 'App' (the RLS-enforced role) is not configured.");
         }
 
+        services.AddSingleton<AmbientCurrentTenant>();
+        services.AddSingleton<ICurrentTenant>(sp => sp.GetRequiredService<AmbientCurrentTenant>());
+        services.AddSingleton<ITenantScope>(sp => sp.GetRequiredService<AmbientCurrentTenant>());
+
         services.AddScoped<TenantConnectionInterceptor>();
         services.AddDbContext<AppDbContext>((sp, options) =>
             options.UseNpgsql(appConnectionString)
@@ -57,6 +62,11 @@ public static class DependencyInjection
         services.AddScoped<IProjectMappingService, ProjectMappingService>();
         services.AddHttpClient<IJiraApiClient, JiraApiClient>()
                 .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
+
+        services.AddSingleton<IPrivilegedDbContextFactory, PrivilegedDbContextFactory>();
+        services.AddScoped<IDueProjectFinder, DueProjectFinder>();
+        services.AddScoped<ISyncOrchestrator, SyncOrchestrator>();
+        services.AddScoped<ISyncRunQuery, SyncRunQuery>();
 
         services.AddOptions<TokenProtectionOptions>()
             .Configure(o =>

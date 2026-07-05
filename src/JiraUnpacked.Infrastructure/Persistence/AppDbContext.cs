@@ -70,8 +70,6 @@ public class AppDbContext : DbContext
         return base.SaveChangesAsync(cancellationToken);
     }
 
-    // Auto-stamp EndUserId on new tenant-owned rows so a caller can never create a
-    // row owned by another tenant; writing one with no current tenant fails closed.
     private void StampTenant()
     {
         foreach (var entry in ChangeTracker.Entries<ITenantOwned>().Where(e => e.State == EntityState.Added))
