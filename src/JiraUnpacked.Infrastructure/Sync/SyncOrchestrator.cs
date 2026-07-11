@@ -102,5 +102,5 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     }
 
     private static SyncRunView ToView(SyncRun r) =>
-        new(r.Id, r.JiraProjectId, r.Status.ToString(), r.StartedAt, r.FinishedAt, r.IssuesProcessed, r.Error, r.NextRunAt);
+        new(r.Id, r.JiraProjectId, r.Status.ToString(), r.StartedAt, r.FinishedAt, r.IssuesProcessed, r.Error, r.NextRunAt, r.Kind.ToString());
 }

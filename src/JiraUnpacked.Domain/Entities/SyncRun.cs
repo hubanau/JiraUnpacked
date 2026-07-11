@@ -9,6 +9,7 @@ public sealed class SyncRun : ITenantOwned
     public DateTime StartedAt { get; set; }
     public DateTime? FinishedAt { get; set; }
     public SyncRunStatus Status { get; set; }
+    public SyncRunKind Kind { get; set; }
     public int IssuesProcessed { get; set; }
     public string? Error { get; set; }
     public DateTime? NextRunAt { get; set; }

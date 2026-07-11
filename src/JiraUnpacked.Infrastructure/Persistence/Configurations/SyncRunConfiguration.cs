@@ -12,6 +12,7 @@ public class SyncRunConfiguration : IEntityTypeConfiguration<SyncRun>
         b.HasKey(x => x.Id);
         b.Property(x => x.StartedAt).IsRequired();
         b.Property(x => x.Status).IsRequired().HasConversion<string>().HasMaxLength(20);
+        b.Property(x => x.Kind).IsRequired().HasConversion<string>().HasMaxLength(16);
         b.Property(x => x.Error); // unlimited text
         b.HasIndex(x => x.EndUserId);
         b.HasIndex(x => new { x.EndUserId, x.JiraProjectId, x.StartedAt });
