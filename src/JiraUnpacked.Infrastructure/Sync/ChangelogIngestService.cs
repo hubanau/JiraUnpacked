@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Abstractions.Jira;

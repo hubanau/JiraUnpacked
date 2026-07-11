@@ -85,4 +85,17 @@ public sealed class ChangelogIngestTests : IClassFixture<JiraUnpackedApiFactory>
         Assert.Equal(1, await RawChangelogCount(projId));
         Assert.NotEmpty(_jira.LogEntries); // dedicated endpoint used
     }
+
+    [Fact]
+    public async Task Reingest_is_idempotent()
+    {
+        var embedded = "{\"startAt\":0,\"maxResults\":100,\"total\":1,\"histories\":[{\"id\":\"h1\",\"items\":[{\"field\":\"status\"}]}]}";
+        var (tenant, projId) = await SeedIssueAsync(embedded);
+        var creds = new JiraCredentials(_jira.Url!, "e@x.com", "t");
+
+        await IngestAsync(tenant, projId, creds);
+        await IngestAsync(tenant, projId, creds);
+
+        Assert.Equal(1, await RawChangelogCount(projId)); // upsert, not duplicate
+    }
 }
