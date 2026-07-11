@@ -4,6 +4,7 @@ using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Domain.Enums;
 using JiraUnpacked.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace JiraUnpacked.Infrastructure.Sync;
 
@@ -13,10 +14,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     private readonly IJiraApiClient _jira;
     private readonly ITokenProtector _protector;
     private readonly IClock _clock;
+    private readonly ILogger<SyncOrchestrator> _logger;
 
-    public SyncOrchestrator(AppDbContext db, IJiraApiClient jira, ITokenProtector protector, IClock clock)
+    public SyncOrchestrator(AppDbContext db, IJiraApiClient jira, ITokenProtector protector, IClock clock,
+        ILogger<SyncOrchestrator> logger)
     {
-        _db = db; _jira = jira; _protector = protector; _clock = clock;
+        _db = db; _jira = jira; _protector = protector; _clock = clock; _logger = logger;
     }
 
     public async Task<SyncRunResult> RunProjectAsync(Guid projectId, CancellationToken ct = default)
@@ -92,7 +95,19 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         catch (Exception ex)
         {
             run.Status = SyncRunStatus.Failed;
-            run.Error = ex.Message; // JiraApiException/domain messages are safe; the token never appears in them
+            // JiraApiException messages are curated + safe (the token never appears in them), so keep them.
+            // Anything else (DbUpdateException, Npgsql, JSON parse, ...) can carry raw infra detail — SQL
+            // fragments, column names — which must not land in this tenant-readable field. Log it server-side
+            // and persist a generic message instead.
+            if (ex is JiraApiException)
+            {
+                run.Error = ex.Message;
+            }
+            else
+            {
+                _logger.LogError(ex, "Unexpected failure syncing project {ProjectId}", projectId);
+                run.Error = "Sync failed unexpectedly.";
+            }
             run.FinishedAt = _clock.UtcNow;
             run.NextRunAt = _clock.UtcNow.AddMinutes(project.SyncIntervalMinutes);
             await _db.SaveChangesAsync(ct);
