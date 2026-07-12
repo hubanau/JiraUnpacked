@@ -13,11 +13,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     private readonly IJiraApiClient _jira;
     private readonly ITokenProtector _protector;
     private readonly IClock _clock;
+    private readonly IChangelogIngestService _ingest;
     private readonly IDerivationService _derivation;
 
-    public SyncOrchestrator(AppDbContext db, IJiraApiClient jira, ITokenProtector protector, IClock clock, IDerivationService derivation)
+    public SyncOrchestrator(AppDbContext db, IJiraApiClient jira, ITokenProtector protector, IClock clock, IChangelogIngestService ingest, IDerivationService derivation)
     {
-        _db = db; _jira = jira; _protector = protector; _clock = clock; _derivation = derivation;
+        _db = db; _jira = jira; _protector = protector; _clock = clock; _ingest = ingest; _derivation = derivation;
     }
 
     public async Task<SyncRunResult> RunProjectAsync(Guid projectId, CancellationToken ct = default)
@@ -83,6 +84,10 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                     token = page.NextPageToken;
                 } while (token is not null);
             }
+
+            // Transform: ingest the full changelog to raw, then derive the modeled tables (Jira-free).
+            await _ingest.IngestProjectAsync(projectId, creds, ct);
+            await _derivation.DeriveProjectAsync(projectId, ct);
 
             run.Status = SyncRunStatus.Succeeded;
             run.IssuesProcessed = processed;
