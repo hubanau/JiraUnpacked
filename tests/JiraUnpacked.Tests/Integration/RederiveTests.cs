@@ -71,6 +71,13 @@ public sealed class RederiveTests : IClassFixture<JiraUnpackedApiFactory>, IAsyn
         return await db.Issues.IgnoreQueryFilters().FirstOrDefaultAsync(i => i.JiraProjectId == projectId);
     }
 
+    private async Task<int> IssueCountAsync(Guid projectId)
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(JiraUnpackedApiFactory.TestConnectionString).Options;
+        await using var db = new AppDbContext(options, new NullCurrentTenant());
+        return await db.Issues.IgnoreQueryFilters().CountAsync(i => i.JiraProjectId == projectId);
+    }
+
     [Fact]
     public async Task Rederive_builds_issues_and_dictionaries_from_raw_without_calling_jira()
     {
@@ -94,6 +101,17 @@ public sealed class RederiveTests : IClassFixture<JiraUnpackedApiFactory>, IAsyn
         Assert.NotNull(issue.IssueTypeId); // standard issuetype dict
         Assert.NotNull(issue.PriorityId);
         Assert.NotNull(issue.AssigneeId);
+    }
+
+    [Fact]
+    public async Task Rederive_twice_does_not_duplicate_issues()
+    {
+        var (client, projectId) = await ConfiguredProjectAsync();
+        StubSearchOneIssue();
+        await client.PostAsJsonAsync($"/api/projects/{projectId}/sync", new { }); // lands raw
+        await client.PostAsJsonAsync($"/api/projects/{projectId}/rederive", new { });
+        await client.PostAsJsonAsync($"/api/projects/{projectId}/rederive", new { });
+        Assert.Equal(1, await IssueCountAsync(projectId)); // upsert by (EndUserId, JiraIssueId), not duplicated
     }
 
     [Fact]
