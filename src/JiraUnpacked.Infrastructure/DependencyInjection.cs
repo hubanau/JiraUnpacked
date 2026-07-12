@@ -68,6 +68,7 @@ public static class DependencyInjection
         services.AddScoped<ISyncOrchestrator, SyncOrchestrator>();
         services.AddScoped<ISyncRunQuery, SyncRunQuery>();
         services.AddScoped<IChangelogIngestService, ChangelogIngestService>();
+        services.AddScoped<IDerivationService, DerivationService>();
 
         services.AddOptions<TokenProtectionOptions>()
             .Configure(o =>

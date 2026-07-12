@@ -13,10 +13,11 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     private readonly IJiraApiClient _jira;
     private readonly ITokenProtector _protector;
     private readonly IClock _clock;
+    private readonly IDerivationService _derivation;
 
-    public SyncOrchestrator(AppDbContext db, IJiraApiClient jira, ITokenProtector protector, IClock clock)
+    public SyncOrchestrator(AppDbContext db, IJiraApiClient jira, ITokenProtector protector, IClock clock, IDerivationService derivation)
     {
-        _db = db; _jira = jira; _protector = protector; _clock = clock;
+        _db = db; _jira = jira; _protector = protector; _clock = clock; _derivation = derivation;
     }
 
     public async Task<SyncRunResult> RunProjectAsync(Guid projectId, CancellationToken ct = default)
@@ -98,6 +99,34 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             await _db.SaveChangesAsync(ct);
         }
 
+        return new SyncRunResult(SyncOutcome.Completed, ToView(run));
+    }
+
+    public async Task<SyncRunResult> RunRederiveAsync(Guid projectId, CancellationToken ct = default)
+    {
+        var project = await _db.JiraProjects.FirstOrDefaultAsync(p => p.Id == projectId, ct);
+        if (project is null) return new SyncRunResult(SyncOutcome.ProjectNotFound, null);
+        if (await _db.SyncRuns.AnyAsync(r => r.JiraProjectId == projectId && r.Status == SyncRunStatus.Running, ct))
+            return new SyncRunResult(SyncOutcome.AlreadyRunning, null);
+
+        var run = new SyncRun
+        {
+            Id = Guid.NewGuid(), JiraProjectId = projectId, StartedAt = _clock.UtcNow,
+            Status = SyncRunStatus.Running, Kind = SyncRunKind.Rederive, IssuesProcessed = 0
+        };
+        _db.SyncRuns.Add(run);
+        await _db.SaveChangesAsync(ct);
+        try
+        {
+            await _derivation.DeriveProjectAsync(projectId, ct);
+            run.Status = SyncRunStatus.Succeeded; run.FinishedAt = _clock.UtcNow;
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            run.Status = SyncRunStatus.Failed; run.Error = ex.Message; run.FinishedAt = _clock.UtcNow;
+            await _db.SaveChangesAsync(ct);
+        }
         return new SyncRunResult(SyncOutcome.Completed, ToView(run));
     }
 
