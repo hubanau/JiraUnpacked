@@ -67,7 +67,8 @@ public sealed partial class DerivationService : IDerivationService
         }
         await _db.SaveChangesAsync(ct);
 
-        // (TR5 appends: change-history from RawChangelog + hierarchy second pass, here.)
+        await DeriveChangeHistoryAsync(projectId, ct);
+        await DeriveHierarchyAsync(projectId, ct);
     }
 
     // ---- JSON helpers ----
