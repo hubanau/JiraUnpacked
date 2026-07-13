@@ -58,14 +58,14 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
     }
 
     private static async Task SeedSyncRunAsync(Guid tenant, Guid projId, string status,
-        DateTime startedAt, DateTime? finishedAt = null, int issuesProcessed = 0)
+        DateTime startedAt, DateTime? finishedAt = null, int issuesProcessed = 0, string kind = "Sync")
     {
         await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
         await conn.OpenAsync();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = @"INSERT INTO ""SyncRuns""
-            (""Id"",""EndUserId"",""JiraProjectId"",""StartedAt"",""FinishedAt"",""Status"",""IssuesProcessed"")
-            VALUES (@id,@t,@proj,@started,@finished,@status,@issues)";
+            (""Id"",""EndUserId"",""JiraProjectId"",""StartedAt"",""FinishedAt"",""Status"",""IssuesProcessed"",""Kind"")
+            VALUES (@id,@t,@proj,@started,@finished,@status,@issues,@kind)";
         cmd.Parameters.AddWithValue("id", Guid.NewGuid());
         cmd.Parameters.AddWithValue("t", tenant);
         cmd.Parameters.AddWithValue("proj", projId);
@@ -73,6 +73,7 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
         cmd.Parameters.AddWithValue("finished", finishedAt.HasValue ? (object)finishedAt.Value : DBNull.Value);
         cmd.Parameters.AddWithValue("status", status);
         cmd.Parameters.AddWithValue("issues", issuesProcessed);
+        cmd.Parameters.AddWithValue("kind", kind);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -115,5 +116,24 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
 
         var due = await Finder().GetDueProjectsAsync();
         Assert.DoesNotContain(due, d => d.ProjectId == projId);
+    }
+
+    // Proves the Important fix (final review): a Rederive run must NOT reset the
+    // "last success" clock used to decide whether a project is due for its next sync.
+    [Fact]
+    public async Task Rederive_run_does_not_mark_a_due_project_not_due()
+    {
+        var tenant = Guid.NewGuid();
+        var projId = await SeedProjectWithQueryAsync(tenant, 60); // 60-minute interval
+
+        // Last real sync was 90 minutes ago -> overdue against the 60-minute interval.
+        await SeedSyncRunAsync(tenant, projId, "Succeeded", DateTime.UtcNow.AddMinutes(-90),
+            DateTime.UtcNow.AddMinutes(-89), kind: "Sync");
+        // A recent rederive must not count as the "last success" for scheduling purposes.
+        await SeedSyncRunAsync(tenant, projId, "Succeeded", DateTime.UtcNow.AddMinutes(-1),
+            DateTime.UtcNow, kind: "Rederive");
+
+        var due = await Finder().GetDueProjectsAsync();
+        Assert.Contains(due, d => d.ProjectId == projId && d.EndUserId == tenant);
     }
 }

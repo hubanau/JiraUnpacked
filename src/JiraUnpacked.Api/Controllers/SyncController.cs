@@ -31,4 +31,16 @@ public sealed class SyncController : ControllerBase
     [HttpGet("api/projects/{projectId:guid}/sync-runs")]
     public async Task<IActionResult> Runs(Guid projectId, CancellationToken ct) =>
         Ok(await _runs.ListAsync(projectId, ct));
+
+    [HttpPost("api/projects/{projectId:guid}/rederive")]
+    public async Task<IActionResult> Rederive(Guid projectId, CancellationToken ct)
+    {
+        var result = await _orchestrator.RunRederiveAsync(projectId, ct);
+        return result.Outcome switch
+        {
+            SyncOutcome.ProjectNotFound => NotFound(),
+            SyncOutcome.AlreadyRunning => Conflict(),
+            _ => Ok(result.Run)
+        };
+    }
 }

@@ -21,7 +21,7 @@ public sealed class SyncRunQuery : ISyncRunQuery
 
         return runs
             .Select(r => new SyncRunView(r.Id, r.JiraProjectId, r.Status.ToString(),
-                r.StartedAt, r.FinishedAt, r.IssuesProcessed, r.Error, r.NextRunAt))
+                r.StartedAt, r.FinishedAt, r.IssuesProcessed, r.Error, r.NextRunAt, r.Kind.ToString()))
             .ToList();
     }
 }

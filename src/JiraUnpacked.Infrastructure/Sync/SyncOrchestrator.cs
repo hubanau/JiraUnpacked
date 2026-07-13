@@ -13,10 +13,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     private readonly IJiraApiClient _jira;
     private readonly ITokenProtector _protector;
     private readonly IClock _clock;
+    private readonly IChangelogIngestService _ingest;
+    private readonly IDerivationService _derivation;
 
-    public SyncOrchestrator(AppDbContext db, IJiraApiClient jira, ITokenProtector protector, IClock clock)
+    public SyncOrchestrator(AppDbContext db, IJiraApiClient jira, ITokenProtector protector, IClock clock, IChangelogIngestService ingest, IDerivationService derivation)
     {
-        _db = db; _jira = jira; _protector = protector; _clock = clock;
+        _db = db; _jira = jira; _protector = protector; _clock = clock; _ingest = ingest; _derivation = derivation;
     }
 
     public async Task<SyncRunResult> RunProjectAsync(Guid projectId, CancellationToken ct = default)
@@ -39,7 +41,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         try
         {
             var watermark = await _db.SyncRuns
-                .Where(r => r.JiraProjectId == projectId && r.Status == SyncRunStatus.Succeeded)
+                .Where(r => r.JiraProjectId == projectId && r.Status == SyncRunStatus.Succeeded && r.Kind == SyncRunKind.Sync)
                 .MaxAsync(r => (DateTime?)r.StartedAt, ct);
 
             var conn = await _db.JiraConnections.FirstOrDefaultAsync(c => c.Id == project.JiraConnectionId, ct)
@@ -83,6 +85,10 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                 } while (token is not null);
             }
 
+            // Transform: ingest the full changelog to raw, then derive the modeled tables (Jira-free).
+            await _ingest.IngestProjectAsync(projectId, creds, ct);
+            await _derivation.DeriveProjectAsync(projectId, ct);
+
             run.Status = SyncRunStatus.Succeeded;
             run.IssuesProcessed = processed;
             run.FinishedAt = _clock.UtcNow;
@@ -101,6 +107,34 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         return new SyncRunResult(SyncOutcome.Completed, ToView(run));
     }
 
+    public async Task<SyncRunResult> RunRederiveAsync(Guid projectId, CancellationToken ct = default)
+    {
+        var project = await _db.JiraProjects.FirstOrDefaultAsync(p => p.Id == projectId, ct);
+        if (project is null) return new SyncRunResult(SyncOutcome.ProjectNotFound, null);
+        if (await _db.SyncRuns.AnyAsync(r => r.JiraProjectId == projectId && r.Status == SyncRunStatus.Running, ct))
+            return new SyncRunResult(SyncOutcome.AlreadyRunning, null);
+
+        var run = new SyncRun
+        {
+            Id = Guid.NewGuid(), JiraProjectId = projectId, StartedAt = _clock.UtcNow,
+            Status = SyncRunStatus.Running, Kind = SyncRunKind.Rederive, IssuesProcessed = 0
+        };
+        _db.SyncRuns.Add(run);
+        await _db.SaveChangesAsync(ct);
+        try
+        {
+            await _derivation.DeriveProjectAsync(projectId, ct);
+            run.Status = SyncRunStatus.Succeeded; run.FinishedAt = _clock.UtcNow;
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            run.Status = SyncRunStatus.Failed; run.Error = ex.Message; run.FinishedAt = _clock.UtcNow;
+            await _db.SaveChangesAsync(ct);
+        }
+        return new SyncRunResult(SyncOutcome.Completed, ToView(run));
+    }
+
     private static SyncRunView ToView(SyncRun r) =>
-        new(r.Id, r.JiraProjectId, r.Status.ToString(), r.StartedAt, r.FinishedAt, r.IssuesProcessed, r.Error, r.NextRunAt);
+        new(r.Id, r.JiraProjectId, r.Status.ToString(), r.StartedAt, r.FinishedAt, r.IssuesProcessed, r.Error, r.NextRunAt, r.Kind.ToString());
 }

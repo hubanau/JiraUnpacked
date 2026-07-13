@@ -34,6 +34,7 @@ public class AppDbContext : DbContext
     public DbSet<Issue> Issues => Set<Issue>();
     public DbSet<IssueChangeHistory> IssueChangeHistory => Set<IssueChangeHistory>();
     public DbSet<SyncRun> SyncRuns => Set<SyncRun>();
+    public DbSet<RawChangelog> RawChangelogs => Set<RawChangelog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -56,6 +57,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Issue>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
         modelBuilder.Entity<IssueChangeHistory>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
         modelBuilder.Entity<SyncRun>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<RawChangelog>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
     }
 
     public override int SaveChanges()

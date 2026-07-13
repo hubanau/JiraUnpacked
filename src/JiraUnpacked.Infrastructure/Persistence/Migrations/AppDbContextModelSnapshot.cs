@@ -469,6 +469,42 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.ToTable("Priorities", (string)null);
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.RawChangelog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("FetchedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("JiraIssueId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid>("JiraProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraProjectId");
+
+                    b.HasIndex("EndUserId", "JiraIssueId")
+                        .IsUnique();
+
+                    b.ToTable("RawChangelog", (string)null);
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.RawIssueSnapshot", b =>
                 {
                     b.Property<Guid>("Id")
@@ -679,6 +715,11 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid>("JiraProjectId")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
 
                     b.Property<DateTime?>("NextRunAt")
                         .HasColumnType("timestamp with time zone");
@@ -906,6 +947,15 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraConnection", null)
                         .WithMany()
                         .HasForeignKey("JiraConnectionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.RawChangelog", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
+                        .WithMany()
+                        .HasForeignKey("JiraProjectId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
