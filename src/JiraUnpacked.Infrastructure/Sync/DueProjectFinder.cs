@@ -35,7 +35,7 @@ public sealed class DueProjectFinder : IDueProjectFinder
                 HasRunning = db.SyncRuns.IgnoreQueryFilters()
                     .Any(r => r.JiraProjectId == p.Id && r.Status == SyncRunStatus.Running),
                 LastSuccess = db.SyncRuns.IgnoreQueryFilters()
-                    .Where(r => r.JiraProjectId == p.Id && r.Status == SyncRunStatus.Succeeded)
+                    .Where(r => r.JiraProjectId == p.Id && r.Status == SyncRunStatus.Succeeded && r.Kind == SyncRunKind.Sync)
                     .Max(r => (DateTime?)r.StartedAt)
             })
             .ToListAsync(ct);

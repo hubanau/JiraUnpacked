@@ -41,7 +41,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         try
         {
             var watermark = await _db.SyncRuns
-                .Where(r => r.JiraProjectId == projectId && r.Status == SyncRunStatus.Succeeded)
+                .Where(r => r.JiraProjectId == projectId && r.Status == SyncRunStatus.Succeeded && r.Kind == SyncRunKind.Sync)
                 .MaxAsync(r => (DateTime?)r.StartedAt, ct);
 
             var conn = await _db.JiraConnections.FirstOrDefaultAsync(c => c.Id == project.JiraConnectionId, ct)
