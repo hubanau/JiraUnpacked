@@ -82,8 +82,10 @@ public sealed class DerivationHistoryTests : IClassFixture<JiraUnpackedApiFactor
         var history = await vdb.IssueChangeHistory.IgnoreQueryFilters().Where(h => h.JiraProjectId == project.Id).ToListAsync();
         Assert.Contains(history, h => h.JiraIssueId == "10002" && h.Field == "status" && h.ToValue == "In Progress" && h.JiraHistoryId == "h1");
         Assert.Single(history); // re-derive did not duplicate the change-history row
-        var story2 = await vdb.Issues.IgnoreQueryFilters().FirstAsync(i => i.JiraIssueId == "10002");
-        var epic2 = await vdb.Issues.IgnoreQueryFilters().FirstAsync(i => i.JiraIssueId == "10001");
+        // Scope reads to THIS test's project: other tests seed issues with the same Jira ids ("10001"/"10002"),
+        // so an unscoped IgnoreQueryFilters().First(JiraIssueId==...) can return another test's row under parallel runs.
+        var story2 = await vdb.Issues.IgnoreQueryFilters().FirstAsync(i => i.JiraProjectId == project.Id && i.JiraIssueId == "10002");
+        var epic2 = await vdb.Issues.IgnoreQueryFilters().FirstAsync(i => i.JiraProjectId == project.Id && i.JiraIssueId == "10001");
         Assert.Equal(epic2.Id, story2.ParentIssueId);
     }
 
