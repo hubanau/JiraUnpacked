@@ -33,6 +33,18 @@ public class SyncOrchestratorTests
         public Task<JiraProjectSummary?> GetProjectAsync(JiraCredentials creds, string projectKey, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<JiraStatus>> GetStatusesAsync(JiraCredentials creds, string projectKey, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<JqlValidationResult> ParseJqlAsync(JiraCredentials creds, string jql, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<ChangelogPage> GetIssueChangelogPageAsync(JiraCredentials creds, string jiraIssueId, int startAt, CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    // These failure tests never reach the transform phase (they throw during extract), so no-op stubs suffice.
+    private sealed class NoopIngest : IChangelogIngestService
+    {
+        public Task IngestProjectAsync(Guid projectId, JiraCredentials creds, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class NoopDerivation : IDerivationService
+    {
+        public Task DeriveProjectAsync(Guid projectId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     // Simulates an infra failure mid-sync: throws a DbUpdateException (carrying raw SQL detail) on the Nth save.
@@ -90,7 +102,7 @@ public class SyncOrchestratorTests
         // throwOnCall: 2 => save #1 inserts the Running run, save #2 (the fetched page) throws the infra error.
         await using var db = new FailingSaveDbContext(options, tenant, throwOnCall: 2);
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), NullLogger<SyncOrchestrator>.Instance);
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
 
         var result = await orchestrator.RunProjectAsync(projectId);
 
@@ -111,7 +123,7 @@ public class SyncOrchestratorTests
 
         await using var db = new AppDbContext(options, tenant);
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), NullLogger<SyncOrchestrator>.Instance);
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
 
         var result = await orchestrator.RunProjectAsync(projectId);
 

@@ -249,4 +249,51 @@ public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFact
         cmd.Parameters.AddWithValue("id", id);
         return (long)(await cmd.ExecuteScalarAsync())!;
     }
+
+    [Fact]
+    public async Task Tenant_cannot_read_another_tenants_raw_changelog_via_rls()
+    {
+        var (tenantA, rowA) = await SeedRawChangelogAsync();
+        var (tenantB, rowB) = await SeedRawChangelogAsync();
+
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestAppConnectionString);
+        await conn.OpenAsync();
+        await SetTenantAsync(conn, tenantB);
+
+        Assert.Equal(0L, await CountByIdAsync(conn, "RawChangelog", rowA));
+        Assert.Equal(1L, await CountByIdAsync(conn, "RawChangelog", rowB));
+    }
+
+    private async Task<(Guid tenant, Guid row)> SeedRawChangelogAsync()
+    {
+        var tenant = Guid.NewGuid();
+        var connId = Guid.NewGuid();
+        var projId = Guid.NewGuid();
+        var rowId = Guid.NewGuid();
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
+        await conn.OpenAsync();
+        await ExecAsync(conn, @"INSERT INTO ""JiraConnections""(""Id"",""EndUserId"",""BaseUrl"",""Email"",""ApiTokenEncrypted"",""CreatedAt"") VALUES (@id,@t,'https://x','e','c',now())",
+            ("id", connId), ("t", tenant));
+        await ExecAsync(conn, @"INSERT INTO ""JiraProjects""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraProjectKey"",""JiraProjectId"",""SyncIntervalMinutes"",""CreatedAt"") VALUES (@id,@t,@c,'ACME','1',60,now())",
+            ("id", projId), ("t", tenant), ("c", connId));
+        await ExecAsync(conn, @"INSERT INTO ""RawChangelog""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""Payload"",""FetchedAt"") VALUES (@id,@t,@p,'10001','{}'::jsonb,now())",
+            ("id", rowId), ("t", tenant), ("p", projId));
+        return (tenant, rowId);
+    }
+
+    private static async Task ExecAsync(NpgsqlConnection conn, string sql, params (string, object)[] ps)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        foreach (var (n, v) in ps) cmd.Parameters.AddWithValue(n, v);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<long> CountByIdAsync(NpgsqlConnection conn, string table, Guid id)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $@"SELECT count(*) FROM ""{table}"" WHERE ""Id"" = @id";
+        cmd.Parameters.AddWithValue("id", id);
+        return (long)(await cmd.ExecuteScalarAsync())!;
+    }
 }

@@ -27,6 +27,9 @@ public class SyncTickJobTests
             Calls.Add((_tenant.EndUserId ?? Guid.Empty, projectId)); // captures the ambient tenant at call time
             return Task.FromResult(new SyncRunResult(SyncOutcome.Completed, null));
         }
+
+        public Task<SyncRunResult> RunRederiveAsync(Guid projectId, CancellationToken ct = default)
+            => Task.FromResult(new SyncRunResult(SyncOutcome.Completed, null));
     }
 
     [Fact]
