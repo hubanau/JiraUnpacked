@@ -67,4 +67,17 @@ public sealed class QueryEndpointsTests : IClassFixture<JiraUnpackedApiFactory>,
         var resp = await client.PostAsJsonAsync($"/api/projects/{Guid.NewGuid()}/queries", new { jql = "x" });
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
+
+    [Fact]
+    public async Task Add_query_with_blank_jql_is_rejected_without_contacting_jira()
+    {
+        var (client, projectId) = await WithProjectAsync();
+
+        var resp = await client.PostAsJsonAsync($"/api/projects/{projectId}/queries", new { jql = "" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        // Request validation must reject blank JQL before any Jira parse call.
+        Assert.DoesNotContain(_jira.LogEntries,
+            e => e.RequestMessage.Path == "/rest/api/3/jql/parse");
+    }
 }

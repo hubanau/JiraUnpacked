@@ -71,6 +71,19 @@ public sealed class ConnectionHardeningTests : IClassFixture<JiraUnpackedApiFact
     }
 
     [Fact]
+    public async Task Create_with_empty_base_url_is_rejected_with_400()
+    {
+        // An empty/malformed baseUrl must be rejected by request validation (400),
+        // not blow up building a Uri downstream (which surfaces as an unhandled 500).
+        var client = await AuthedClientAsync();
+
+        var resp = await client.PostAsJsonAsync("/api/connections",
+            new { baseUrl = "", email = "ops@acme.com", apiToken = "secret-token" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
     public async Task Create_with_bad_creds_is_rejected_and_stores_nothing()
     {
         _jira.Given(Request.Create().WithPath("/rest/api/3/myself").UsingGet())

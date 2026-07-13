@@ -23,7 +23,8 @@ public sealed class ProjectsController : ControllerBase
             AddProjectStatus.UnknownProjectKey => Problem(statusCode: 400, title: "Unknown Jira project key."),
             AddProjectStatus.InvalidInterval => Problem(statusCode: 400, title: "Sync interval must be at least 60 minutes."),
             AddProjectStatus.Duplicate => Conflict(),
-            _ => Problem(statusCode: 502, title: "Jira could not be reached.")
+            // Upstream Jira failures propagate as JiraApiException → 502 via JiraApiExceptionFilter.
+            _ => throw new InvalidOperationException($"Unexpected {nameof(AddProjectStatus)}: {result.Status}.")
         };
     }
 

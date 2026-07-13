@@ -21,7 +21,8 @@ public sealed class QueriesController : ControllerBase
             AddQueryStatus.Created => CreatedAtAction(nameof(List), new { projectId }, result.View),
             AddQueryStatus.ProjectNotFound => NotFound(),
             AddQueryStatus.InvalidJql => Problem(statusCode: 400, title: "Invalid JQL.", detail: string.Join("; ", result.Errors)),
-            _ => Problem(statusCode: 502, title: "Jira could not be reached.")
+            // Upstream Jira failures propagate as JiraApiException → 502 via JiraApiExceptionFilter.
+            _ => throw new InvalidOperationException($"Unexpected {nameof(AddQueryStatus)}: {result.Status}.")
         };
     }
 

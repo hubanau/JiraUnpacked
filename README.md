@@ -54,6 +54,14 @@ dotnet tool restore                       # once, after clone
 dotnet ef database update --project src/JiraUnpacked.Infrastructure --startup-project src/JiraUnpacked.Api
 ```
 
+## Deployment configuration
+
+The Jira API-token encryption key (`TokenProtection:Key`, a base64-encoded 32-byte key)
+ships in `appsettings.Development.json` for dev/CI only. **Non-Development environments
+(test, production) MUST inject `TokenProtection__Key` as an environment variable** — the
+app validates it at startup (`ValidateOnStart` in `DependencyInjection.cs`) and fails
+fast if it is missing or not a 32-byte base64 value.
+
 ## Branching & CI
 
 - `develop` — integration branch; CI deploys to **test** on merge.

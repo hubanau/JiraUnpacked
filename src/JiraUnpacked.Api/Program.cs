@@ -12,7 +12,6 @@ var builder = WebApplication.CreateBuilder(args);
 
 // EF Core (Npgsql) + AppDbContext. Connection string resolved per environment.
 builder.Services.AddInfrastructure(builder.Configuration);
-builder.Services.AddHttpContextAccessor();
 
 // Bind + validate JWT options at startup (fail fast if the signing key is unsafe).
 builder.Services.AddOptions<JwtOptions>()
