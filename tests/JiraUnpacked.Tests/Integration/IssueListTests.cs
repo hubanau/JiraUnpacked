@@ -112,4 +112,18 @@ public sealed class IssueListTests : IClassFixture<JiraUnpackedApiFactory>, IAsy
         var resp = await clientB.GetAsync($"/api/projects/{projectId}/issues");
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
+
+    [Fact]
+    public async Task Pagination_params_are_clamped()
+    {
+        var (client, tenant) = await AuthedTenantAsync();
+        var projectId = await SeedProjectWithIssuesAsync(tenant);
+
+        // pageSize > 100 is capped to 100; page < 1 is floored to 1 (response echoes the clamped values).
+        var page = await (await client.GetAsync($"/api/projects/{projectId}/issues?page=0&pageSize=500")).Content.ReadFromJsonAsync<PageDto>();
+        Assert.Equal(1, page!.Page);
+        Assert.Equal(100, page.PageSize);
+        Assert.Equal(2, page.TotalCount); // both seeded issues returned within the (clamped) page
+        Assert.Equal(2, page.Items.Count);
+    }
 }
