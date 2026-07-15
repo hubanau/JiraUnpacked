@@ -20,6 +20,7 @@ public class IssueConfiguration : IEntityTypeConfiguration<Issue>
         b.HasIndex(x => new { x.EndUserId, x.JiraIssueId }).IsUnique();
         b.HasIndex(x => new { x.EndUserId, x.JiraProjectId });
         b.HasIndex(x => new { x.EndUserId, x.ParentJiraIssueId });
+        b.HasIndex(x => new { x.EndUserId, x.JiraProjectId, x.JiraUpdatedAt });
 
         // Owning project: cascade. Dictionary FKs: NoAction (a dict delete must not delete issues).
         b.HasOne<JiraProject>().WithMany().HasForeignKey(x => x.JiraProjectId).OnDelete(DeleteBehavior.Cascade);

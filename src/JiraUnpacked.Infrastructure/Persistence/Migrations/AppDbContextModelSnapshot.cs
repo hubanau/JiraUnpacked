@@ -208,6 +208,8 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("EndUserId", "ParentJiraIssueId");
 
+                    b.HasIndex("EndUserId", "JiraProjectId", "JiraUpdatedAt");
+
                     b.ToTable("Issues", (string)null);
                 });
 

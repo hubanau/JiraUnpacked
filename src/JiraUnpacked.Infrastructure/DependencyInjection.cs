@@ -69,6 +69,7 @@ public static class DependencyInjection
         services.AddScoped<ISyncRunQuery, SyncRunQuery>();
         services.AddScoped<IChangelogIngestService, ChangelogIngestService>();
         services.AddScoped<IDerivationService, DerivationService>();
+        services.AddScoped<IIssueQueryService, JiraUnpacked.Infrastructure.Reporting.IssueQueryService>();
 
         services.AddOptions<TokenProtectionOptions>()
             .Configure(o =>
