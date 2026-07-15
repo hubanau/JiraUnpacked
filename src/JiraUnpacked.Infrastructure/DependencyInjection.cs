@@ -4,6 +4,7 @@ using JiraUnpacked.Infrastructure.Identity;
 using JiraUnpacked.Infrastructure.Jira;
 using JiraUnpacked.Infrastructure.Messaging;
 using JiraUnpacked.Infrastructure.Persistence;
+using JiraUnpacked.Infrastructure.Reporting;
 using JiraUnpacked.Infrastructure.Security;
 using JiraUnpacked.Infrastructure.Services;
 using JiraUnpacked.Infrastructure.Sync;
@@ -69,6 +70,7 @@ public static class DependencyInjection
         services.AddScoped<ISyncRunQuery, SyncRunQuery>();
         services.AddScoped<IChangelogIngestService, ChangelogIngestService>();
         services.AddScoped<IDerivationService, DerivationService>();
+        services.AddScoped<IIssueQueryService, IssueQueryService>();
 
         services.AddOptions<TokenProtectionOptions>()
             .Configure(o =>
