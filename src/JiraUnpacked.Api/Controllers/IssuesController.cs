@@ -18,4 +18,11 @@ public sealed class IssuesController : ControllerBase
         var result = await _issues.ListAsync(projectId, page, pageSize, ct);
         return result is null ? NotFound() : Ok(result);
     }
+
+    [HttpGet("api/projects/{projectId:guid}/issues/{jiraIssueId}")]
+    public async Task<IActionResult> Detail(Guid projectId, string jiraIssueId, CancellationToken ct = default)
+    {
+        var detail = await _issues.GetDetailAsync(projectId, jiraIssueId, ct);
+        return detail is null ? NotFound() : Ok(detail);
+    }
 }

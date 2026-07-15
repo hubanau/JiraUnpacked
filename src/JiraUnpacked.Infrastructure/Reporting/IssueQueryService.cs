@@ -41,6 +41,39 @@ public sealed class IssueQueryService : IIssueQueryService
         return new PagedResult<IssueListItem>(items, page, pageSize, total);
     }
 
-    public Task<IssueDetail?> GetDetailAsync(Guid projectId, string jiraIssueId, CancellationToken ct = default) =>
-        throw new NotImplementedException("RV2");
+    public async Task<IssueDetail?> GetDetailAsync(Guid projectId, string jiraIssueId, CancellationToken ct = default)
+    {
+        var issue = await _db.Issues
+            .Where(i => i.JiraProjectId == projectId && i.JiraIssueId == jiraIssueId)
+            .Select(i => new IssueListItem(
+                i.JiraIssueId, i.JiraKey, i.Summary,
+                _db.Statuses.Where(s => s.Id == i.StatusId).Select(s => s.Name).FirstOrDefault(),
+                _db.IssueTypes.Where(t => t.Id == i.IssueTypeId).Select(t => t.Name).FirstOrDefault(),
+                _db.Priorities.Where(p => p.Id == i.PriorityId).Select(p => p.Name).FirstOrDefault(),
+                _db.JiraUsers.Where(u => u.Id == i.AssigneeId).Select(u => u.DisplayName).FirstOrDefault(),
+                _db.Sprints.Where(sp => sp.Id == i.SprintId).Select(sp => sp.Name).FirstOrDefault(),
+                _db.Teams.Where(tm => tm.Id == i.TeamId).Select(tm => tm.Name).FirstOrDefault(),
+                i.StoryPoints, i.ParentJiraIssueId, i.JiraCreatedAt, i.JiraUpdatedAt))
+            .FirstOrDefaultAsync(ct);
+        if (issue is null) return null;
+
+        IssueRef? parent = issue.ParentJiraIssueId is null ? null : await _db.Issues
+            .Where(i => i.JiraProjectId == projectId && i.JiraIssueId == issue.ParentJiraIssueId)
+            .Select(i => new IssueRef(i.JiraIssueId, i.JiraKey, i.Summary))
+            .FirstOrDefaultAsync(ct);
+
+        var children = await _db.Issues
+            .Where(i => i.JiraProjectId == projectId && i.ParentJiraIssueId == jiraIssueId)
+            .OrderBy(i => i.JiraKey)
+            .Select(i => new IssueRef(i.JiraIssueId, i.JiraKey, i.Summary))
+            .ToListAsync(ct);
+
+        var history = await _db.IssueChangeHistory
+            .Where(h => h.JiraProjectId == projectId && h.JiraIssueId == jiraIssueId)
+            .OrderBy(h => h.ChangedAt)
+            .Select(h => new ChangeHistoryEntry(h.Field, h.FromValue, h.ToValue, h.Author, h.ChangedAt))
+            .ToListAsync(ct);
+
+        return new IssueDetail(issue, parent, children, history);
+    }
 }
