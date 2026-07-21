@@ -40,4 +40,15 @@ public sealed class MetricsController : ControllerBase
         var report = await _metrics.GetThroughputAsync(projectId, size, from, to, ct);
         return report is null ? NotFound() : Ok(report);
     }
+
+    [HttpGet("api/projects/{projectId:guid}/metrics/status-aging")]
+    public async Task<IActionResult> StatusAging(
+        Guid projectId,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        CancellationToken ct = default)
+    {
+        var report = await _metrics.GetStatusAgingAsync(projectId, page, pageSize, ct);
+        return report is null ? NotFound() : Ok(report);
+    }
 }

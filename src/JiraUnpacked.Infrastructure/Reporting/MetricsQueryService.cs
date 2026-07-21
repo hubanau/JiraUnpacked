@@ -217,7 +217,57 @@ public sealed class MetricsQueryService : IMetricsQueryService
         return cursor;
     }
 
-    public Task<StatusAgingReport?> GetStatusAgingAsync(
-        Guid projectId, int page, int pageSize, CancellationToken ct = default) =>
-        throw new NotImplementedException("MT4");
+    public async Task<StatusAgingReport?> GetStatusAgingAsync(
+        Guid projectId, int page, int pageSize, CancellationToken ct = default)
+    {
+        if (!await ProjectExistsAsync(projectId, ct)) return null;
+        var (issues, timelines) = await LoadTimelinesAsync(projectId, ct);
+        var now = _clock.UtcNow;
+
+        // Population: everything not currently Done.
+        var open = new List<AgingItem>();
+        foreach (var i in issues)
+        {
+            var t = timelines[i.JiraIssueId];
+            if (t.CurrentClass == StatusClass.Done) continue;
+
+            open.Add(new AgingItem(
+                i.JiraIssueId, i.JiraKey, i.Summary,
+                t.CurrentStatus, t.CurrentClass.ToString(),
+                (now - t.CurrentEnteredAt).TotalDays, t.CurrentEnteredAt));
+        }
+
+        // Histogram spans the WHOLE population, deliberately computed before paging.
+        var histogram = BuildHistogram(open);
+
+        page = page < 1 ? 1 : page;
+        pageSize = pageSize < 1 ? DefaultPageSize : Math.Min(pageSize, MaxPageSize);
+
+        var ordered = open
+            .OrderByDescending(a => a.AgeDays)
+            .ThenBy(a => a.JiraKey)
+            .ToList();
+
+        var items = ordered.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+
+        return new StatusAgingReport(
+            new PagedResult<AgingItem>(items, page, pageSize, ordered.Count), histogram);
+    }
+
+    /// <summary>Half-open day bands, so every age falls in exactly one. All five are always emitted.</summary>
+    private static IReadOnlyList<AgingBand> BuildHistogram(IReadOnlyList<AgingItem> items)
+    {
+        var bands = new (string Name, double Lo, double Hi)[]
+        {
+            ("<=1d", 0, 1),
+            ("1-3d", 1, 3),
+            ("3-7d", 3, 7),
+            ("1-2w", 7, 14),
+            (">2w", 14, double.PositiveInfinity),
+        };
+
+        return bands
+            .Select(b => new AgingBand(b.Name, items.Count(i => i.AgeDays >= b.Lo && i.AgeDays < b.Hi)))
+            .ToList();
+    }
 }
