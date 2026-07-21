@@ -41,6 +41,11 @@ public sealed class MetricsQueryService : IMetricsQueryService
         return map;
     }
 
+    /// <summary>Projected issue row — no navigation properties, Spec 1's correlated-subquery style.</summary>
+    private sealed record IssueRow(
+        string JiraIssueId, string JiraKey, string? Summary, string? CurrentStatus,
+        decimal? StoryPoints, DateTime JiraCreatedAt);
+
     public async Task<StoryCountsReport?> GetStoryCountsAsync(Guid projectId, CancellationToken ct = default)
     {
         if (!await ProjectExistsAsync(projectId, ct)) return null;
@@ -70,12 +75,147 @@ public sealed class MetricsQueryService : IMetricsQueryService
         return new StoryCountsReport(byStatus, rows.Count, rows.Sum(r => r.StoryPoints ?? 0m));
     }
 
-    public Task<TimeInProgressReport?> GetTimeInProgressAsync(Guid projectId, CancellationToken ct = default) =>
-        throw new NotImplementedException("MT3");
+    /// <summary>
+    /// Loads everything the timeline metrics need, project-scoped: the semantics map, the
+    /// projected issues, and their status transitions — then folds each issue through the engine.
+    /// Story counts deliberately does NOT call this: it needs no change history.
+    /// </summary>
+    private async Task<(List<IssueRow> Issues, Dictionary<string, IssueTimeline> Timelines)>
+        LoadTimelinesAsync(Guid projectId, CancellationToken ct)
+    {
+        var semantics = await LoadSemanticsAsync(projectId, ct);
 
-    public Task<ThroughputReport?> GetThroughputAsync(
-        Guid projectId, ThroughputBucketSize bucket, DateTime? from, DateTime? to, CancellationToken ct = default) =>
-        throw new NotImplementedException("MT3");
+        var issues = await _db.Issues
+            .Where(i => i.JiraProjectId == projectId)
+            .Select(i => new IssueRow(
+                i.JiraIssueId,
+                i.JiraKey,
+                i.Summary,
+                _db.Statuses.Where(s => s.Id == i.StatusId).Select(s => s.Name).FirstOrDefault(),
+                i.StoryPoints,
+                i.JiraCreatedAt))
+            .ToListAsync(ct);
+
+        // "status" is the field name Jira's changelog uses, and what the derivation stores.
+        var history = await _db.IssueChangeHistory
+            .Where(h => h.JiraProjectId == projectId && h.Field == "status")
+            .OrderBy(h => h.ChangedAt)
+            .Select(h => new { h.JiraIssueId, h.ChangedAt, h.FromValue, h.ToValue })
+            .ToListAsync(ct);
+
+        var byIssue = history
+            .GroupBy(h => h.JiraIssueId)
+            .ToDictionary(
+                g => g.Key,
+                g => (IReadOnlyList<StatusTransition>)g
+                    .Select(h => new StatusTransition(h.ChangedAt, h.FromValue, h.ToValue))
+                    .ToList());
+
+        var timelines = new Dictionary<string, IssueTimeline>();
+        foreach (var i in issues)
+        {
+            var transitions = byIssue.TryGetValue(i.JiraIssueId, out var t)
+                ? t
+                : (IReadOnlyList<StatusTransition>)Array.Empty<StatusTransition>();
+            timelines[i.JiraIssueId] =
+                StatusTimelineEngine.Build(i.JiraCreatedAt, i.CurrentStatus, transitions, semantics);
+        }
+
+        return (issues, timelines);
+    }
+
+    public async Task<TimeInProgressReport?> GetTimeInProgressAsync(Guid projectId, CancellationToken ct = default)
+    {
+        if (!await ProjectExistsAsync(projectId, ct)) return null;
+        var (_, timelines) = await LoadTimelinesAsync(projectId, ct);
+
+        var durations = new List<double>();
+        var excluded = 0;
+        foreach (var t in timelines.Values)
+        {
+            // Cycle time needs BOTH ends, and Done must come after Active.
+            if (t.FirstActiveAt is DateTime a && t.FirstDoneAt is DateTime d && d > a)
+                durations.Add((d - a).TotalDays);
+            else
+                excluded++;
+        }
+
+        return new TimeInProgressReport(
+            durations.Count == 0 ? null : durations.Average(),
+            durations.Count,
+            excluded);
+    }
+
+    public async Task<ThroughputReport?> GetThroughputAsync(
+        Guid projectId, ThroughputBucketSize bucket, DateTime? from, DateTime? to, CancellationToken ct = default)
+    {
+        if (!await ProjectExistsAsync(projectId, ct)) return null;
+        var (_, timelines) = await LoadTimelinesAsync(projectId, ct);
+
+        // Resolve the window: both ends snap OUTWARD to bucket boundaries; the default is the
+        // last 12 buckets ending with the bucket containing "now".
+        var toStart = FloorTo(ToUtc(to) ?? _clock.UtcNow, bucket);
+        var fromStart = from is DateTime f ? FloorTo(ToUtc(f)!.Value, bucket) : StepBack(toStart, bucket, 11);
+
+        var counts = new Dictionary<DateTime, int>();
+        foreach (var t in timelines.Values)
+        {
+            if (t.FirstDoneAt is not DateTime done) continue;
+            var b = FloorTo(done, bucket);
+            if (b < fromStart || b > toStart) continue;
+            counts[b] = counts.TryGetValue(b, out var c) ? c + 1 : 1;
+        }
+
+        // Emit every bucket in range, including empty ones, so the series is dense/chartable.
+        var buckets = new List<ThroughputBucket>();
+        for (var cursor = fromStart; cursor <= toStart; cursor = NextBucket(cursor, bucket))
+            buckets.Add(new ThroughputBucket(cursor, counts.TryGetValue(cursor, out var c) ? c : 0));
+
+        return new ThroughputReport(
+            bucket.ToString().ToLowerInvariant(), fromStart, toStart, buckets);
+    }
+
+    private static DateTime? ToUtc(DateTime? value) => value is null
+        ? null
+        : DateTime.SpecifyKind(value.Value, DateTimeKind.Utc);
+
+    private static DateTime FloorTo(DateTime utc, ThroughputBucketSize bucket) => bucket switch
+    {
+        ThroughputBucketSize.Day => new DateTime(utc.Year, utc.Month, utc.Day, 0, 0, 0, DateTimeKind.Utc),
+        ThroughputBucketSize.Week => StartOfIsoWeek(utc),
+        ThroughputBucketSize.Month => new DateTime(utc.Year, utc.Month, 1, 0, 0, 0, DateTimeKind.Utc),
+        _ => throw new ArgumentOutOfRangeException(nameof(bucket)),
+    };
+
+    /// <summary>ISO week starts Monday.</summary>
+    private static DateTime StartOfIsoWeek(DateTime utc)
+    {
+        var day = new DateTime(utc.Year, utc.Month, utc.Day, 0, 0, 0, DateTimeKind.Utc);
+        var delta = (7 + (int)day.DayOfWeek - (int)DayOfWeek.Monday) % 7;
+        return day.AddDays(-delta);
+    }
+
+    private static DateTime NextBucket(DateTime start, ThroughputBucketSize bucket) => bucket switch
+    {
+        ThroughputBucketSize.Day => start.AddDays(1),
+        ThroughputBucketSize.Week => start.AddDays(7),
+        ThroughputBucketSize.Month => start.AddMonths(1),
+        _ => throw new ArgumentOutOfRangeException(nameof(bucket)),
+    };
+
+    private static DateTime StepBack(DateTime start, ThroughputBucketSize bucket, int steps)
+    {
+        var cursor = start;
+        for (var i = 0; i < steps; i++)
+            cursor = bucket switch
+            {
+                ThroughputBucketSize.Day => cursor.AddDays(-1),
+                ThroughputBucketSize.Week => cursor.AddDays(-7),
+                ThroughputBucketSize.Month => cursor.AddMonths(-1),
+                _ => throw new ArgumentOutOfRangeException(nameof(bucket)),
+            };
+        return cursor;
+    }
 
     public Task<StatusAgingReport?> GetStatusAgingAsync(
         Guid projectId, int page, int pageSize, CancellationToken ct = default) =>

@@ -18,4 +18,26 @@ public sealed class MetricsController : ControllerBase
         var report = await _metrics.GetStoryCountsAsync(projectId, ct);
         return report is null ? NotFound() : Ok(report);
     }
+
+    [HttpGet("api/projects/{projectId:guid}/metrics/time-in-progress")]
+    public async Task<IActionResult> TimeInProgress(Guid projectId, CancellationToken ct = default)
+    {
+        var report = await _metrics.GetTimeInProgressAsync(projectId, ct);
+        return report is null ? NotFound() : Ok(report);
+    }
+
+    [HttpGet("api/projects/{projectId:guid}/metrics/throughput")]
+    public async Task<IActionResult> Throughput(
+        Guid projectId,
+        [FromQuery] string? bucket = null,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
+        CancellationToken ct = default)
+    {
+        if (!ThroughputBucketSizes.TryParse(bucket, out var size))
+            return BadRequest(new { error = "bucket must be one of: day, week, month" });
+
+        var report = await _metrics.GetThroughputAsync(projectId, size, from, to, ct);
+        return report is null ? NotFound() : Ok(report);
+    }
 }
