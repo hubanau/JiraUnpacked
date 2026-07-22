@@ -266,6 +266,8 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.HasIndex("EndUserId", "JiraIssueId", "JiraHistoryId", "Field")
                         .IsUnique();
 
+                    b.HasIndex("EndUserId", "JiraProjectId", "Field", "ChangedAt");
+
                     b.ToTable("IssueChangeHistory", (string)null);
                 });
 
