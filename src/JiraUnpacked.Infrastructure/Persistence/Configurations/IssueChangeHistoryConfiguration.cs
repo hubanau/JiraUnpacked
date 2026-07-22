@@ -19,6 +19,9 @@ public class IssueChangeHistoryConfiguration : IEntityTypeConfiguration<IssueCha
         b.HasIndex(x => new { x.EndUserId, x.JiraIssueId, x.JiraHistoryId, x.Field }).IsUnique();
         b.HasIndex(x => new { x.EndUserId, x.JiraProjectId, x.JiraIssueId });
         b.HasIndex(x => new { x.JiraIssueId, x.Field, x.ChangedAt });
+        // Serves the FR-E2 project-scoped status-history scan (Field == "status", time-ordered)
+        // so metrics reads never table-scan.
+        b.HasIndex(x => new { x.EndUserId, x.JiraProjectId, x.Field, x.ChangedAt });
         b.HasOne<JiraProject>().WithMany().HasForeignKey(x => x.JiraProjectId)
             .OnDelete(DeleteBehavior.Cascade);
     }

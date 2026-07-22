@@ -71,6 +71,7 @@ public static class DependencyInjection
         services.AddScoped<IChangelogIngestService, ChangelogIngestService>();
         services.AddScoped<IDerivationService, DerivationService>();
         services.AddScoped<IIssueQueryService, IssueQueryService>();
+        services.AddScoped<IMetricsQueryService, MetricsQueryService>();
 
         services.AddOptions<TokenProtectionOptions>()
             .Configure(o =>
