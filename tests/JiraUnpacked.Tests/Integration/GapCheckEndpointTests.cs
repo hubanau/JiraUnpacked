@@ -141,5 +141,37 @@ public sealed class GapCheckEndpointTests : IClassFixture<JiraUnpackedApiFactory
         Assert.Equal(100, r.Violations.PageSize);
         Assert.Equal(2, r.Violations.TotalCount);
         Assert.Equal(2, r.Violations.Items.Count);
+
+        // pageSize < 1 falls back to the default (50), not the max.
+        var zero = await (await client.GetAsync(
+                $"/api/projects/{seed.ProjectId}/checks/open-epic-all-children-done?pageSize=0"))
+            .Content.ReadFromJsonAsync<ResultDto>();
+        Assert.Equal(50, zero!.Violations.PageSize);
+    }
+
+    [Fact]
+    public async Task Pagination_actually_slices_the_ordered_violations()
+    {
+        var (client, tenant) = await GapCheckTestData.AuthedTenantAsync(_factory);
+        var seed = await GapCheckTestData.SeedAsync(tenant);
+        await GapCheckTestData.SetIssueTypeClassAsync(seed, "1", "Epic");
+
+        // Three violating epics, each with a single done child.
+        for (var n = 1; n <= 3; n++)
+        {
+            await GapCheckTestData.SeedIssueAsync(seed, $"1000{n}", $"ACME-{n}", "epic", seed.EpicTypeId, seed.ToDoStatusId, null);
+            await GapCheckTestData.SeedIssueAsync(seed, $"2000{n}", $"KID-{n}", "child", seed.StoryTypeId, seed.DoneStatusId, $"1000{n}");
+        }
+
+        var r = await (await client.GetAsync(
+                $"/api/projects/{seed.ProjectId}/checks/open-epic-all-children-done?page=2&pageSize=2"))
+            .Content.ReadFromJsonAsync<ResultDto>();
+
+        Assert.Equal(2, r!.Violations.Page);
+        Assert.Equal(2, r.Violations.PageSize);
+        Assert.Equal(3, r.Violations.TotalCount);
+        var item = Assert.Single(r.Violations.Items);
+        // JiraKey-ascending order across ACME-1, ACME-2, ACME-3: page 2 of size 2 holds only ACME-3.
+        Assert.Equal("ACME-3", item.JiraKey);
     }
 }

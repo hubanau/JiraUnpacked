@@ -101,7 +101,7 @@ public sealed partial class DerivationService : IDerivationService
         if (cache.TryGetValue(jid, out var id)) return id;
         var name = GetString(s, "name") ?? jid;
         var row = await _db.IssueTypes.FirstOrDefaultAsync(x => x.JiraConnectionId == connId && x.JiraIssueTypeId == jid, ct);
-        if (row is null) { row = new IssueType { Id = Guid.NewGuid(), JiraConnectionId = connId, JiraIssueTypeId = jid, Name = name }; _db.IssueTypes.Add(row); }
+        if (row is null) { row = new IssueType { Id = Guid.NewGuid(), JiraConnectionId = connId, JiraIssueTypeId = jid, Name = name, Class = IssueTypeClass.Other }; _db.IssueTypes.Add(row); }
         else row.Name = name;
         cache[jid] = row.Id; return row.Id;
     }

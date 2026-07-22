@@ -110,6 +110,25 @@ public sealed class GapCheckGuaranteesTests : IClassFixture<JiraUnpackedApiFacto
     }
 
     [Fact]
+    public async Task Newly_discovered_issue_types_default_to_other()
+    {
+        // The EF creation path in DerivationService.ResolveTypeAsync must not silently default
+        // a brand-new issue type to Epic (the CLR default of the old enum ordering). Seed a raw
+        // snapshot referencing an issue type id that does NOT already exist in the fixture
+        // ("1"/"2" are seeded by SeedAsync) so /rederive actually walks the INSERT branch.
+        var (client, tenant) = await GapCheckTestData.AuthedTenantAsync(_factory);
+        var seed = await GapCheckTestData.SeedAsync(tenant);
+
+        await GapCheckTestData.SeedRawSnapshotAsync(seed, "90001", "BUG-1", "99", "Bug");
+
+        await client.PostAsJsonAsync($"/api/projects/{seed.ProjectId}/rederive", new { });
+
+        var items = await (await client.GetAsync($"/api/connections/{seed.ConnectionId}/issue-types"))
+            .Content.ReadFromJsonAsync<List<ItemDto>>();
+        Assert.Equal("Other", Assert.Single(items!, i => i.JiraIssueTypeId == "99").Class);
+    }
+
+    [Fact]
     public async Task Partially_invalid_batch_persists_nothing()
     {
         var (client, tenant) = await GapCheckTestData.AuthedTenantAsync(_factory);
