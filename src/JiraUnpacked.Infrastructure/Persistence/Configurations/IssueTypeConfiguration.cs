@@ -12,6 +12,7 @@ public class IssueTypeConfiguration : IEntityTypeConfiguration<IssueType>
         b.HasKey(x => x.Id);
         b.Property(x => x.JiraIssueTypeId).IsRequired().HasMaxLength(64);
         b.Property(x => x.Name).IsRequired().HasMaxLength(256);
+        b.Property(x => x.Class).IsRequired().HasConversion<string>().HasMaxLength(16);
         b.HasIndex(x => x.EndUserId);
         b.HasIndex(x => new { x.EndUserId, x.JiraConnectionId, x.JiraIssueTypeId }).IsUnique();
         b.HasOne<JiraConnection>().WithMany().HasForeignKey(x => x.JiraConnectionId)

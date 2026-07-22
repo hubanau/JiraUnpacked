@@ -5,6 +5,7 @@ using JiraUnpacked.Infrastructure.Jira;
 using JiraUnpacked.Infrastructure.Messaging;
 using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Reporting;
+using JiraUnpacked.Infrastructure.Reporting.GapChecks;
 using JiraUnpacked.Infrastructure.Security;
 using JiraUnpacked.Infrastructure.Services;
 using JiraUnpacked.Infrastructure.Sync;
@@ -61,6 +62,7 @@ public static class DependencyInjection
         services.AddScoped<IJiraProjectService, JiraProjectService>();
         services.AddScoped<IJiraQueryService, JiraQueryService>();
         services.AddScoped<IProjectMappingService, ProjectMappingService>();
+        services.AddScoped<IIssueTypeClassService, IssueTypeClassService>();
         services.AddHttpClient<IJiraApiClient, JiraApiClient>()
                 .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(30));
 
@@ -72,6 +74,9 @@ public static class DependencyInjection
         services.AddScoped<IDerivationService, DerivationService>();
         services.AddScoped<IIssueQueryService, IssueQueryService>();
         services.AddScoped<IMetricsQueryService, MetricsQueryService>();
+        services.AddScoped<IGapCheck, OpenEpicAllChildrenDoneCheck>();
+        services.AddScoped<IGapCheck, DoneEpicOpenChildrenCheck>();
+        services.AddScoped<IGapCheckService, GapCheckRunner>();
 
         services.AddOptions<TokenProtectionOptions>()
             .Configure(o =>
