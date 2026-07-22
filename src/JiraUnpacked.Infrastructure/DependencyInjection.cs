@@ -5,6 +5,7 @@ using JiraUnpacked.Infrastructure.Jira;
 using JiraUnpacked.Infrastructure.Messaging;
 using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Reporting;
+using JiraUnpacked.Infrastructure.Reporting.GapChecks;
 using JiraUnpacked.Infrastructure.Security;
 using JiraUnpacked.Infrastructure.Services;
 using JiraUnpacked.Infrastructure.Sync;
@@ -73,6 +74,9 @@ public static class DependencyInjection
         services.AddScoped<IDerivationService, DerivationService>();
         services.AddScoped<IIssueQueryService, IssueQueryService>();
         services.AddScoped<IMetricsQueryService, MetricsQueryService>();
+        services.AddScoped<IGapCheck, OpenEpicAllChildrenDoneCheck>();
+        services.AddScoped<IGapCheck, DoneEpicOpenChildrenCheck>();
+        services.AddScoped<IGapCheckService, GapCheckRunner>();
 
         services.AddOptions<TokenProtectionOptions>()
             .Configure(o =>
