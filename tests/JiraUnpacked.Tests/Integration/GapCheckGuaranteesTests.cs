@@ -22,6 +22,8 @@ public sealed class GapCheckGuaranteesTests : IClassFixture<JiraUnpackedApiFacto
         string? Status, string Class, string? IssueType, List<ChildDto> Children);
     private sealed record PageDto(List<ViolationDto> Items, int Page, int PageSize, int TotalCount);
     private sealed record ResultDto(string Status, PageDto Violations);
+    private sealed record IssueListItemDto(string JiraIssueId, string JiraKey);
+    private sealed record IssuesPageDto(List<IssueListItemDto> Items, int Page, int PageSize, int TotalCount);
 
     [Fact]
     public async Task Tenant_cannot_read_another_tenants_checks()
@@ -62,11 +64,22 @@ public sealed class GapCheckGuaranteesTests : IClassFixture<JiraUnpackedApiFacto
         await client.PutAsJsonAsync($"/api/connections/{seed.ConnectionId}/issue-types",
             new { issueTypes = new[] { new { jiraIssueTypeId = "1", @class = "Epic" } } });
 
+        // Seed a raw snapshot for issue type "1" (Epic) so the re-derive actually walks the
+        // dictionary-upsert path in ResolveTypeAsync — without a snapshot, /rederive is a no-op
+        // and this test would pass even if the upsert started wiping Class on existing rows.
+        await GapCheckTestData.SeedRawSnapshotAsync(seed, "10001", "ACME-1", "1", "Epic");
+
         await client.PostAsJsonAsync($"/api/projects/{seed.ProjectId}/rederive", new { });
 
         var items = await (await client.GetAsync($"/api/connections/{seed.ConnectionId}/issue-types"))
             .Content.ReadFromJsonAsync<List<ItemDto>>();
         Assert.Equal("Epic", Assert.Single(items!, i => i.JiraIssueTypeId == "1").Class);
+
+        // Prove the re-derive actually ran (and isn't itself vacuous): the seeded snapshot must
+        // have materialized into a modeled issue.
+        var issues = await (await client.GetAsync($"/api/projects/{seed.ProjectId}/issues"))
+            .Content.ReadFromJsonAsync<IssuesPageDto>();
+        Assert.Contains(issues!.Items, i => i.JiraKey == "ACME-1");
     }
 
     [Fact]

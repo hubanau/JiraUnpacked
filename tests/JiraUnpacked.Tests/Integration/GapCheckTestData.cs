@@ -128,4 +128,24 @@ internal static class GapCheckTestData
             ("i", Guid.NewGuid()), ("t", seed.Tenant), ("p", seed.ProjectId), ("jid", jiraIssueId),
             ("k", jiraKey), ("s", summary), ("ty", issueTypeId), ("st", statusId), ("par", parentJiraIssueId));
     }
+
+    /// <summary>
+    /// Seeds a raw issue snapshot so a re-derive actually runs the dictionary upsert path
+    /// (DerivationService.ResolveTypeAsync). Without a snapshot, /rederive is a no-op and any
+    /// test asserting "classification survived" would pass vacuously.
+    /// </summary>
+    internal static async Task SeedRawSnapshotAsync(
+        CheckSeed seed, string jiraIssueId, string jiraKey, string jiraIssueTypeId, string issueTypeName)
+    {
+        var payload = $"{{\"id\":\"{jiraIssueId}\",\"key\":\"{jiraKey}\",\"fields\":{{" +
+                      $"\"summary\":\"seeded\"," +
+                      $"\"created\":\"2024-01-01T00:00:00.000+0000\"," +
+                      $"\"updated\":\"2024-01-01T00:00:00.000+0000\"," +
+                      $"\"issuetype\":{{\"id\":\"{jiraIssueTypeId}\",\"name\":\"{issueTypeName}\"}}}}}}";
+
+        await using var conn = Conn();
+        await conn.OpenAsync();
+        await Exec(conn, @"INSERT INTO ""RawIssueSnapshots""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""Payload"",""FetchedAt"") VALUES (@i,@t,@p,@jid,@j::jsonb,now())",
+            ("i", Guid.NewGuid()), ("t", seed.Tenant), ("p", seed.ProjectId), ("jid", jiraIssueId), ("j", payload));
+    }
 }
