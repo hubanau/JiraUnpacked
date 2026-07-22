@@ -277,6 +277,11 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("Class")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
                     b.Property<Guid>("EndUserId")
                         .HasColumnType("uuid");
 
