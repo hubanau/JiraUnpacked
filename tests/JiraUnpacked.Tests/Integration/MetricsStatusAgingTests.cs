@@ -77,4 +77,23 @@ public sealed class MetricsStatusAgingTests : IClassFixture<JiraUnpackedApiFacto
         Assert.Equal(3, r.Items.TotalCount);    // population is three
         Assert.Equal(3, Assert.Single(r.Histogram, b => b.Band == "1-3d").Count); // histogram counts all three
     }
+
+    [Fact]
+    public async Task Age_band_boundaries_are_half_open()
+    {
+        var (client, tenant) = await MetricsTestData.AuthedTenantAsync(_factory);
+        var ctx = await MetricsTestData.SeedProjectAsync(tenant);
+        var now = DateTime.UtcNow;
+
+        // Exactly 3 days old: half-open bands mean [3,7) claims it, NOT [1,3).
+        // (Elapsed test time only pushes the age slightly above 3.0, which stays in the same band.)
+        await MetricsTestData.SeedIssueAsync(ctx, "10001", "ACME-1", "edge", ctx.InProgressStatusId, null, now.AddDays(-30));
+        await MetricsTestData.SeedStatusChangeAsync(ctx, "10001", "h1", "To Do", "In Progress", now.AddDays(-3));
+
+        var r = await (await client.GetAsync($"/api/projects/{ctx.ProjectId}/metrics/status-aging"))
+            .Content.ReadFromJsonAsync<ReportDto>();
+
+        Assert.Equal(1, Assert.Single(r!.Histogram, b => b.Band == "3-7d").Count);
+        Assert.Equal(0, Assert.Single(r.Histogram, b => b.Band == "1-3d").Count);
+    }
 }
