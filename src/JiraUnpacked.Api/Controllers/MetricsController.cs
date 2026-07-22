@@ -37,6 +37,9 @@ public sealed class MetricsController : ControllerBase
         if (!ThroughputBucketSizes.TryParse(bucket, out var size))
             return BadRequest(new { error = "bucket must be one of: day, week, month" });
 
+        if (from is DateTime f && to is DateTime t && f > t)
+            return BadRequest(new { error = "from must not be later than to" });
+
         var report = await _metrics.GetThroughputAsync(projectId, size, from, to, ct);
         return report is null ? NotFound() : Ok(report);
     }

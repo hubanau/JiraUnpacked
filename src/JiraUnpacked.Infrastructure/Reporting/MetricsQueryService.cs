@@ -97,9 +97,13 @@ public sealed class MetricsQueryService : IMetricsQueryService
             .ToListAsync(ct);
 
         // "status" is the field name Jira's changelog uses, and what the derivation stores.
+        // ThenBy(JiraHistoryId) is a stable tiebreaker: Jira bulk edits can produce two
+        // transitions on the same issue with an identical ChangedAt, and without a deterministic
+        // secondary sort the DB could return them in either order, flipping which one the engine
+        // treats as "current" between two identical requests.
         var history = await _db.IssueChangeHistory
             .Where(h => h.JiraProjectId == projectId && h.Field == "status")
-            .OrderBy(h => h.ChangedAt)
+            .OrderBy(h => h.ChangedAt).ThenBy(h => h.JiraHistoryId)
             .Select(h => new { h.JiraIssueId, h.ChangedAt, h.FromValue, h.ToValue })
             .ToListAsync(ct);
 
@@ -259,7 +263,9 @@ public sealed class MetricsQueryService : IMetricsQueryService
     {
         var bands = new (string Name, double Lo, double Hi)[]
         {
-            ("<=1d", 0, 1),
+            // Lower bound is -infinity, not 0: a future-dated CurrentEnteredAt (clock skew, bad
+            // Jira timestamp) yields a negative AgeDays, which must still land in exactly one band.
+            ("<=1d", double.NegativeInfinity, 1),
             ("1-3d", 1, 3),
             ("3-7d", 3, 7),
             ("1-2w", 7, 14),

@@ -70,4 +70,15 @@ public sealed class MetricsThroughputTests : IClassFixture<JiraUnpackedApiFactor
         var resp = await client.GetAsync($"/api/projects/{ctx.ProjectId}/metrics/throughput?bucket=fortnight");
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
+
+    [Fact]
+    public async Task Inverted_date_range_returns_400()
+    {
+        var (client, tenant) = await MetricsTestData.AuthedTenantAsync(_factory);
+        var ctx = await MetricsTestData.SeedProjectAsync(tenant);
+
+        var resp = await client.GetAsync(
+            $"/api/projects/{ctx.ProjectId}/metrics/throughput?bucket=day&from=2024-01-31&to=2024-01-01");
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
 }

@@ -96,4 +96,43 @@ public sealed class MetricsStatusAgingTests : IClassFixture<JiraUnpackedApiFacto
         Assert.Equal(1, Assert.Single(r!.Histogram, b => b.Band == "3-7d").Count);
         Assert.Equal(0, Assert.Single(r.Histogram, b => b.Band == "1-3d").Count);
     }
+
+    [Fact]
+    public async Task Same_timestamp_transitions_resolve_deterministically()
+    {
+        var (client, tenant) = await MetricsTestData.AuthedTenantAsync(_factory);
+        var ctx = await MetricsTestData.SeedProjectAsync(tenant);
+        var now = DateTime.UtcNow;
+        var sameMoment = now.AddDays(-5);
+
+        // Two transitions at the SAME instant: "h2" sorts last by JiraHistoryId, so "Done" wins
+        // deterministically and the issue is therefore NOT in the aging population.
+        // Seeded in reverse order on purpose so the ORDER BY is what decides, not insertion order.
+        await MetricsTestData.SeedIssueAsync(ctx, "10001", "ACME-1", "x", ctx.DoneStatusId, null, now.AddDays(-30));
+        await MetricsTestData.SeedStatusChangeAsync(ctx, "10001", "h2", "In Progress", "Done", sameMoment);
+        await MetricsTestData.SeedStatusChangeAsync(ctx, "10001", "h1", "To Do", "In Progress", sameMoment);
+
+        var r = await (await client.GetAsync($"/api/projects/{ctx.ProjectId}/metrics/status-aging"))
+            .Content.ReadFromJsonAsync<ReportDto>();
+
+        Assert.Equal(0, r!.Items.TotalCount);   // current class resolved to Done => excluded from aging
+    }
+
+    [Fact]
+    public async Task Histogram_bands_always_sum_to_the_population()
+    {
+        var (client, tenant) = await MetricsTestData.AuthedTenantAsync(_factory);
+        var ctx = await MetricsTestData.SeedProjectAsync(tenant);
+        var now = DateTime.UtcNow;
+
+        // A future-dated transition yields a NEGATIVE age; it must still land in exactly one band.
+        await MetricsTestData.SeedIssueAsync(ctx, "10001", "ACME-1", "future", ctx.InProgressStatusId, null, now.AddDays(-30));
+        await MetricsTestData.SeedStatusChangeAsync(ctx, "10001", "h1", "To Do", "In Progress", now.AddDays(2));
+
+        var r = await (await client.GetAsync($"/api/projects/{ctx.ProjectId}/metrics/status-aging"))
+            .Content.ReadFromJsonAsync<ReportDto>();
+
+        Assert.Equal(1, r!.Items.TotalCount);
+        Assert.Equal(r.Items.TotalCount, r.Histogram.Sum(b => b.Count));  // the invariant
+    }
 }
