@@ -13,13 +13,16 @@ public sealed class AuthController : ControllerBase
     private readonly IAuthService _auth;
     private readonly IRegistrationService _registration;
     private readonly IEmailVerificationService _verification;
+    private readonly IAccountDeletionService _deletion;
 
     public AuthController(
-        IAuthService auth, IRegistrationService registration, IEmailVerificationService verification)
+        IAuthService auth, IRegistrationService registration, IEmailVerificationService verification,
+        IAccountDeletionService deletion)
     {
         _auth = auth;
         _registration = registration;
         _verification = verification;
+        _deletion = deletion;
     }
 
     [HttpPost("register")]
@@ -117,4 +120,26 @@ public sealed class AuthController : ControllerBase
         role = User.FindFirst("role")?.Value,
         endUserId = User.FindFirst("endUserId")?.Value
     });
+
+    [HttpDelete("me")]
+    [Authorize]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> DeleteMe(CancellationToken ct)
+    {
+        var claim = User.FindFirst("endUserId")?.Value;
+        if (!Guid.TryParse(claim, out var userId))
+        {
+            return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid token.");
+        }
+
+        var result = await _deletion.DeleteAsync(userId, userId, ct);
+        return result.Outcome switch
+        {
+            AccountDeletionOutcome.Deleted => NoContent(),
+            AccountDeletionOutcome.NotFound => Problem(
+                statusCode: StatusCodes.Status404NotFound, title: "User not found."),
+            _ => Problem(
+                statusCode: StatusCodes.Status400BadRequest, title: "Only End User accounts can be deleted."),
+        };
+    }
 }
