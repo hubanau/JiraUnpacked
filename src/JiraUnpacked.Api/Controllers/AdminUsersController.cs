@@ -10,8 +10,13 @@ namespace JiraUnpacked.Api.Controllers;
 public sealed class AdminUsersController : ControllerBase
 {
     private readonly IUserAdminService _users;
+    private readonly IAccountDeletionService _deletion;
 
-    public AdminUsersController(IUserAdminService users) => _users = users;
+    public AdminUsersController(IUserAdminService users, IAccountDeletionService deletion)
+    {
+        _users = users;
+        _deletion = deletion;
+    }
 
     [HttpPost("{id:guid}/block")]
     public async Task<IActionResult> Block(Guid id, CancellationToken ct)
@@ -20,6 +25,25 @@ public sealed class AdminUsersController : ControllerBase
     [HttpPost("{id:guid}/unblock")]
     public async Task<IActionResult> Unblock(Guid id, CancellationToken ct)
         => Map(await _users.UnblockAsync(id, ct));
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    {
+        if (!Guid.TryParse(User.FindFirst("sub")?.Value, out var actor))
+        {
+            return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid token.");
+        }
+
+        var result = await _deletion.DeleteAsync(id, actor, ct);
+        return result.Outcome switch
+        {
+            AccountDeletionOutcome.Deleted => NoContent(),
+            AccountDeletionOutcome.NotFound => Problem(
+                statusCode: StatusCodes.Status404NotFound, title: "User not found."),
+            _ => Problem(
+                statusCode: StatusCodes.Status400BadRequest, title: "Only End Users can be deleted."),
+        };
+    }
 
     private IActionResult Map(BlockResult result) => result.Error switch
     {

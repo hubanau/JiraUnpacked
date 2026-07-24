@@ -48,6 +48,9 @@ public sealed class ChangelogIngestTests : IClassFixture<JiraUnpackedApiFactory>
         var payload = $"{{\"id\":\"10001\",\"key\":\"ACME-1\",\"changelog\":{embeddedChangelogJson}}}";
         await using var conn = new Npgsql.NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
         await conn.OpenAsync();
+        // The EndUserId -> Users cascade FK (Phase 7 Spec 1) requires a backing Users row.
+        await Exec(conn, @"INSERT INTO ""Users""(""Id"",""Email"",""Username"",""PasswordHash"",""Role"",""Status"",""CreatedAt"") VALUES (@id,@email,@username,'test-fixture-not-authenticated','EndUser','Active',now())",
+            ("id", tenant), ("email", $"tenant-{tenant:N}@example.com"), ("username", $"tenant-{tenant:N}"));
         await Exec(conn, @"INSERT INTO ""JiraConnections""(""Id"",""EndUserId"",""BaseUrl"",""Email"",""ApiTokenEncrypted"",""CreatedAt"") VALUES (@id,@t,'https://x','e','c',now())", ("id", connId), ("t", tenant));
         await Exec(conn, @"INSERT INTO ""JiraProjects""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraProjectKey"",""JiraProjectId"",""SyncIntervalMinutes"",""CreatedAt"") VALUES (@id,@t,@c,'ACME','1',60,now())", ("id", projId), ("t", tenant), ("c", connId));
         await Exec(conn, @"INSERT INTO ""RawIssueSnapshots""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""Payload"",""FetchedAt"") VALUES (@id,@t,@p,'10001',@payload::jsonb,now())", ("id", Guid.NewGuid()), ("t", tenant), ("p", projId), ("payload", payload));

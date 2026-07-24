@@ -22,10 +22,12 @@ public class InviteCodeConfiguration : IEntityTypeConfiguration<InviteCode>
             .HasForeignKey(i => i.CreatedByAdminId)
             .OnDelete(DeleteBehavior.Restrict);
 
-        // Redeemer (nullable) — restrict delete; auditing keeps the link.
+        // Redeemer (nullable) — SetNull so an erasure request can proceed. The code row
+        // survives as proof it was issued and redeemed; the link to the erased person is cut.
+        // (Restrict here made every End User who registered via a code undeletable.)
         builder.HasOne<User>()
             .WithMany()
             .HasForeignKey(i => i.UsedByUserId)
-            .OnDelete(DeleteBehavior.Restrict);
+            .OnDelete(DeleteBehavior.SetNull);
     }
 }
