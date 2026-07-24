@@ -85,6 +85,25 @@ internal static class TenantDeletionTestData
             ("i", Guid.NewGuid()), ("t", tenant), ("p", projId));
         await Exec(conn, @"INSERT INTO ""RawChangelog""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""Payload"",""FetchedAt"") VALUES (@i,@t,@p,'10001','{}'::jsonb,now())",
             ("i", Guid.NewGuid()), ("t", tenant), ("p", projId));
+        await Exec(conn, @"INSERT INTO ""JiraQueries""(""Id"",""EndUserId"",""JiraProjectId"",""Jql"",""CreatedAt"") VALUES (@i,@t,@p,'project = ACME',now())",
+            ("i", Guid.NewGuid()), ("t", tenant), ("p", projId));
+        await Exec(conn, @"INSERT INTO ""FieldMappings""(""Id"",""EndUserId"",""JiraProjectId"",""Role"",""JiraFieldId"") VALUES (@i,@t,@p,'Assignee','customfield_10001')",
+            ("i", Guid.NewGuid()), ("t", tenant), ("p", projId));
+        await Exec(conn, @"INSERT INTO ""Priorities""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraPriorityId"",""Name"") VALUES (@i,@t,@c,'1','High')",
+            ("i", Guid.NewGuid()), ("t", tenant), ("c", connId));
+        await Exec(conn, @"INSERT INTO ""Sprints""(""Id"",""EndUserId"",""JiraProjectId"",""JiraSprintId"",""Name"",""State"") VALUES (@i,@t,@p,'1','Sprint 1','active')",
+            ("i", Guid.NewGuid()), ("t", tenant), ("p", projId));
+        await Exec(conn, @"INSERT INTO ""Teams""(""Id"",""EndUserId"",""JiraProjectId"",""JiraTeamId"",""Name"") VALUES (@i,@t,@p,'1','Team Alpha')",
+            ("i", Guid.NewGuid()), ("t", tenant), ("p", projId));
+        // StartedAt is a fixed historical date, not now(): SyncRunRetentionTests also calls this
+        // fixture and then seeds its own SyncRuns rows on the same project, asserting exact
+        // counts and watermark-anchor selection by StartedAt recency. A "now()" row here would
+        // either win the anchor race (displacing the row those tests expect to survive) or
+        // inflate their "recent, untouched" counts. This date is older than any retention
+        // cutoff exercised in tests, so it is always purge-eligible and never the newest.
+        await Exec(conn, @"INSERT INTO ""SyncRuns""(""Id"",""EndUserId"",""JiraProjectId"",""StartedAt"",""Status"",""Kind"",""IssuesProcessed"") VALUES (@i,@t,@p,@s,'Succeeded','Sync',10)",
+            ("i", Guid.NewGuid()), ("t", tenant), ("p", projId),
+            ("s", new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
 
         return new GraphSeed(connId, projId);
     }
@@ -119,6 +138,12 @@ internal static class TenantDeletionTestData
             ("IssueChangeHistory",await db.IssueChangeHistory.IgnoreQueryFilters().CountAsync(x => x.EndUserId == tenant)),
             ("RawIssueSnapshots", await db.RawIssueSnapshots.IgnoreQueryFilters().CountAsync(x => x.EndUserId == tenant)),
             ("RawChangelogs",     await db.RawChangelogs.IgnoreQueryFilters().CountAsync(x => x.EndUserId == tenant)),
+            ("JiraQueries",       await db.JiraQueries.IgnoreQueryFilters().CountAsync(x => x.EndUserId == tenant)),
+            ("FieldMappings",     await db.FieldMappings.IgnoreQueryFilters().CountAsync(x => x.EndUserId == tenant)),
+            ("Priorities",        await db.Priorities.IgnoreQueryFilters().CountAsync(x => x.EndUserId == tenant)),
+            ("Sprints",           await db.Sprints.IgnoreQueryFilters().CountAsync(x => x.EndUserId == tenant)),
+            ("Teams",             await db.Teams.IgnoreQueryFilters().CountAsync(x => x.EndUserId == tenant)),
+            ("SyncRuns",          await db.SyncRuns.IgnoreQueryFilters().CountAsync(x => x.EndUserId == tenant)),
         };
     }
 }
