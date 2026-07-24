@@ -153,6 +153,8 @@ public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFact
         var connectionId = Guid.NewGuid();
         await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
         await conn.OpenAsync();
+        // The EndUserId -> Users cascade FK (Phase 7 Spec 1) requires a backing Users row.
+        await SeedTenantUserAsync(conn, tenant);
         await using (var c1 = conn.CreateCommand())
         {
             c1.CommandText = @"INSERT INTO ""JiraConnections""
@@ -207,6 +209,8 @@ public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFact
         var issueId = Guid.NewGuid();
         await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
         await conn.OpenAsync();
+        // The EndUserId -> Users cascade FK (Phase 7 Spec 1) requires a backing Users row.
+        await SeedTenantUserAsync(conn, tenant);
 
         await using (var c1 = conn.CreateCommand())
         {
@@ -272,6 +276,8 @@ public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFact
         var rowId = Guid.NewGuid();
         await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
         await conn.OpenAsync();
+        // The EndUserId -> Users cascade FK (Phase 7 Spec 1) requires a backing Users row.
+        await SeedTenantUserAsync(conn, tenant);
         await ExecAsync(conn, @"INSERT INTO ""JiraConnections""(""Id"",""EndUserId"",""BaseUrl"",""Email"",""ApiTokenEncrypted"",""CreatedAt"") VALUES (@id,@t,'https://x','e','c',now())",
             ("id", connId), ("t", tenant));
         await ExecAsync(conn, @"INSERT INTO ""JiraProjects""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraProjectKey"",""JiraProjectId"",""SyncIntervalMinutes"",""CreatedAt"") VALUES (@id,@t,@c,'ACME','1',60,now())",
@@ -288,6 +294,15 @@ public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFact
         foreach (var (n, v) in ps) cmd.Parameters.AddWithValue(n, v);
         await cmd.ExecuteNonQueryAsync();
     }
+
+    // Setup-only: seeds the Users row a synthetic tenant id needs to satisfy the new
+    // EndUserId -> Users cascade FK (Phase 7 Spec 1). Never authenticated against; does not
+    // change what any test in this file proves.
+    private static Task SeedTenantUserAsync(NpgsqlConnection conn, Guid tenant) =>
+        ExecAsync(conn,
+            @"INSERT INTO ""Users""(""Id"",""Email"",""Username"",""PasswordHash"",""Role"",""Status"",""CreatedAt"")
+              VALUES (@id,@email,@username,'test-fixture-not-authenticated','EndUser','Active',now())",
+            ("id", tenant), ("email", $"tenant-{tenant:N}@example.com"), ("username", $"tenant-{tenant:N}"));
 
     private static async Task<long> CountByIdAsync(NpgsqlConnection conn, string table, Guid id)
     {

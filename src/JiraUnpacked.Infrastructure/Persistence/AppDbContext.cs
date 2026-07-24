@@ -58,6 +58,20 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<IssueChangeHistory>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
         modelBuilder.Entity<SyncRun>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
         modelBuilder.Entity<RawChangelog>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+
+        // Layer 3 (erasure): every tenant-owned row cascades from its owning User, so account
+        // deletion is complete by construction. Applied centrally on purpose — a 17th
+        // tenant-owned entity inherits this automatically instead of relying on memory.
+        // This complements the Layer 1 filters above; it does not replace them.
+        foreach (var entity in modelBuilder.Model.GetEntityTypes()
+                     .Where(t => typeof(ITenantOwned).IsAssignableFrom(t.ClrType)))
+        {
+            modelBuilder.Entity(entity.ClrType)
+                .HasOne(typeof(User))
+                .WithMany()
+                .HasForeignKey(nameof(ITenantOwned.EndUserId))
+                .OnDelete(DeleteBehavior.Cascade);
+        }
     }
 
     public override int SaveChanges()

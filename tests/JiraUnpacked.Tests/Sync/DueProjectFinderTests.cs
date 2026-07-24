@@ -23,6 +23,8 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
         var projId = Guid.NewGuid();
         await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
         await conn.OpenAsync();
+        // The EndUserId -> Users cascade FK (Phase 7 Spec 1) requires a backing Users row.
+        await SeedTenantUserAsync(conn, tenant);
 
         await using (var c1 = conn.CreateCommand())
         {
@@ -55,6 +57,21 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
             await c3.ExecuteNonQueryAsync();
         }
         return projId;
+    }
+
+    // Setup-only: seeds the Users row a synthetic tenant id needs to satisfy the new
+    // EndUserId -> Users cascade FK (Phase 7 Spec 1). Never authenticated against; does not
+    // change what any test in this file proves.
+    private static async Task SeedTenantUserAsync(NpgsqlConnection conn, Guid tenant)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"INSERT INTO ""Users""
+            (""Id"",""Email"",""Username"",""PasswordHash"",""Role"",""Status"",""CreatedAt"")
+            VALUES (@id,@email,@username,'test-fixture-not-authenticated','EndUser','Active',now())";
+        cmd.Parameters.AddWithValue("id", tenant);
+        cmd.Parameters.AddWithValue("email", $"tenant-{tenant:N}@example.com");
+        cmd.Parameters.AddWithValue("username", $"tenant-{tenant:N}");
+        await cmd.ExecuteNonQueryAsync();
     }
 
     private static async Task SeedSyncRunAsync(Guid tenant, Guid projId, string status,

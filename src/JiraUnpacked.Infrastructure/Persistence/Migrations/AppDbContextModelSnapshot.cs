@@ -841,6 +841,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.FieldMapping", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
                         .WithMany()
                         .HasForeignKey("JiraProjectId")
@@ -859,7 +865,7 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.HasOne("JiraUnpacked.Domain.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("UsedByUserId")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .OnDelete(DeleteBehavior.SetNull);
                 });
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.Issue", b =>
@@ -868,6 +874,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("AssigneeId")
                         .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
                     b.HasOne("JiraUnpacked.Domain.Entities.IssueType", null)
                         .WithMany()
@@ -908,6 +920,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.IssueChangeHistory", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
                         .WithMany()
                         .HasForeignKey("JiraProjectId")
@@ -917,6 +935,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.IssueType", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraConnection", null)
                         .WithMany()
                         .HasForeignKey("JiraConnectionId")
@@ -924,8 +948,23 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.JiraConnection", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.JiraProject", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraConnection", null)
                         .WithMany()
                         .HasForeignKey("JiraConnectionId")
@@ -935,6 +974,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.JiraQuery", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
                         .WithMany()
                         .HasForeignKey("JiraProjectId")
@@ -944,6 +989,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.JiraUser", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraConnection", null)
                         .WithMany()
                         .HasForeignKey("JiraConnectionId")
@@ -953,6 +1004,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.Priority", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraConnection", null)
                         .WithMany()
                         .HasForeignKey("JiraConnectionId")
@@ -962,6 +1019,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.RawChangelog", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
                         .WithMany()
                         .HasForeignKey("JiraProjectId")
@@ -971,6 +1034,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.RawIssueSnapshot", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
                         .WithMany()
                         .HasForeignKey("JiraProjectId")
@@ -989,6 +1058,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.Sprint", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
                         .WithMany()
                         .HasForeignKey("JiraProjectId")
@@ -998,6 +1073,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.Status", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraConnection", null)
                         .WithMany()
                         .HasForeignKey("JiraConnectionId")
@@ -1007,6 +1088,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.StatusSemantic", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
                         .WithMany()
                         .HasForeignKey("JiraProjectId")
@@ -1016,6 +1103,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.SyncRun", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
                         .WithMany()
                         .HasForeignKey("JiraProjectId")
@@ -1025,6 +1118,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.Team", b =>
                 {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
                         .WithMany()
                         .HasForeignKey("JiraProjectId")
