@@ -22,6 +22,28 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.DeletedAccount", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("DeletedUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("RequestedBy")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeletedUserId");
+
+                    b.ToTable("DeletedAccounts", (string)null);
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.EmailVerification", b =>
                 {
                     b.Property<Guid>("Id")

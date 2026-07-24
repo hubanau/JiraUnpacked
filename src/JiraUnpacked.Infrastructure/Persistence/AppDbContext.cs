@@ -35,6 +35,7 @@ public class AppDbContext : DbContext
     public DbSet<IssueChangeHistory> IssueChangeHistory => Set<IssueChangeHistory>();
     public DbSet<SyncRun> SyncRuns => Set<SyncRun>();
     public DbSet<RawChangelog> RawChangelogs => Set<RawChangelog>();
+    public DbSet<DeletedAccount> DeletedAccounts => Set<DeletedAccount>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

@@ -74,3 +74,86 @@ public sealed class TenantDeletionGateTests
         Assert.Equal(DeleteBehavior.SetNull, fk.DeleteBehavior);
     }
 }
+
+/// <summary>
+/// Data-level half of the gate: proves the cascade actually fires end-to-end, and — just as
+/// important — that it does not over-reach into another tenant.
+/// </summary>
+public sealed class TenantDeletionDataGateTests : IClassFixture<Integration.JiraUnpackedApiFactory>, IAsyncLifetime
+{
+    private readonly Integration.JiraUnpackedApiFactory _factory;
+    public TenantDeletionDataGateTests(Integration.JiraUnpackedApiFactory f) => _factory = f;
+    public Task InitializeAsync() => _factory.EnsureDatabaseAsync();
+    public Task DisposeAsync() => Task.CompletedTask;
+
+    private static AppDbContext Privileged()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseNpgsql(Integration.JiraUnpackedApiFactory.TestConnectionString).Options;
+        return new AppDbContext(options, new NullCurrentTenant());
+    }
+
+    [Fact]
+    public async Task Deleting_an_account_erases_every_seeded_tenant_row()
+    {
+        var tenant = await TenantDeletionTestData.SeedUserAsync(_factory);
+        var seed = await TenantDeletionTestData.SeedFullGraphAsync(tenant);
+
+        await TenantDeletionTestData.DeleteAccountAsync(_factory, tenant, tenant);
+
+        await using var db = Privileged();
+        foreach (var (table, count) in await TenantDeletionTestData.CountsForTenantAsync(db, tenant))
+            Assert.True(count == 0, $"{table} still holds {count} row(s) after erasure");
+        Assert.False(await db.Users.IgnoreQueryFilters().AnyAsync(u => u.Id == tenant));
+    }
+
+    [Fact]
+    public async Task Deleting_one_account_leaves_another_tenants_rows_untouched()
+    {
+        var tenantA = await TenantDeletionTestData.SeedUserAsync(_factory);
+        await TenantDeletionTestData.SeedFullGraphAsync(tenantA);
+        var tenantB = await TenantDeletionTestData.SeedUserAsync(_factory);
+        await TenantDeletionTestData.SeedFullGraphAsync(tenantB);
+
+        await using (var before = Privileged())
+        {
+            var b = await TenantDeletionTestData.CountsForTenantAsync(before, tenantB);
+            Assert.All(b, x => Assert.True(x.Count > 0));   // B genuinely has data to lose
+        }
+
+        await TenantDeletionTestData.DeleteAccountAsync(_factory, tenantA, tenantA);
+
+        await using var after = Privileged();
+        foreach (var (table, count) in await TenantDeletionTestData.CountsForTenantAsync(after, tenantB))
+            Assert.True(count > 0, $"tenant B lost rows in {table} — the cascade over-reached");
+        Assert.True(await after.Users.IgnoreQueryFilters().AnyAsync(u => u.Id == tenantB));
+    }
+
+    [Fact]
+    public async Task A_user_who_redeemed_an_invite_code_is_deletable_and_the_code_survives()
+    {
+        var tenant = await TenantDeletionTestData.SeedUserAsync(_factory);
+        var codeId = await TenantDeletionTestData.SeedRedeemedInviteCodeAsync(tenant);
+
+        await TenantDeletionTestData.DeleteAccountAsync(_factory, tenant, tenant);
+
+        await using var db = Privileged();
+        var code = await db.InviteCodes.IgnoreQueryFilters().SingleAsync(c => c.Id == codeId);
+        Assert.Null(code.UsedByUserId);   // audit fact retained, personal link severed
+    }
+
+    [Fact]
+    public async Task Tombstone_records_the_erasure_without_personal_data()
+    {
+        var tenant = await TenantDeletionTestData.SeedUserAsync(_factory);
+        await TenantDeletionTestData.DeleteAccountAsync(_factory, tenant, tenant);
+
+        await using var db = Privileged();
+        var tomb = await db.DeletedAccounts.SingleAsync(t => t.DeletedUserId == tenant);
+        Assert.Equal(tenant, tomb.RequestedBy);          // self-service
+        Assert.NotEqual(default, tomb.DeletedAt);
+        // The entity carries only ids and a timestamp — there is no field that could hold
+        // an email or username, which is the property being asserted.
+        Assert.Equal(4, typeof(DeletedAccount).GetProperties().Length);
+    }
+}
