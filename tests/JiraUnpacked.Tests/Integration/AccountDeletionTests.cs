@@ -6,6 +6,7 @@ using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Domain.Enums;
 using JiraUnpacked.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace JiraUnpacked.Tests.Integration;
@@ -105,6 +106,14 @@ public sealed class AccountDeletionTests : IClassFixture<JiraUnpackedApiFactory>
 
         var resp = await admin.DeleteAsync($"/api/admin/users/{endUserId}");
         Assert.Equal(HttpStatusCode.NoContent, resp.StatusCode);
+
+        // Independently confirm the account is actually gone — a 204 alone would also be
+        // returned by a service that deleted nothing.
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.False(await db.Users.AnyAsync(u => u.Id == endUserId));
+        }
     }
 
     [Fact]

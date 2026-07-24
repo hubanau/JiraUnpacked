@@ -38,6 +38,12 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
         // configuration at construction time, the same mechanism UseEnvironment relies on above.
         builder.UseSetting("Sync:SchedulerEnabled", "false");
 
+        // ConnectionStrings:Default backs IPrivilegedDbContextFactory (constructed straight from
+        // IConfiguration, not from the AppDbContext registration overridden below). Without this,
+        // any DI-resolved privileged context — e.g. SyncRunRetentionJob's cross-tenant read —
+        // would connect to the unmigrated "jiraunpacked" dev database instead of the test one.
+        builder.UseSetting("ConnectionStrings:Default", TestConnectionString);
+
         // Override the DbContext registration to point at the test database.
         builder.ConfigureTestServices(services =>
         {

@@ -29,7 +29,11 @@ public sealed class AdminUsersController : ControllerBase
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        var actor = Guid.TryParse(User.FindFirst("sub")?.Value, out var s) ? s : Guid.Empty;
+        if (!Guid.TryParse(User.FindFirst("sub")?.Value, out var actor))
+        {
+            return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid token.");
+        }
+
         var result = await _deletion.DeleteAsync(id, actor, ct);
         return result.Outcome switch
         {
