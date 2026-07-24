@@ -58,6 +58,7 @@ public static class DependencyInjection
         services.AddScoped<IRegistrationService, RegistrationService>();
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
         services.AddScoped<IUserAdminService, UserAdminService>();
+        services.AddScoped<IAccountDeletionService, JiraUnpacked.Infrastructure.Services.AccountDeletionService>();
         services.AddScoped<IJiraConnectionService, JiraConnectionService>();
         services.AddScoped<IJiraProjectService, JiraProjectService>();
         services.AddScoped<IJiraQueryService, JiraQueryService>();

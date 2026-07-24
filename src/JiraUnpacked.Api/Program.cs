@@ -25,6 +25,9 @@ builder.Services.Configure<SeedOptions>(builder.Configuration.GetSection(SeedOpt
 builder.Services.Configure<JiraUnpacked.Infrastructure.Sync.SyncSchedulerOptions>(
     builder.Configuration.GetSection(JiraUnpacked.Infrastructure.Sync.SyncSchedulerOptions.SectionName));
 
+builder.Services.Configure<JiraUnpacked.Infrastructure.Retention.RetentionOptions>(
+    builder.Configuration.GetSection(JiraUnpacked.Infrastructure.Retention.RetentionOptions.SectionName));
+
 if (builder.Configuration.GetValue("Sync:SchedulerEnabled", true))
 {
     builder.Services.AddQuartz(q =>
@@ -33,6 +36,11 @@ if (builder.Configuration.GetValue("Sync:SchedulerEnabled", true))
         q.AddJob<JiraUnpacked.Infrastructure.Sync.SyncTickJob>(key);
         q.AddTrigger(t => t.ForJob(key)
             .WithSimpleSchedule(s => s.WithIntervalInMinutes(1).RepeatForever()));
+
+        var retentionKey = new Quartz.JobKey("sync-run-retention");
+        q.AddJob<JiraUnpacked.Infrastructure.Retention.SyncRunRetentionJob>(retentionKey);
+        q.AddTrigger(t => t.ForJob(retentionKey)
+            .WithSimpleSchedule(s => s.WithIntervalInHours(24).RepeatForever()));
     });
     builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
 }

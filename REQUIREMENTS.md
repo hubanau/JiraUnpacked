@@ -148,8 +148,11 @@ Per project, the End User maps which field means team / assignee / sprint / stor
 - TLS everywhere.
 
 **Privacy / data lifecycle (GDPR — EU/Poland)**
-- Storing third parties' business data; define retention from day one.
-- Hard delete of all tenant data on account removal.
+- Storing third parties' business data. Retention policy:
+  - **Raw stores** (`RawIssueSnapshots`, `RawChangelog`) — retained indefinitely, never time-purged: they are the source for re-derivation, so ageing them out would destroy the ability to recompute history after a mapping change.
+  - **Modeled data** (`Issues`, `IssueChangeHistory`, dictionaries, semantics, mappings) — retained indefinitely; it is the product.
+  - **`SyncRun` history** — purged after `Retention:SyncRunDays` (default 90), except the newest successful incremental run per project (the sync watermark's anchor) and any run still `Running`.
+- Hard delete of all tenant data on account removal: deleting a `User` cascades to every tenant-owned table, verified by the deletion-completeness gate. Erasure is immediate and irreversible; a non-identifying `DeletedAccounts` tombstone (ids + timestamp only) records that it happened.
 
 **Reliability**
 - Syncs idempotent and resumable; Jira downtime and rate limits handled gracefully; failures visible per project.
