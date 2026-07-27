@@ -16,7 +16,7 @@ public class IssueChangeHistoryConfiguration : IEntityTypeConfiguration<IssueCha
         b.Property(x => x.Author).HasMaxLength(256);
         b.Property(x => x.ChangedAt).IsRequired();
         b.HasIndex(x => x.EndUserId);
-        b.HasIndex(x => new { x.EndUserId, x.JiraIssueId, x.JiraHistoryId, x.Field }).IsUnique();
+        b.HasIndex(x => new { x.EndUserId, x.JiraProjectId, x.JiraIssueId, x.JiraHistoryId, x.Field }).IsUnique();
         b.HasIndex(x => new { x.EndUserId, x.JiraProjectId, x.JiraIssueId });
         b.HasIndex(x => new { x.JiraIssueId, x.Field, x.ChangedAt });
         // Serves the FR-E2 project-scoped status-history scan (Field == "status", time-ordered)

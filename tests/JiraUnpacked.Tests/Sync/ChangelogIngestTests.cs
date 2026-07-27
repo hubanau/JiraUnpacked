@@ -101,4 +101,32 @@ public sealed class ChangelogIngestTests : IClassFixture<JiraUnpackedApiFactory>
 
         Assert.Equal(1, await RawChangelogCount(projId)); // upsert, not duplicate
     }
+
+    [Fact]
+    public async Task Reingest_of_a_multi_issue_project_upserts_each_row_once()
+    {
+        // Exercises the hoisted (single, post-loop) SaveChangesAsync across several issues in one project:
+        // the existingByJiraId dictionary must resolve every snapshot to its own row on the second pass,
+        // not just the first one it saw, so re-syncing never produces duplicate RawChangelog rows.
+        var embedded = "{\"startAt\":0,\"maxResults\":100,\"total\":1,\"histories\":[{\"id\":\"h1\",\"items\":[{\"field\":\"status\"}]}]}";
+        var tenant = Guid.NewGuid(); var connId = Guid.NewGuid(); var projId = Guid.NewGuid();
+        await using var conn = new Npgsql.NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
+        await conn.OpenAsync();
+        await Exec(conn, @"INSERT INTO ""Users""(""Id"",""Email"",""Username"",""PasswordHash"",""Role"",""Status"",""CreatedAt"") VALUES (@id,@email,@username,'test-fixture-not-authenticated','EndUser','Active',now())",
+            ("id", tenant), ("email", $"tenant-{tenant:N}@example.com"), ("username", $"tenant-{tenant:N}"));
+        await Exec(conn, @"INSERT INTO ""JiraConnections""(""Id"",""EndUserId"",""BaseUrl"",""Email"",""ApiTokenEncrypted"",""CreatedAt"") VALUES (@id,@t,'https://x','e','c',now())", ("id", connId), ("t", tenant));
+        await Exec(conn, @"INSERT INTO ""JiraProjects""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraProjectKey"",""JiraProjectId"",""SyncIntervalMinutes"",""CreatedAt"") VALUES (@id,@t,@c,'ACME','1',60,now())", ("id", projId), ("t", tenant), ("c", connId));
+        foreach (var jiraIssueId in new[] { "20001", "20002", "20003" })
+        {
+            var payload = $"{{\"id\":\"{jiraIssueId}\",\"key\":\"ACME-{jiraIssueId}\",\"changelog\":{embedded}}}";
+            await Exec(conn, @"INSERT INTO ""RawIssueSnapshots""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""Payload"",""FetchedAt"") VALUES (@id,@t,@p,@jid,@payload::jsonb,now())",
+                ("id", Guid.NewGuid()), ("t", tenant), ("p", projId), ("jid", jiraIssueId), ("payload", payload));
+        }
+        var creds = new JiraCredentials(_jira.Url!, "e@x.com", "t");
+
+        await IngestAsync(tenant, projId, creds);
+        await IngestAsync(tenant, projId, creds);
+
+        Assert.Equal(3, await RawChangelogCount(projId)); // one row per issue, no duplicates from the hoisted save
+    }
 }

@@ -19,21 +19,29 @@ public sealed class ChangelogIngestService : IChangelogIngestService
     public async Task IngestProjectAsync(Guid projectId, JiraCredentials creds, CancellationToken ct = default)
     {
         var snapshots = await _db.RawIssueSnapshots.Where(r => r.JiraProjectId == projectId).ToListAsync(ct);
+        var existingByJiraId = await _db.RawChangelogs
+            .Where(x => x.JiraProjectId == projectId)
+            .ToDictionaryAsync(x => x.JiraIssueId, ct);
+
         foreach (var snap in snapshots)
         {
             var histories = await AssembleHistoriesJsonAsync(snap, creds, ct);
             var payload = "{\"histories\":[" + string.Join(",", histories) + "]}";
 
-            var existing = await _db.RawChangelogs.FirstOrDefaultAsync(x => x.JiraIssueId == snap.JiraIssueId, ct);
-            if (existing is null)
+            if (existingByJiraId.TryGetValue(snap.JiraIssueId, out var existing))
+            {
+                existing.Payload = payload; existing.FetchedAt = _clock.UtcNow;
+            }
+            else
+            {
                 _db.RawChangelogs.Add(new RawChangelog
                 {
                     Id = Guid.NewGuid(), JiraProjectId = projectId, JiraIssueId = snap.JiraIssueId,
                     Payload = payload, FetchedAt = _clock.UtcNow
                 });
-            else { existing.Payload = payload; existing.FetchedAt = _clock.UtcNow; }
-            await _db.SaveChangesAsync(ct);
+            }
         }
+        await _db.SaveChangesAsync(ct);   // hoisted out of the loop — one save per project
     }
 
     // Returns each history entry as a raw JSON string, from the embedded changelog if complete, else by paging.
