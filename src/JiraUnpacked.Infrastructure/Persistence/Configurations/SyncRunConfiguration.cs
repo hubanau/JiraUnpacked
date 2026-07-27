@@ -16,6 +16,15 @@ public class SyncRunConfiguration : IEntityTypeConfiguration<SyncRun>
         b.Property(x => x.Error); // unlimited text
         b.HasIndex(x => x.EndUserId);
         b.HasIndex(x => new { x.EndUserId, x.JiraProjectId, x.StartedAt });
+
+        // At most one Running run per project — enforces the AlreadyRunning invariant at the DB
+        // level, closing the check-then-insert race. Status is stored as a string (HasConversion),
+        // so the filter compares the converted value 'Running'.
+        b.HasIndex(x => x.JiraProjectId)
+            .HasFilter("\"Status\" = 'Running'")
+            .IsUnique()
+            .HasDatabaseName("IX_SyncRuns_OneRunningPerProject");
+
         b.HasOne<JiraProject>().WithMany().HasForeignKey(x => x.JiraProjectId)
             .OnDelete(DeleteBehavior.Cascade);
     }

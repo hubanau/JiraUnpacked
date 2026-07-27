@@ -5,6 +5,7 @@ using JiraUnpacked.Domain.Enums;
 using JiraUnpacked.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 
 namespace JiraUnpacked.Infrastructure.Sync;
 
@@ -39,8 +40,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             Id = Guid.NewGuid(), JiraProjectId = projectId,
             StartedAt = startedAt, Status = SyncRunStatus.Running, IssuesProcessed = 0
         };
-        _db.SyncRuns.Add(run);
-        await _db.SaveChangesAsync(ct);
+        if (!await TryStartRunAsync(run, ct))
+            return new SyncRunResult(SyncOutcome.AlreadyRunning, null);
 
         try
         {
@@ -135,8 +136,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             Id = Guid.NewGuid(), JiraProjectId = projectId, StartedAt = _clock.UtcNow,
             Status = SyncRunStatus.Running, Kind = SyncRunKind.Rederive, IssuesProcessed = 0
         };
-        _db.SyncRuns.Add(run);
-        await _db.SaveChangesAsync(ct);
+        if (!await TryStartRunAsync(run, ct))
+            return new SyncRunResult(SyncOutcome.AlreadyRunning, null);
         try
         {
             await _derivation.DeriveProjectAsync(projectId, ct);
@@ -149,6 +150,24 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             await _db.SaveChangesAsync(ct);
         }
         return new SyncRunResult(SyncOutcome.Completed, ToView(run));
+    }
+
+    // Inserts the Running SyncRun, translating the partial-unique-index violation (lost race)
+    // into AlreadyRunning. Only THIS constraint is swallowed; any other error propagates.
+    private async Task<bool> TryStartRunAsync(SyncRun run, CancellationToken ct)
+    {
+        _db.SyncRuns.Add(run);
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+            return true;
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException pg
+            && pg.SqlState == "23505"
+            && pg.ConstraintName == "IX_SyncRuns_OneRunningPerProject")
+        {
+            return false;
+        }
     }
 
     private static SyncRunView ToView(SyncRun r) =>
