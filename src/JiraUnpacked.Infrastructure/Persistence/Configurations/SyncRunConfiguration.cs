@@ -25,6 +25,11 @@ public class SyncRunConfiguration : IEntityTypeConfiguration<SyncRun>
             .IsUnique()
             .HasDatabaseName("IX_SyncRuns_OneRunningPerProject");
 
+        // Restores coverage the FK-convention index provided before the partial index above
+        // superseded it: DueProjectFinder.LastSuccess runs privileged (no EndUserId), filtering
+        // JiraProjectId + Status='Succeeded', on every scheduler poll.
+        b.HasIndex(x => new { x.JiraProjectId, x.Status });
+
         b.HasOne<JiraProject>().WithMany().HasForeignKey(x => x.JiraProjectId)
             .OnDelete(DeleteBehavior.Cascade);
     }

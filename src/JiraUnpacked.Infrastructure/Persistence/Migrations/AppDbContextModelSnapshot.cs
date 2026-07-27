@@ -772,6 +772,8 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("IX_SyncRuns_OneRunningPerProject")
                         .HasFilter("\"Status\" = 'Running'");
 
+                    b.HasIndex("JiraProjectId", "Status");
+
                     b.HasIndex("EndUserId", "JiraProjectId", "StartedAt");
 
                     b.ToTable("SyncRuns", (string)null);
