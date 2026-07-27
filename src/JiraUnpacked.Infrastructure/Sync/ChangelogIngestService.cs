@@ -24,7 +24,8 @@ public sealed class ChangelogIngestService : IChangelogIngestService
             var histories = await AssembleHistoriesJsonAsync(snap, creds, ct);
             var payload = "{\"histories\":[" + string.Join(",", histories) + "]}";
 
-            var existing = await _db.RawChangelogs.FirstOrDefaultAsync(x => x.JiraIssueId == snap.JiraIssueId, ct);
+            var existing = await _db.RawChangelogs
+                .FirstOrDefaultAsync(x => x.JiraProjectId == projectId && x.JiraIssueId == snap.JiraIssueId, ct);
             if (existing is null)
                 _db.RawChangelogs.Add(new RawChangelog
                 {

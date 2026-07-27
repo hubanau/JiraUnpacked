@@ -223,12 +223,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("TeamId");
 
-                    b.HasIndex("EndUserId", "JiraIssueId")
-                        .IsUnique();
-
                     b.HasIndex("EndUserId", "JiraProjectId");
 
                     b.HasIndex("EndUserId", "ParentJiraIssueId");
+
+                    b.HasIndex("EndUserId", "JiraProjectId", "JiraIssueId")
+                        .IsUnique();
 
                     b.HasIndex("EndUserId", "JiraProjectId", "JiraUpdatedAt");
 
@@ -285,10 +285,10 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("JiraIssueId", "Field", "ChangedAt");
 
-                    b.HasIndex("EndUserId", "JiraIssueId", "JiraHistoryId", "Field")
-                        .IsUnique();
-
                     b.HasIndex("EndUserId", "JiraProjectId", "Field", "ChangedAt");
+
+                    b.HasIndex("EndUserId", "JiraProjectId", "JiraIssueId", "JiraHistoryId", "Field")
+                        .IsUnique();
 
                     b.ToTable("IssueChangeHistory", (string)null);
                 });
@@ -530,7 +530,7 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("JiraProjectId");
 
-                    b.HasIndex("EndUserId", "JiraIssueId")
+                    b.HasIndex("EndUserId", "JiraProjectId", "JiraIssueId")
                         .IsUnique();
 
                     b.ToTable("RawChangelog", (string)null);
@@ -566,7 +566,7 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("JiraProjectId");
 
-                    b.HasIndex("EndUserId", "JiraIssueId")
+                    b.HasIndex("EndUserId", "JiraProjectId", "JiraIssueId")
                         .IsUnique();
 
                     b.ToTable("RawIssueSnapshots", (string)null);

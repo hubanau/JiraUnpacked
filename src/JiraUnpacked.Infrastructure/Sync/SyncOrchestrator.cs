@@ -68,7 +68,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                     foreach (var issue in page.Issues)
                     {
                         var existing = await _db.RawIssueSnapshots
-                            .FirstOrDefaultAsync(x => x.JiraIssueId == issue.JiraIssueId, ct);
+                            .FirstOrDefaultAsync(x => x.JiraProjectId == projectId && x.JiraIssueId == issue.JiraIssueId, ct);
                         if (existing is null)
                         {
                             _db.RawIssueSnapshots.Add(new RawIssueSnapshot

@@ -14,7 +14,7 @@ public class RawIssueSnapshotConfiguration : IEntityTypeConfiguration<RawIssueSn
         b.Property(x => x.Payload).IsRequired().HasColumnType("jsonb");
         b.Property(x => x.FetchedAt).IsRequired();
         b.HasIndex(x => x.EndUserId);
-        b.HasIndex(x => new { x.EndUserId, x.JiraIssueId }).IsUnique();
+        b.HasIndex(x => new { x.EndUserId, x.JiraProjectId, x.JiraIssueId }).IsUnique();
         b.HasOne<JiraProject>().WithMany().HasForeignKey(x => x.JiraProjectId)
             .OnDelete(DeleteBehavior.Cascade);
     }

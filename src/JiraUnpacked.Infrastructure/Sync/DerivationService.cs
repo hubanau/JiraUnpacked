@@ -44,7 +44,8 @@ public sealed partial class DerivationService : IDerivationService
             var root = doc.RootElement;
             if (!root.TryGetProperty("fields", out var f) || f.ValueKind != JsonValueKind.Object) continue;
 
-            var issue = await _db.Issues.FirstOrDefaultAsync(i => i.JiraIssueId == snap.JiraIssueId, ct)
+            var issue = await _db.Issues
+                            .FirstOrDefaultAsync(i => i.JiraProjectId == projectId && i.JiraIssueId == snap.JiraIssueId, ct)
                         ?? new Issue { Id = Guid.NewGuid(), JiraProjectId = projectId, JiraIssueId = snap.JiraIssueId };
 
             issue.JiraKey = GetString(root, "key") ?? issue.JiraKey ?? snap.JiraIssueId;
