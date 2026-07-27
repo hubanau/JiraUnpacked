@@ -29,6 +29,9 @@ public sealed partial class DerivationService : IDerivationService
         var teamField = mappings.FirstOrDefault(m => m.Role == FieldRole.Team)?.JiraFieldId;
 
         var snapshots = await _db.RawIssueSnapshots.Where(r => r.JiraProjectId == projectId).ToListAsync(ct);
+        var existingIssues = await _db.Issues
+            .Where(i => i.JiraProjectId == projectId)
+            .ToDictionaryAsync(i => i.JiraIssueId, ct);
 
         // Dictionary caches (jiraId -> surrogate Id) so we resolve each once.
         var statusCache = new Dictionary<string, Guid>();
@@ -44,9 +47,8 @@ public sealed partial class DerivationService : IDerivationService
             var root = doc.RootElement;
             if (!root.TryGetProperty("fields", out var f) || f.ValueKind != JsonValueKind.Object) continue;
 
-            var issue = await _db.Issues
-                            .FirstOrDefaultAsync(i => i.JiraProjectId == projectId && i.JiraIssueId == snap.JiraIssueId, ct)
-                        ?? new Issue { Id = Guid.NewGuid(), JiraProjectId = projectId, JiraIssueId = snap.JiraIssueId };
+            existingIssues.TryGetValue(snap.JiraIssueId, out var found);
+            var issue = found ?? new Issue { Id = Guid.NewGuid(), JiraProjectId = projectId, JiraIssueId = snap.JiraIssueId };
 
             issue.JiraKey = GetString(root, "key") ?? issue.JiraKey ?? snap.JiraIssueId;
             issue.Summary = GetString(f, "summary");

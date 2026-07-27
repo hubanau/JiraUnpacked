@@ -66,10 +66,13 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                 do
                 {
                     var page = await _jira.SearchIssuesPageAsync(creds, jql, token, ct);
+                    var pageIds = page.Issues.Select(i => i.JiraIssueId).ToList();
+                    var existingByJiraId = await _db.RawIssueSnapshots
+                        .Where(x => x.JiraProjectId == projectId && pageIds.Contains(x.JiraIssueId))
+                        .ToDictionaryAsync(x => x.JiraIssueId, ct);
                     foreach (var issue in page.Issues)
                     {
-                        var existing = await _db.RawIssueSnapshots
-                            .FirstOrDefaultAsync(x => x.JiraProjectId == projectId && x.JiraIssueId == issue.JiraIssueId, ct);
+                        existingByJiraId.TryGetValue(issue.JiraIssueId, out var existing);
                         if (existing is null)
                         {
                             _db.RawIssueSnapshots.Add(new RawIssueSnapshot
