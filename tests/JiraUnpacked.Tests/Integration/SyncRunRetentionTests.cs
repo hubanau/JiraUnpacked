@@ -45,7 +45,7 @@ public sealed class SyncRunRetentionTests : IClassFixture<JiraUnpackedApiFactory
     public async Task Purge_removes_old_runs_but_keeps_the_watermark_anchor_and_running_runs()
     {
         var tenant = await Tenancy.TenantDeletionTestData.SeedUserAsync(_factory);
-        var seed = await Tenancy.TenantDeletionTestData.SeedFullGraphAsync(tenant);
+        var seed = await Tenancy.TenantDeletionTestData.SeedFullGraphAsync(tenant, seedSyncRun: false);
         var now = DateTime.UtcNow;
 
         // Three old succeeded syncs (well past the cutoff) and one old Running run.
@@ -82,7 +82,7 @@ public sealed class SyncRunRetentionTests : IClassFixture<JiraUnpackedApiFactory
     public async Task Purge_leaves_recent_runs_alone()
     {
         var tenant = await Tenancy.TenantDeletionTestData.SeedUserAsync(_factory);
-        var seed = await Tenancy.TenantDeletionTestData.SeedFullGraphAsync(tenant);
+        var seed = await Tenancy.TenantDeletionTestData.SeedFullGraphAsync(tenant, seedSyncRun: false);
         var now = DateTime.UtcNow;
 
         await SeedRunAsync(tenant, seed.ProjectId, now.AddDays(-5), SyncRunStatus.Succeeded, SyncRunKind.Sync);

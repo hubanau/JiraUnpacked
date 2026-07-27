@@ -54,7 +54,7 @@ internal static class TenantDeletionTestData
     /// every tenant table cascades; this graph proves the cascade genuinely fires across
     /// connection-, project- and issue-scoped tables.
     /// </summary>
-    internal static async Task<GraphSeed> SeedFullGraphAsync(Guid tenant)
+    internal static async Task<GraphSeed> SeedFullGraphAsync(Guid tenant, bool seedSyncRun = true)
     {
         var connId = Guid.NewGuid();
         var projId = Guid.NewGuid();
@@ -95,15 +95,16 @@ internal static class TenantDeletionTestData
             ("i", Guid.NewGuid()), ("t", tenant), ("p", projId));
         await Exec(conn, @"INSERT INTO ""Teams""(""Id"",""EndUserId"",""JiraProjectId"",""JiraTeamId"",""Name"") VALUES (@i,@t,@p,'1','Team Alpha')",
             ("i", Guid.NewGuid()), ("t", tenant), ("p", projId));
-        // StartedAt is a fixed historical date, not now(): SyncRunRetentionTests also calls this
-        // fixture and then seeds its own SyncRuns rows on the same project, asserting exact
-        // counts and watermark-anchor selection by StartedAt recency. A "now()" row here would
-        // either win the anchor race (displacing the row those tests expect to survive) or
-        // inflate their "recent, untouched" counts. This date is older than any retention
-        // cutoff exercised in tests, so it is always purge-eligible and never the newest.
-        await Exec(conn, @"INSERT INTO ""SyncRuns""(""Id"",""EndUserId"",""JiraProjectId"",""StartedAt"",""Status"",""Kind"",""IssuesProcessed"") VALUES (@i,@t,@p,@s,'Succeeded','Sync',10)",
-            ("i", Guid.NewGuid()), ("t", tenant), ("p", projId),
-            ("s", new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
+        // seedSyncRun lets callers that seed their own SyncRuns rows with explicit timestamps
+        // (e.g. SyncRunRetentionTests) opt out of this row, so they aren't coupled to its
+        // StartedAt value. Callers that need all 16 tenant-owned tables populated (e.g. the
+        // erasure-completeness gate) keep the default and get this row like every other table.
+        if (seedSyncRun)
+        {
+            await Exec(conn, @"INSERT INTO ""SyncRuns""(""Id"",""EndUserId"",""JiraProjectId"",""StartedAt"",""Status"",""Kind"",""IssuesProcessed"") VALUES (@i,@t,@p,@s,'Succeeded','Sync',10)",
+                ("i", Guid.NewGuid()), ("t", tenant), ("p", projId),
+                ("s", new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
+        }
 
         return new GraphSeed(connId, projId);
     }

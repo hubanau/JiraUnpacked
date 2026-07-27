@@ -17,7 +17,7 @@ public class IssueConfiguration : IEntityTypeConfiguration<Issue>
         b.Property(x => x.Summary); // unlimited text (inline free text)
 
         b.HasIndex(x => x.EndUserId);
-        b.HasIndex(x => new { x.EndUserId, x.JiraIssueId }).IsUnique();
+        b.HasIndex(x => new { x.EndUserId, x.JiraProjectId, x.JiraIssueId }).IsUnique();
         b.HasIndex(x => new { x.EndUserId, x.JiraProjectId });
         b.HasIndex(x => new { x.EndUserId, x.ParentJiraIssueId });
         b.HasIndex(x => new { x.EndUserId, x.JiraProjectId, x.JiraUpdatedAt });
