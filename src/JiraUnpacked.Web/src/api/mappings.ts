@@ -37,7 +37,13 @@ export const putStatusSemantics = (projectId: string, statuses: StatusSemantic[]
 export const getIssueTypes = (connectionId: string) =>
   apiFetch<IssueTypeClassInfo[]>(`/api/connections/${connectionId}/issue-types`);
 
-/** Replace-all: `issueTypes` must be the COMPLETE set, not a patch. */
+/**
+ * Additive, NOT replace-all: only the listed types change and unlisted ones
+ * keep their class. The whole batch is validated before anything mutates, so
+ * one unknown id rejects the request with 400 {error}. Sending the complete
+ * set is harmless (unchanged rows are rewritten their current value) but is
+ * not required — no fetch-merge dance is needed here.
+ */
 export const putIssueTypes = (
   connectionId: string,
   issueTypes: { jiraIssueTypeId: string; class: IssueTypeClass }[],
