@@ -126,6 +126,10 @@ if (JiraUnpacked.Api.Security.HstsGate.ShouldEnableHsts(app.Environment.IsDevelo
     app.UseHsts();
 }
 app.UseHttpsRedirection();
+// Serves the built SPA from wwwroot. Before authentication so the bundle and
+// its assets load without a token. No-ops when wwwroot is absent (tests, fresh
+// clones), which is why the integration suite is unaffected.
+app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
 // Runs after authentication/authorization so the "sync" policy's partition key
@@ -135,6 +139,14 @@ app.UseAuthorization();
 app.UseRateLimiter();
 app.UseMiddleware<JiraUnpacked.Api.Tenancy.TenantScopeMiddleware>();
 app.MapControllers();
+// An unknown /api path must remain a JSON 404. Without this terminal route the
+// SPA fallback below would answer it with index.html and HTTP 200, and clients
+// would parse HTML as JSON. Catch-all routes have the lowest precedence, so
+// every real controller route still wins.
+app.Map("/api/{**rest}", () => Results.NotFound());
+// Any other unmatched path serves the SPA shell so client-side routing works on
+// a deep-link refresh.
+app.MapFallbackToFile("index.html");
 
 app.Run();
 
