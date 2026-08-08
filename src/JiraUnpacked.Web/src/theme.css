@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+/* Light is the default; dark is applied by the `dark` class on <html>, which
+   useTheme sets. Tailwind v4 needs this custom variant to target that class. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --ju-bg: #ffffff;
+  --ju-surface: #f8fafc;
+  --ju-border: #e2e8f0;
+  --ju-text: #0f172a;
+  --ju-muted: #64748b;
+  --ju-primary: #4338ca;
+  --ju-primary-text: #ffffff;
+  --ju-danger: #b91c1c;
+  --ju-success: #15803d;
+  --ju-warning: #b45309;
+}
+
+.dark {
+  --ju-bg: #0b1120;
+  --ju-surface: #111827;
+  --ju-border: #1f2937;
+  --ju-text: #e5e7eb;
+  --ju-muted: #9ca3af;
+  --ju-primary: #818cf8;
+  --ju-primary-text: #0b1120;
+  --ju-danger: #f87171;
+  --ju-success: #4ade80;
+  --ju-warning: #fbbf24;
+}
+
+body {
+  background-color: var(--ju-bg);
+  color: var(--ju-text);
+}
+
+/* Respect users who ask for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
