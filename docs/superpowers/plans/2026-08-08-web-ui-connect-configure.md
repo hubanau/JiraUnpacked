@@ -361,11 +361,11 @@ describe('queryKeys', () => {
 - [ ] **Step 7: Run to verify it fails, then passes**
 
 Run: `npm run test -- spec2-endpoints`
-Expected: FAIL first (unresolved modules), then PASS (13 tests) once Steps 1–5 are in place.
+Expected: FAIL first (unresolved modules), then PASS (12 tests) once Steps 1–5 are in place.
 
 - [ ] **Step 8: Full suite and commit**
 
-Run: `npm run test && npm run typecheck && npm run lint` — all green (47 prior + 13 new = 60).
+Run: `npm run test && npm run typecheck && npm run lint` — all green (47 prior + 12 new = 59).
 
 ```bash
 git add src/JiraUnpacked.Web/src/api
