@@ -74,6 +74,8 @@ public static class DependencyInjection
         services.AddScoped<IChangelogIngestService, ChangelogIngestService>();
         services.AddScoped<IDerivationService, DerivationService>();
         services.AddScoped<IIssueQueryService, IssueQueryService>();
+        services.AddScoped<JiraUnpacked.Infrastructure.Reporting.Filtering.IIssueFilterTranslator,
+                           JiraUnpacked.Infrastructure.Reporting.Filtering.IssueFilterTranslator>();
         services.AddScoped<IMetricsQueryService, MetricsQueryService>();
         services.AddScoped<IGapCheck, OpenEpicAllChildrenDoneCheck>();
         services.AddScoped<IGapCheck, DoneEpicOpenChildrenCheck>();
