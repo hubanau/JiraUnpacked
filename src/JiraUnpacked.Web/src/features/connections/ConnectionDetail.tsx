@@ -1,4 +1,4 @@
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Card, EmptyState, ErrorState, Spinner } from '../../ui';
 import { ApiError } from '../../api/errors';
@@ -45,7 +45,10 @@ export default function ConnectionDetail() {
       </header>
 
       <section>
-        <h2>Projects</h2>
+        <div className="flex items-center justify-between">
+          <h2>Projects</h2>
+          <Link to={`/connections/${id}/projects/new`}>Add project</Link>
+        </div>
         {projectsQuery.isPending && <Spinner aria-label="Loading projects" />}
         {projectsQuery.error && (
           <ErrorState
@@ -66,12 +69,14 @@ export default function ConnectionDetail() {
           <ul className="flex flex-col gap-2">
             {projectsQuery.data.map((project) => (
               <li key={project.id}>
-                <Card>
-                  <p className="font-medium text-[var(--ju-text)]">{project.jiraProjectKey}</p>
-                  <p className="text-xs text-[var(--ju-muted)]">
-                    Syncs every {project.syncIntervalMinutes} minutes
-                  </p>
-                </Card>
+                <Link to={`/projects/${project.id}`}>
+                  <Card>
+                    <p className="font-medium text-[var(--ju-text)]">{project.jiraProjectKey}</p>
+                    <p className="text-xs text-[var(--ju-muted)]">
+                      Syncs every {project.syncIntervalMinutes} minutes
+                    </p>
+                  </Card>
+                </Link>
               </li>
             ))}
           </ul>
