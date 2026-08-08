@@ -1,6 +1,7 @@
 using JiraUnpacked.Domain.Abstractions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace JiraUnpacked.Api.Controllers;
 
@@ -17,6 +18,7 @@ public sealed class SyncController : ControllerBase
     }
 
     [HttpPost("api/projects/{projectId:guid}/sync")]
+    [EnableRateLimiting("sync")]
     public async Task<IActionResult> Sync(Guid projectId, CancellationToken ct)
     {
         var result = await _orchestrator.RunProjectAsync(projectId, ct);
@@ -33,6 +35,7 @@ public sealed class SyncController : ControllerBase
         Ok(await _runs.ListAsync(projectId, ct));
 
     [HttpPost("api/projects/{projectId:guid}/rederive")]
+    [EnableRateLimiting("sync")]
     public async Task<IActionResult> Rederive(Guid projectId, CancellationToken ct)
     {
         var result = await _orchestrator.RunRederiveAsync(projectId, ct);
