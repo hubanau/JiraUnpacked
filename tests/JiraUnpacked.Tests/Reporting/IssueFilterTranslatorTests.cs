@@ -129,6 +129,41 @@ public sealed class IssueFilterTranslatorTests
         Assert.Equal("%login%", pattern.Value);
     }
 
+    // ---- folded-in fix (FR-E4 EF4): escaping must be backslash-first, or a literal backslash in the
+    // ---- value would itself become a live escape char and corrupt the following escaped metacharacter.
+
+    [Fact]
+    public async Task Text_contains_escapes_backslash_percent_and_underscore_backslash_first()
+    {
+        // NOTE: like Text_contains_builds_ilike_call_with_escaped_pattern above, ILike has no in-memory
+        // implementation, so this asserts the built ILike node's pattern/escape-char constants directly.
+        //
+        // Hand-verified escape order (translator: Replace("\\","\\\\").Replace("%","\\%").Replace("_","\\_")):
+        //   raw:                              a % b _ c \ d
+        //   step 1 (\ -> \\, backslash FIRST): a % b _ c \\ d   =>  "a%b_c\\d"
+        //   step 2 (% -> \%):                  a \% b _ c \\ d  =>  "a\%b_c\\d"
+        //   step 3 (_ -> \_):                  a \% b \_ c \\ d =>  "a\%b\_c\\d"
+        //   wrapped "%" + escaped + "%":       "%a\%b\_c\\d%"
+        var r = await Sut.BuildAsync(
+            new[] { new FilterCondition("summary", FilterOperator.Contains, J(@"a%b_c\d"), null) },
+            Resolver, CancellationToken.None);
+        Assert.Null(r.Error);
+
+        var body = Assert.IsAssignableFrom<BinaryExpression>(r.Predicate!.Body);
+        Assert.Equal(ExpressionType.AndAlso, body.NodeType);
+
+        var call = FindIlikeCall(body);
+        Assert.NotNull(call);
+        Assert.Equal("ILike", call!.Method.Name);
+        Assert.Equal(4, call.Arguments.Count);
+
+        var pattern = Assert.IsAssignableFrom<ConstantExpression>(call.Arguments[2]);
+        Assert.Equal(@"%a\%b\_c\\d%", pattern.Value);
+
+        var escapeChar = Assert.IsAssignableFrom<ConstantExpression>(call.Arguments[3]);
+        Assert.Equal("\\", escapeChar.Value);
+    }
+
     [Fact]
     public async Task Parent_isnull_matches_top_level()
     {

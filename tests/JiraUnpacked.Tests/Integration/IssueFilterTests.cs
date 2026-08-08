@@ -320,6 +320,31 @@ public sealed class IssueFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
         Assert.Equal("ACME-1", page.Items[0].JiraKey);
     }
 
+    // ---- folded-in fix: storyPoints Neq on a NULL decimal (EF null-semantics rewrites `!= 5` to also
+    // ---- match NULLs — the same "Neq includes unassigned" rule the dict fields follow) ----
+
+    [Fact]
+    public async Task StoryPoints_neq_includes_the_null_points_issue()
+    {
+        var (client, tenant) = await AuthedTenantAsync();
+        var connId = Guid.NewGuid(); var projId = Guid.NewGuid();
+        await using (var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString))
+        {
+            await conn.OpenAsync();
+            await Exec(conn, @"INSERT INTO ""JiraConnections""(""Id"",""EndUserId"",""BaseUrl"",""Email"",""ApiTokenEncrypted"",""CreatedAt"") VALUES (@i,@t,'https://x','e','c',now())", ("i", connId), ("t", tenant));
+            await Exec(conn, @"INSERT INTO ""JiraProjects""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraProjectKey"",""JiraProjectId"",""SyncIntervalMinutes"",""CreatedAt"") VALUES (@i,@t,@c,'ACME','1',60,now())", ("i", projId), ("t", tenant), ("c", connId));
+            await Exec(conn, @"INSERT INTO ""Issues""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""JiraKey"",""Summary"",""StoryPoints"",""JiraCreatedAt"",""JiraUpdatedAt"",""LastSyncedAt"") VALUES (@i,@t,@p,@ji,@k,@s,@sp,now(),now(),now())",
+                ("i", Guid.NewGuid()), ("t", tenant), ("p", projId), ("ji", "10001"), ("k", "ACME-1"), ("s", "Has points"), ("sp", 5m));
+            await Exec(conn, @"INSERT INTO ""Issues""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""JiraKey"",""Summary"",""StoryPoints"",""JiraCreatedAt"",""JiraUpdatedAt"",""LastSyncedAt"") VALUES (@i,@t,@p,@ji,@k,@s,@sp,now(),now(),now())",
+                ("i", Guid.NewGuid()), ("t", tenant), ("p", projId), ("ji", "10002"), ("k", "ACME-2"), ("s", "No points"), ("sp", (decimal?)null));
+        }
+
+        var page = await QueryOkAsync(client, projId, Req(new() { Cond("storyPoints", "Neq", value: 5) }));
+
+        Assert.Equal(1, page.TotalCount);
+        Assert.Equal("ACME-2", page.Items[0].JiraKey); // NULL-points issue included; the 5-points issue excluded
+    }
+
     // ---- 400 validation cases ----
 
     [Fact]
