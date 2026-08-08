@@ -1,4 +1,5 @@
 using System.Text;
+using System.Threading.RateLimiting;
 using JiraUnpacked.Api.Tenancy;
 using JiraUnpacked.Infrastructure;
 using JiraUnpacked.Infrastructure.Identity;
@@ -28,6 +29,9 @@ builder.Services.Configure<JiraUnpacked.Infrastructure.Sync.SyncSchedulerOptions
 builder.Services.Configure<JiraUnpacked.Infrastructure.Retention.RetentionOptions>(
     builder.Configuration.GetSection(JiraUnpacked.Infrastructure.Retention.RetentionOptions.SectionName));
 
+builder.Services.Configure<JiraUnpacked.Infrastructure.Security.SecurityOptions>(
+    builder.Configuration.GetSection(JiraUnpacked.Infrastructure.Security.SecurityOptions.SectionName));
+
 if (builder.Configuration.GetValue("Sync:SchedulerEnabled", true))
 {
     builder.Services.AddQuartz(q =>
@@ -41,6 +45,11 @@ if (builder.Configuration.GetValue("Sync:SchedulerEnabled", true))
         q.AddJob<JiraUnpacked.Infrastructure.Retention.SyncRunRetentionJob>(retentionKey);
         q.AddTrigger(t => t.ForJob(retentionKey)
             .WithSimpleSchedule(s => s.WithIntervalInHours(24).RepeatForever()));
+
+        var reaperKey = new Quartz.JobKey("stuck-run-reaper");
+        q.AddJob<JiraUnpacked.Infrastructure.Sync.StuckRunReaperJob>(reaperKey);
+        q.AddTrigger(t => t.ForJob(reaperKey)
+            .WithSimpleSchedule(s => s.WithIntervalInHours(1).RepeatForever()));
     });
     builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
 }
@@ -70,16 +79,23 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization(options =>
     options.AddPolicy("Admin", policy => policy.RequireRole("Admin")));
 
-// Rate limiting for sensitive auth endpoints.
+// Rate limiting for sensitive auth endpoints and expensive sync/rederive endpoints.
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddFixedWindowLimiter("auth", o =>
-    {
-        o.Window = TimeSpan.FromMinutes(1);
-        o.PermitLimit = 10;
-        o.QueueLimit = 0;
-    });
+
+    // Per-IP: a brute-force attempt or one chatty client can't exhaust the window for everyone.
+    options.AddPolicy("auth", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions { Window = TimeSpan.FromMinutes(1), PermitLimit = 10, QueueLimit = 0 }));
+
+    // Per-user: sync/rederive are expensive and call Jira; partition by the authenticated tenant.
+    options.AddPolicy("sync", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.User.FindFirst("endUserId")?.Value
+                          ?? httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions { Window = TimeSpan.FromMinutes(1), PermitLimit = 5, QueueLimit = 0 }));
 });
 
 builder.Services
@@ -103,10 +119,20 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+var securityOptions = app.Services.GetRequiredService<
+    Microsoft.Extensions.Options.IOptions<JiraUnpacked.Infrastructure.Security.SecurityOptions>>().Value;
+if (JiraUnpacked.Api.Security.HstsGate.ShouldEnableHsts(app.Environment.IsDevelopment(), securityOptions.HstsEnabled))
+{
+    app.UseHsts();
+}
 app.UseHttpsRedirection();
-app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+// Runs after authentication/authorization so the "sync" policy's partition key
+// (the endUserId claim) is resolved from an authenticated HttpContext.User —
+// otherwise it always sees the unauthenticated principal and silently falls
+// back to the IP key, letting different users behind the same IP share a bucket.
+app.UseRateLimiter();
 app.UseMiddleware<JiraUnpacked.Api.Tenancy.TenantScopeMiddleware>();
 app.MapControllers();
 

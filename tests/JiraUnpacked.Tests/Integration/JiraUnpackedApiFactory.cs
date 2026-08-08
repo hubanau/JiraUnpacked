@@ -59,10 +59,10 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
                 options.UseNpgsql(TestAppConnectionString)
                        .AddInterceptors(sp.GetRequiredService<TenantConnectionInterceptor>()));
 
-            // Replace the "auth" fixed-window limiter with an unlimited policy so
-            // integration tests are never throttled by repeated requests from 127.0.0.1.
-            // Remove all previously registered IConfigureOptions<RateLimiterOptions> and
-            // re-register with a no-op policy so AddPolicy("auth") doesn't throw a duplicate.
+            // Replace the "auth" and "sync" limiters with unlimited policies so integration
+            // tests are never throttled by repeated requests from 127.0.0.1 or a shared test
+            // user. Remove all previously registered IConfigureOptions<RateLimiterOptions> and
+            // re-register both with no-op policies so AddPolicy(...) doesn't throw a duplicate.
             var rateLimiterDescriptors = services
                 .Where(d => d.ServiceType == typeof(IConfigureOptions<Microsoft.AspNetCore.RateLimiting.RateLimiterOptions>))
                 .ToList();
@@ -70,8 +70,10 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
                 services.Remove(d);
 
             services.AddRateLimiter(options =>
-                options.AddPolicy("auth", _ =>
-                    RateLimitPartition.GetNoLimiter(string.Empty)));
+            {
+                options.AddPolicy("auth", _ => RateLimitPartition.GetNoLimiter(string.Empty));
+                options.AddPolicy("sync", _ => RateLimitPartition.GetNoLimiter(string.Empty));
+            });
 
             // Replace the dev email sender with a capturing one so tests can read the code.
             var emailDescriptor = services.SingleOrDefault(
