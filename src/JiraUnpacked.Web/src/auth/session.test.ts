@@ -91,6 +91,18 @@ describe('refreshOnce', () => {
 
     expect(hits).toBe(0);
   });
+
+  it('resolves false without throwing when localStorage access fails', async () => {
+    const getItemSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage disabled');
+    });
+
+    try {
+      await expect(refreshOnce()).resolves.toBe(false);
+    } finally {
+      getItemSpy.mockRestore();
+    }
+  });
 });
 
 describe('installAuthBridge', () => {

@@ -2,6 +2,7 @@ import { setAuthBridge } from '../api/client';
 import { refreshTokens, type TokenResponse } from '../api/auth';
 
 export const REFRESH_KEY = 'ju.refreshToken';
+export const USERNAME_KEY = 'ju.username';
 
 /**
  * The access token is deliberately module state and never touches any
@@ -12,28 +13,58 @@ let accessToken: string | null = null;
 /** The in-flight refresh, shared by every concurrent caller (single-flight). */
 let inFlight: Promise<boolean> | null = null;
 
+/**
+ * localStorage can throw (storage disabled, private-browsing quota, a
+ * blocked third-party context, etc.). Treat any such failure as "nothing
+ * stored" rather than letting it propagate — a storage failure should
+ * degrade to a logged-out state, not hang or crash the caller.
+ */
+function safeGetItem(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSetItem(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Best effort; losing persistence here is not fatal.
+  }
+}
+
+function safeRemoveItem(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Best effort.
+  }
+}
+
 export function getAccessToken(): string | null {
   return accessToken;
 }
 
 export function getRefreshToken(): string | null {
-  return localStorage.getItem(REFRESH_KEY);
+  return safeGetItem(REFRESH_KEY);
 }
 
 export function setTokens(tokens: TokenResponse): void {
   accessToken = tokens.accessToken;
-  localStorage.setItem(REFRESH_KEY, tokens.refreshToken);
+  safeSetItem(REFRESH_KEY, tokens.refreshToken);
 }
 
 export function clearTokens(): void {
   accessToken = null;
-  localStorage.removeItem(REFRESH_KEY);
+  safeRemoveItem(REFRESH_KEY);
 }
 
 async function doRefresh(): Promise<boolean> {
-  const stored = getRefreshToken();
-  if (!stored) return false;
   try {
+    const stored = getRefreshToken();
+    if (!stored) return false;
     // Refresh rotates: the response carries a new refresh token that
     // replaces the stored one.
     setTokens(await refreshTokens(stored));

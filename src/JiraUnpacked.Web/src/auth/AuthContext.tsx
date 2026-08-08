@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { getMe, login as loginRequest, logoutRequest } from '../api/auth';
-import { clearTokens, getRefreshToken, installAuthBridge, refreshOnce, setTokens } from './session';
+import { clearTokens, getRefreshToken, installAuthBridge, refreshOnce, setTokens, USERNAME_KEY } from './session';
 
 export type AuthStatus = 'loading' | 'authenticated' | 'anonymous';
 
@@ -21,6 +21,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const reset = useCallback(() => {
     clearTokens();
+    localStorage.removeItem(USERNAME_KEY);
     setRole(null);
     setUsername(null);
     setStatus('anonymous');
@@ -46,6 +47,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const me = await getMe();
         if (cancelled) return;
         setRole(me.role);
+        // /api/auth/me carries no display name (sub is a GUID, not a
+        // username) — restore what the user typed at sign-in instead.
+        setUsername(localStorage.getItem(USERNAME_KEY));
         setStatus('authenticated');
       } catch {
         if (!cancelled) reset();
@@ -58,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setTokens(await loginRequest(emailOrUsername, password));
     const me = await getMe();
     setRole(me.role);
+    localStorage.setItem(USERNAME_KEY, emailOrUsername);
     setUsername(emailOrUsername);
     setStatus('authenticated');
   }, []);

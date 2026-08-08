@@ -3,15 +3,16 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { server } from '../test/setup';
-import { REFRESH_KEY, getAccessToken } from './session';
+import { REFRESH_KEY, USERNAME_KEY, getAccessToken } from './session';
 import { AuthProvider, useAuth } from './AuthContext';
 
 function Probe() {
-  const { status, role, signOut } = useAuth();
+  const { status, role, username, signOut } = useAuth();
   return (
     <div>
       <span data-testid="status">{status}</span>
       <span data-testid="role">{role ?? 'none'}</span>
+      <span data-testid="username">{username ?? 'none'}</span>
       <button onClick={() => void signOut()}>sign out</button>
     </div>
   );
@@ -40,6 +41,24 @@ describe('AuthProvider boot', () => {
 
     expect(await screen.findByText('authenticated')).toBeInTheDocument();
     expect(screen.getByTestId('role')).toHaveTextContent('Admin');
+  });
+
+  it('restores the persisted username on boot hydration', async () => {
+    // /api/auth/me has no display name (sub is a GUID) — the username the
+    // user typed at sign-in must survive a reload via USERNAME_KEY instead.
+    localStorage.setItem(REFRESH_KEY, 'refresh-1');
+    localStorage.setItem(USERNAME_KEY, 'alice');
+    server.use(
+      http.post('/api/auth/refresh', () => HttpResponse.json({
+        accessToken: 'access-2', expiresAtUtc: '2099-01-01T00:00:00Z', refreshToken: 'refresh-2',
+      })),
+      http.get('/api/auth/me', () => HttpResponse.json({ sub: 'u', role: 'Admin', endUserId: 'e' })),
+    );
+
+    renderProbe();
+
+    expect(await screen.findByText('authenticated')).toBeInTheDocument();
+    expect(screen.getByTestId('username')).toHaveTextContent('alice');
   });
 
   it('clears storage and goes anonymous when the stored token is rejected', async () => {
