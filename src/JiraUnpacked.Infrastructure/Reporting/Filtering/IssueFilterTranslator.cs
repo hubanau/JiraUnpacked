@@ -89,7 +89,7 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
             names = new List<string> { sv.GetString()! };
         }
 
-        var ids = (await resolveDict(c.Field, names, ct)).ToList();
+        var ids = (await resolveDict(field.Name, names, ct)).ToList();
 
         // i.Fk.HasValue && ids.Contains(i.Fk.Value)
         var hasValue = Expression.Property(fkBody, nameof(Nullable<Guid>.HasValue));
