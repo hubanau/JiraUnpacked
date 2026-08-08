@@ -83,7 +83,7 @@ The readiness computation is a **pure function** over the three fetched lists, s
 
 ## 5. Screens
 
-**Connections list** (`/connections`) — cards showing base URL, email, created date, and project count. Empty state explains that a connection is a Jira site plus an API token, and links to Atlassian's token page. Primary action: **Add connection**.
+**Connections list** (`/connections`) — cards showing base URL, email, and created date. (Deliberately *not* a project count: there is no aggregate endpoint, so it would cost one request per connection for decoration.) Empty state explains that a connection is a Jira site plus an API token, and links to Atlassian's token page. Primary action: **Add connection**.
 
 **Add connection** — base URL, email, API token (`type="password"`). The submit is slow (the API validates against Jira live), so the button uses `Button`'s `loading` state. A **400** renders the server's "Jira credentials could not be validated." verbatim; a **502** renders the upstream-Jira message — the distinction matters, since one means "your token is wrong" and the other "Jira is down". The form states that the token is stored encrypted and cannot be displayed again.
 
