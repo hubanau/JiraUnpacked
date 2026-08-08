@@ -66,8 +66,10 @@ public sealed class IssueFilterSecurityTests : IClassFixture<JiraUnpackedApiFact
     }
 
     // Seeds connection + project + one "In Progress" status + one issue in that status, scoped to a
-    // fresh JiraProjectId for the given tenant. Returns (projectId, the seeded issue's JiraKey).
-    private static async Task<(Guid projectId, string jiraKey)> SeedProjectWithOneInProgressIssueAsync(Guid tenant)
+    // fresh JiraProjectId for the given tenant. Returns (projectId, the seeded issue's JiraKey, the
+    // seeded status row's Id) -- callers that need to make a cross-tenant row collide on a REAL
+    // surrogate (rather than a random Guid that can never match) use the returned statusId.
+    private static async Task<(Guid projectId, string jiraKey, Guid statusId)> SeedProjectWithOneInProgressIssueAsync(Guid tenant)
     {
         var connId = Guid.NewGuid(); var projId = Guid.NewGuid(); var statusId = Guid.NewGuid();
         await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
@@ -77,7 +79,7 @@ public sealed class IssueFilterSecurityTests : IClassFixture<JiraUnpackedApiFact
         await Exec(conn, @"INSERT INTO ""Statuses""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraStatusId"",""Name"",""StatusCategory"") VALUES (@i,@t,@c,'10','In Progress','indeterminate')", ("i", statusId), ("t", tenant), ("c", connId));
         await Exec(conn, @"INSERT INTO ""Issues""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""JiraKey"",""Summary"",""StatusId"",""JiraCreatedAt"",""JiraUpdatedAt"",""LastSyncedAt"") VALUES (@i,@t,@p,'10001','ACME-1','Seeded issue',@s,now(),now(),now())",
             ("i", Guid.NewGuid()), ("t", tenant), ("p", projId), ("s", statusId));
-        return (projId, "ACME-1");
+        return (projId, "ACME-1", statusId);
     }
 
     // ---- request-building + calling helpers ----
@@ -108,7 +110,7 @@ public sealed class IssueFilterSecurityTests : IClassFixture<JiraUnpackedApiFact
     public async Task Cross_tenant_project_id_returns_404()
     {
         var (_, tenantA) = await AuthedTenantAsync();
-        var (projectA, _) = await SeedProjectWithOneInProgressIssueAsync(tenantA);
+        var (projectA, _, _) = await SeedProjectWithOneInProgressIssueAsync(tenantA);
 
         var (clientB, _) = await AuthedTenantAsync();
         // B POSTs a (well-formed, matching) filter at A's project id.
@@ -122,19 +124,33 @@ public sealed class IssueFilterSecurityTests : IClassFixture<JiraUnpackedApiFact
     public async Task Filtering_own_project_never_returns_another_tenants_issues()
     {
         var (clientA, tenantA) = await AuthedTenantAsync();
-        var (projectA, keyA) = await SeedProjectWithOneInProgressIssueAsync(tenantA);
+        var (projectA, keyA, statusIdA) = await SeedProjectWithOneInProgressIssueAsync(tenantA);
 
-        // B seeds its own project with its own In-Progress issue (same status name, disjoint tenant).
+        // B's row is deliberately seeded to collide on A's REAL surrogates so that the ONLY thing
+        // able to exclude it is the EndUserId tenant filter + RLS -- not GUID scoping (a disjoint
+        // random JiraProjectId/StatusId would exclude it regardless of tenant isolation, which would
+        // make this test pass even with isolation removed). Its JiraProjectId is A's actual project
+        // row (so the base `.Where(i => i.JiraProjectId == projectA)` clause does NOT exclude it) and
+        // its StatusId is A's actual "In Progress" status row (so the filter predicate A posts WOULD
+        // match it) -- but its EndUserId is tenant B's. Both FKs are satisfied because the target rows
+        // physically exist; RLS does not enforce cross-table EndUserId consistency (verified against
+        // the tenant_isolation policies, which check only the row's own EndUserId column).
         var (_, tenantB) = await AuthedTenantAsync();
-        await SeedProjectWithOneInProgressIssueAsync(tenantB);
+        await using (var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString))
+        {
+            await conn.OpenAsync();
+            await Exec(conn, @"INSERT INTO ""Issues""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""JiraKey"",""Summary"",""StatusId"",""JiraCreatedAt"",""JiraUpdatedAt"",""LastSyncedAt"") VALUES (@i,@t,@p,'20001','B-LEAK-1','Should never leak into A',@s,now(),now(),now())",
+                ("i", Guid.NewGuid()), ("t", tenantB), ("p", projectA), ("s", statusIdA));
+        }
 
-        // A filters ITS OWN project with a condition that would also match B's issue if the base
+        // A filters ITS OWN project with the condition that would match B's colliding row if the
         // tenant filter + RLS ever failed to hold.
         var page = await QueryOkAsync(clientA, projectA,
             Req(new() { Cond("status", "Eq", value: "In Progress") }));
 
         Assert.Equal(1, page.TotalCount);
         Assert.Equal(keyA, page.Items[0].JiraKey);
+        Assert.DoesNotContain(page.Items, i => i.JiraKey == "B-LEAK-1");
     }
 
     // ============================================================
@@ -145,7 +161,7 @@ public sealed class IssueFilterSecurityTests : IClassFixture<JiraUnpackedApiFact
     public async Task Sql_injection_shaped_contains_value_matches_nothing_and_leaves_the_table_intact()
     {
         var (client, tenant) = await AuthedTenantAsync();
-        var (projectId, _) = await SeedProjectWithOneInProgressIssueAsync(tenant);
+        var (projectId, _, _) = await SeedProjectWithOneInProgressIssueAsync(tenant);
 
         var resp = await PostQueryAsync(client, projectId,
             Req(new() { Cond("summary", "Contains", value: "'; DROP TABLE \"Issues\"; --") }));
@@ -191,17 +207,27 @@ public sealed class IssueFilterSecurityTests : IClassFixture<JiraUnpackedApiFact
     public async Task Status_name_that_exists_only_in_another_tenant_resolves_to_no_matches()
     {
         var (clientA, tenantA) = await AuthedTenantAsync();
-        var (projectA, _) = await SeedProjectWithOneInProgressIssueAsync(tenantA);
+        var (projectA, _, _) = await SeedProjectWithOneInProgressIssueAsync(tenantA);
 
         // B has a status name that does not exist anywhere in A's data.
         var (_, tenantB) = await AuthedTenantAsync();
         var bOnlyStatusName = $"OnlyInTenantB-{Guid.NewGuid():N}";
         var bConnId = Guid.NewGuid();
+        var bStatusId = Guid.NewGuid();
         await using (var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString))
         {
             await conn.OpenAsync();
             await Exec(conn, @"INSERT INTO ""JiraConnections""(""Id"",""EndUserId"",""BaseUrl"",""Email"",""ApiTokenEncrypted"",""CreatedAt"") VALUES (@i,@t,'https://x','e','c',now())", ("i", bConnId), ("t", tenantB));
-            await Exec(conn, @"INSERT INTO ""Statuses""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraStatusId"",""Name"",""StatusCategory"") VALUES (@i,@t,@c,'99',@n,'new')", ("i", Guid.NewGuid()), ("t", tenantB), ("c", bConnId), ("n", bOnlyStatusName));
+            await Exec(conn, @"INSERT INTO ""Statuses""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraStatusId"",""Name"",""StatusCategory"") VALUES (@i,@t,@c,'99',@n,'new')", ("i", bStatusId), ("t", tenantB), ("c", bConnId), ("n", bOnlyStatusName));
+
+            // A's own issue is deliberately given B's REAL status row's Id as its StatusId FK. The FK
+            // only requires the target row to exist (it does, under tenant B) -- it does not require
+            // the two EndUserIds to match. If the dict-name resolver ever leaked across tenants (e.g.
+            // via IgnoreQueryFilters) and resolved bOnlyStatusName to bStatusId, THIS issue's StatusId
+            // would match and TotalCount would be 1 -- so a non-zero result here is a genuine leak
+            // signal, not a coincidence of two disjoint random Guids that could never collide anyway.
+            await Exec(conn, @"INSERT INTO ""Issues""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""JiraKey"",""Summary"",""StatusId"",""JiraCreatedAt"",""JiraUpdatedAt"",""LastSyncedAt"") VALUES (@i,@t,@p,'10002','ACME-2','Carries Bs status id',@s,now(),now(),now())",
+                ("i", Guid.NewGuid()), ("t", tenantA), ("p", projectA), ("s", bStatusId));
         }
 
         // A filters by B's status name against A's own project.
