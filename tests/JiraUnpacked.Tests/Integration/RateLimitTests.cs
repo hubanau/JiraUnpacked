@@ -92,4 +92,22 @@ public sealed class RateLimitTests : IClassFixture<RateLimitedApiFactory>, IAsyn
 
         Assert.Contains(HttpStatusCode.TooManyRequests, statuses);
     }
+
+    [Fact]
+    public async Task Sync_limiter_partitions_per_user_not_per_shared_ip()
+    {
+        // Both clients come from the same TestServer/factory, so they share a single
+        // remote IP. If the "sync" policy's partition key ever falls back to IP
+        // (e.g. because the limiter runs before authentication and User.FindFirst
+        // returns null), user B would inherit user A's exhausted bucket and 429.
+        var (clientA, projectIdA) = await AuthedProjectAsync();
+        var (clientB, projectIdB) = await AuthedProjectAsync();
+
+        for (var i = 0; i < 5; i++) // exhaust A's 5/min per-user bucket
+            await clientA.PostAsJsonAsync($"/api/projects/{projectIdA}/sync", new { });
+
+        var bStatus = (await clientB.PostAsJsonAsync($"/api/projects/{projectIdB}/sync", new { })).StatusCode;
+
+        Assert.NotEqual(HttpStatusCode.TooManyRequests, bStatus);
+    }
 }

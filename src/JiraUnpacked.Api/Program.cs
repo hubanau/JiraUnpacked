@@ -112,9 +112,13 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+// Runs after authentication/authorization so the "sync" policy's partition key
+// (the endUserId claim) is resolved from an authenticated HttpContext.User —
+// otherwise it always sees the unauthenticated principal and silently falls
+// back to the IP key, letting different users behind the same IP share a bucket.
+app.UseRateLimiter();
 app.UseMiddleware<JiraUnpacked.Api.Tenancy.TenantScopeMiddleware>();
 app.MapControllers();
 
