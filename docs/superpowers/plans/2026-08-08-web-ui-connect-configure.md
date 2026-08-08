@@ -17,7 +17,7 @@
 - **Do not modify** `session.ts`'s `refreshOnce()` single-flight logic or any `hits`/`refreshHits` assertion.
 - Access token never persisted; **no token, password, or request body logged** (no `console.*` of them).
 - `QueryClient` keeps `retry: false` and `refetchOnWindowFocus: false`.
-- **Configuration PUTs are replace-all** — editors must submit the **complete** set, never a partial patch. **No optimistic updates** on configuration writes.
+- **`PUT /field-mappings` and `PUT /status-semantics` are replace-all** — those editors must submit the **complete** set, never a partial patch, or the server deletes the rows they omitted. **`PUT /issue-types` is additive** (unlisted types keep their class) and validates the whole batch before mutating, so one unknown id rejects it entirely; sending the full set there is harmless but not required. **No optimistic updates** on configuration writes.
 - Tests target logic, **no snapshot tests**. No test may pass if the behaviour it names is broken.
 - The .NET suite (**278**) stays green and untouched; the FR-B2 gate is not touched.
 - Enums serialise **by name** — model them as TypeScript string unions.
@@ -198,7 +198,13 @@ export const putStatusSemantics = (projectId: string, statuses: StatusSemantic[]
 export const getIssueTypes = (connectionId: string) =>
   apiFetch<IssueTypeClassInfo[]>(`/api/connections/${connectionId}/issue-types`);
 
-/** Replace-all: `issueTypes` must be the COMPLETE set, not a patch. */
+/**
+ * Additive, NOT replace-all: only the listed types change and unlisted ones
+ * keep their class. The whole batch is validated before anything mutates, so
+ * one unknown id rejects the request with 400 {error}. Sending the complete
+ * set is harmless (unchanged rows are rewritten their current value) but is
+ * not required — no fetch-merge dance is needed here.
+ */
 export const putIssueTypes = (
   connectionId: string,
   issueTypes: { jiraIssueTypeId: string; class: IssueTypeClass }[],
@@ -527,7 +533,7 @@ it('sends every issue type on save, not just the edited one', async () => {
   ]});
 });
 ```
-This test is the point of the task: a "send only what changed" implementation would silently reset the other issue types on the server.
+Note the rationale here differs from CF4's. `PUT /issue-types` is **additive**, so sending only the changed row would *not* lose data. The test pins the full-set send anyway because it keeps this editor's shape identical to CF4's genuinely replace-all editors — one mental model for all three — and because the endpoint validates the entire batch, so a full send also proves every id is still valid. Do **not** carry the "silently deletes the rest" reasoning over to this endpoint; that applies to field mappings and status semantics only.
 
 - [ ] **Step 6: Wire the routes in `App.tsx`**
 
