@@ -25,4 +25,13 @@ public sealed class IssuesController : ControllerBase
         var detail = await _issues.GetDetailAsync(projectId, jiraIssueId, ct);
         return detail is null ? NotFound() : Ok(detail);
     }
+
+    [HttpPost("api/projects/{projectId:guid}/issues/query")]
+    public async Task<IActionResult> Query(Guid projectId, IssueFilterRequest request, CancellationToken ct = default)
+    {
+        var result = await _issues.QueryAsync(projectId, request, ct);
+        if (result.Error is not null)
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: result.Error);
+        return result.Result is null ? NotFound() : Ok(result.Result);
+    }
 }
