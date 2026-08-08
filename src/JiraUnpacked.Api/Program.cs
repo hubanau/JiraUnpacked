@@ -45,6 +45,11 @@ if (builder.Configuration.GetValue("Sync:SchedulerEnabled", true))
         q.AddJob<JiraUnpacked.Infrastructure.Retention.SyncRunRetentionJob>(retentionKey);
         q.AddTrigger(t => t.ForJob(retentionKey)
             .WithSimpleSchedule(s => s.WithIntervalInHours(24).RepeatForever()));
+
+        var reaperKey = new Quartz.JobKey("stuck-run-reaper");
+        q.AddJob<JiraUnpacked.Infrastructure.Sync.StuckRunReaperJob>(reaperKey);
+        q.AddTrigger(t => t.ForJob(reaperKey)
+            .WithSimpleSchedule(s => s.WithIntervalInHours(1).RepeatForever()));
     });
     builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
 }
