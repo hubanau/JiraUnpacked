@@ -29,6 +29,9 @@ builder.Services.Configure<JiraUnpacked.Infrastructure.Sync.SyncSchedulerOptions
 builder.Services.Configure<JiraUnpacked.Infrastructure.Retention.RetentionOptions>(
     builder.Configuration.GetSection(JiraUnpacked.Infrastructure.Retention.RetentionOptions.SectionName));
 
+builder.Services.Configure<JiraUnpacked.Infrastructure.Security.SecurityOptions>(
+    builder.Configuration.GetSection(JiraUnpacked.Infrastructure.Security.SecurityOptions.SectionName));
+
 if (builder.Configuration.GetValue("Sync:SchedulerEnabled", true))
 {
     builder.Services.AddQuartz(q =>
@@ -111,6 +114,12 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+var securityOptions = app.Services.GetRequiredService<
+    Microsoft.Extensions.Options.IOptions<JiraUnpacked.Infrastructure.Security.SecurityOptions>>().Value;
+if (JiraUnpacked.Api.Security.HstsGate.ShouldEnableHsts(app.Environment.IsDevelopment(), securityOptions.HstsEnabled))
+{
+    app.UseHsts();
+}
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
