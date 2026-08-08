@@ -46,7 +46,7 @@
 
 ---
 
-## Task WF1: Scaffold, toolchain, and CI
+## Task 1 (WF1): Scaffold, toolchain, and CI
 
 **Files:**
 - Create: `src/JiraUnpacked.Web/package.json`, `tsconfig.json`, `tsconfig.node.json`, `vite.config.ts`, `eslint.config.js`, `index.html`, `src/main.tsx`, `src/App.tsx`, `src/theme.css`, `src/test/setup.ts`, `src/test/handlers.ts`, `src/smoke.test.ts`
@@ -364,7 +364,7 @@ git commit -m "feat(web): Vite + React + TS scaffold, test harness, and CI job"
 
 ---
 
-## Task WF2: Serve the SPA from the API
+## Task 2 (WF2): Serve the SPA from the API
 
 **Files:**
 - Modify: `src/JiraUnpacked.Api/Program.cs`
@@ -496,7 +496,7 @@ git commit -m "feat(api): serve the SPA from wwwroot without shadowing /api rout
 
 ---
 
-## Task WF3: Design system and theme
+## Task 3 (WF3): Design system and theme
 
 **Files:**
 - Create: `src/JiraUnpacked.Web/src/theme.css` (replace WF1 placeholder), `src/ui/Button.tsx`, `Field.tsx`, `Select.tsx`, `Card.tsx`, `Table.tsx`, `Badge.tsx`, `Spinner.tsx`, `EmptyState.tsx`, `ErrorState.tsx`, `Toast.tsx`, `Modal.tsx`, `src/ui/useTheme.ts`, `src/ui/ThemeToggle.tsx`, `src/ui/index.ts`
@@ -745,7 +745,7 @@ git commit -m "feat(web): theme tokens, light/dark toggle, and UI primitives"
 
 ---
 
-## Task WF4: API client and error normalisation
+## Task 4 (WF4): API client and error normalisation
 
 **Files:**
 - Create: `src/JiraUnpacked.Web/src/api/errors.ts`, `src/api/client.ts`, `src/api/auth.ts`
@@ -1153,7 +1153,7 @@ git commit -m "feat(web): typed API client with ProblemDetails normalisation and
 
 ---
 
-## Task WF5: Token store, single-flight refresh, and auth context
+## Task 5 (WF5): Token store, single-flight refresh, and auth context
 
 **Files:**
 - Create: `src/JiraUnpacked.Web/src/auth/session.ts`, `src/auth/AuthContext.tsx`
@@ -1591,7 +1591,7 @@ git commit -m "feat(web): session store with single-flight refresh and auth cont
 
 ---
 
-## Task WF6: Authentication screens
+## Task 6 (WF6): Authentication screens
 
 **Files:**
 - Create: `src/JiraUnpacked.Web/src/auth/password.ts`, `src/routes/Login.tsx`, `src/routes/Register.tsx`, `src/routes/Verify.tsx`
@@ -1804,7 +1804,7 @@ git commit -m "feat(web): login, register with policy meter, and verify screens"
 
 ---
 
-## Task WF7: App shell, routing, and guards
+## Task 7 (WF7): App shell, routing, and guards
 
 **Files:**
 - Create: `src/JiraUnpacked.Web/src/auth/RequireAuth.tsx`, `src/shell/AppShell.tsx`, `src/shell/SideNav.tsx`, `src/shell/UserMenu.tsx`, `src/routes/Home.tsx`, `src/routes/NotFound.tsx`
