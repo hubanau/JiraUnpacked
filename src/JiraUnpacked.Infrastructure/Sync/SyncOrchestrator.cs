@@ -105,21 +105,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         }
         catch (Exception ex)
         {
-            run.Status = SyncRunStatus.Failed;
-            // JiraApiException messages are curated + safe (the token never appears in them), so keep them.
-            // Anything else (DbUpdateException, Npgsql, JSON parse, ...) can carry raw infra detail — SQL
-            // fragments, column names — which must not land in this tenant-readable field. Log it server-side
-            // and persist a generic message instead.
-            if (ex is JiraApiException)
-            {
-                run.Error = ex.Message;
-            }
-            else
-            {
-                _logger.LogError(ex, "Unexpected failure syncing project {ProjectId}", projectId);
-                run.Error = "Sync failed unexpectedly.";
-            }
-            run.FinishedAt = _clock.UtcNow;
+            SetFailure(run, ex, projectId);
             run.NextRunAt = _clock.UtcNow.AddMinutes(project.SyncIntervalMinutes);
             await _db.SaveChangesAsync(ct);
         }
@@ -149,10 +135,28 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         }
         catch (Exception ex)
         {
-            run.Status = SyncRunStatus.Failed; run.Error = ex.Message; run.FinishedAt = _clock.UtcNow;
+            SetFailure(run, ex, projectId);
             await _db.SaveChangesAsync(ct);
         }
         return new SyncRunResult(SyncOutcome.Completed, ToView(run));
+    }
+
+    // Sets the run's failure fields, keeping raw infrastructure detail out of the tenant-readable
+    // Error. JiraApiException messages are curated + token-free; anything else is logged server-side
+    // and replaced with a generic message.
+    private void SetFailure(SyncRun run, Exception ex, Guid projectId)
+    {
+        run.Status = SyncRunStatus.Failed;
+        run.FinishedAt = _clock.UtcNow;
+        if (ex is JiraApiException)
+        {
+            run.Error = ex.Message;
+        }
+        else
+        {
+            _logger.LogError(ex, "Unexpected failure syncing project {ProjectId}", projectId);
+            run.Error = "Sync failed unexpectedly.";
+        }
     }
 
     // Inserts the Running SyncRun, translating the partial-unique-index violation (lost race)
