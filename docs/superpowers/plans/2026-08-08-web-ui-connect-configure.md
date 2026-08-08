@@ -714,14 +714,12 @@ export function FieldMappingsEditor({ projectId, connectionId }: { projectId: st
   const [filter, setFilter] = useState('');
   const [chosen, setChosen] = useState<Partial<Record<FieldRole, string>>>({});
 
-  if (fields.isPending || saved.isPending) return <Spinner aria-label="Loading field mappings" />;
-  if (fields.error || saved.error) return <ErrorState title="Could not load fields." />;
-
+  // EVERY hook must run before any conditional return — React's Rules of Hooks.
+  // Putting `useMutation` after the loading/error early-returns below throws
+  // "Rendered more hooks than during the previous render" the moment the data
+  // arrives and the component takes a different path.
   const current = (role: FieldRole) =>
-    chosen[role] ?? saved.data.find((m) => m.role === role)?.jiraFieldId ?? '';
-
-  const visible = fields.data.filter((f) =>
-    f.name.toLowerCase().includes(filter.trim().toLowerCase()));
+    chosen[role] ?? saved.data?.find((m) => m.role === role)?.jiraFieldId ?? '';
 
   // Replace-all: send every role that has a field, including ones untouched
   // this session. Sending only edits would delete the rest server-side.
@@ -737,6 +735,12 @@ export function FieldMappingsEditor({ projectId, connectionId }: { projectId: st
       void queryClient.invalidateQueries({ queryKey: queryKeys.fieldMappings(projectId) });
     },
   });
+
+  if (fields.isPending || saved.isPending) return <Spinner aria-label="Loading field mappings" />;
+  if (fields.error || saved.error) return <ErrorState title="Could not load fields." />;
+
+  const visible = fields.data.filter((f) =>
+    f.name.toLowerCase().includes(filter.trim().toLowerCase()));
 
   return (
     <section>
