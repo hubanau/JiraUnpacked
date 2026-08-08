@@ -92,7 +92,13 @@ describe('refreshOnce', () => {
     expect(hits).toBe(0);
   });
 
-  it('resolves false without throwing when localStorage access fails', async () => {
+  // Note: this does not specifically exercise safeGetItem's try/catch — even
+  // without it, doRefresh's own outer catch would swallow the throw and
+  // return false here too. It's kept as a smoke check that a thrown storage
+  // read never escapes refreshOnce(); AuthContext.test.tsx's "reaches
+  // authenticated even when localStorage.setItem throws" is the test that
+  // actually pins the safe-wrapper behaviour to a real call site.
+  it('resolves false without throwing when the refresh-token read fails', async () => {
     const getItemSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('storage disabled');
     });

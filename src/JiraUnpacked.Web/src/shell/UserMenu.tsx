@@ -11,15 +11,23 @@ function DeleteAccountDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [detail, setDetail] = useState<string | null>(null);
 
   async function confirm() {
     setBusy(true);
     setError(null);
+    setDetail(null);
     try {
       await deleteMe();
       await signOut();
     } catch (e) {
-      setError(e instanceof ApiError ? e.title : 'Could not delete the account.');
+      if (e instanceof ApiError) {
+        setError(e.title);
+        setDetail(e.detail ?? null);
+      } else {
+        setError('Could not delete the account.');
+        setDetail(null);
+      }
       setBusy(false);
     }
   }
@@ -33,6 +41,7 @@ function DeleteAccountDialog({ open, onClose }: { open: boolean; onClose: () => 
       <Field label={`Type ${CONFIRM_WORD} to confirm`} id="confirm-delete" error={error ?? undefined}>
         <input id="confirm-delete" value={typed} onChange={(e) => setTyped(e.target.value)} />
       </Field>
+      {detail && <p>{detail}</p>}
       <Button variant="danger" disabled={typed !== CONFIRM_WORD} loading={busy} onClick={() => void confirm()}>
         Delete account
       </Button>
@@ -85,7 +94,10 @@ export function UserMenu() {
           </button>
         </div>
       )}
-      <DeleteAccountDialog open={deleteOpen} onClose={() => setDeleteOpen(false)} />
+      {/* Mounted only while open: the dialog's typed/error state must not
+          survive a close, or a prior "DELETE" entry + Escape leaves the
+          confirm button armed the next time the dialog is opened. */}
+      {deleteOpen && <DeleteAccountDialog open onClose={() => setDeleteOpen(false)} />}
     </div>
   );
 }

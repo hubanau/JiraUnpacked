@@ -25,7 +25,10 @@ export default function Register() {
     setDetail(null);
     try {
       await register(inviteCode, email, username, password);
-      navigate(`/verify?email=${encodeURIComponent(email)}`);
+      // Router state, not a query string: a query string would put the
+      // email in server access logs and browser history. Verify.tsx still
+      // falls back to ?email=... for a bookmarked/existing link.
+      navigate('/verify', { state: { email } });
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.title);

@@ -19,7 +19,7 @@ let inFlight: Promise<boolean> | null = null;
  * stored" rather than letting it propagate — a storage failure should
  * degrade to a logged-out state, not hang or crash the caller.
  */
-function safeGetItem(key: string): string | null {
+export function safeGetItem(key: string): string | null {
   try {
     return localStorage.getItem(key);
   } catch {
@@ -27,7 +27,7 @@ function safeGetItem(key: string): string | null {
   }
 }
 
-function safeSetItem(key: string, value: string): void {
+export function safeSetItem(key: string, value: string): void {
   try {
     localStorage.setItem(key, value);
   } catch {
@@ -35,7 +35,7 @@ function safeSetItem(key: string, value: string): void {
   }
 }
 
-function safeRemoveItem(key: string): void {
+export function safeRemoveItem(key: string): void {
   try {
     localStorage.removeItem(key);
   } catch {

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Button, Card, Field } from '../ui';
 import { ApiError } from '../api/errors';
 import { resendVerification, verify } from '../api/auth';
@@ -7,15 +7,23 @@ import { resendVerification, verify } from '../api/auth';
 const RESEND_COOLDOWN_SECONDS = 60;
 
 export default function Verify() {
+  const location = useLocation();
   const [searchParams] = useSearchParams();
-  const email = searchParams.get('email') ?? '';
+  // Prefer the email passed via router state (Register navigates this way so
+  // the address doesn't land in the URL, server access logs, or browser
+  // history). Fall back to the ?email= query string so an existing or
+  // bookmarked /verify?email=... link still works.
+  const stateEmail = (location.state as { email?: string } | null)?.email;
+  const email = stateEmail ?? searchParams.get('email') ?? '';
   const navigate = useNavigate();
 
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [detail, setDetail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const [resendError, setResendError] = useState<string | null>(null);
+  const [resendDetail, setResendDetail] = useState<string | null>(null);
   const [resendBusy, setResendBusy] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(0);
 
@@ -32,11 +40,18 @@ export default function Verify() {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    setDetail(null);
     try {
       await verify(email, code);
       navigate('/login');
     } catch (err) {
-      setError(err instanceof ApiError ? err.title : 'Verification failed.');
+      if (err instanceof ApiError) {
+        setError(err.title);
+        setDetail(err.detail ?? null);
+      } else {
+        setError('Verification failed.');
+        setDetail(null);
+      }
       setBusy(false);
     }
   }
@@ -44,11 +59,18 @@ export default function Verify() {
   async function resend() {
     setResendBusy(true);
     setResendError(null);
+    setResendDetail(null);
     try {
       await resendVerification(email);
       setSecondsLeft(RESEND_COOLDOWN_SECONDS);
     } catch (err) {
-      setResendError(err instanceof ApiError ? err.title : 'Could not resend the code.');
+      if (err instanceof ApiError) {
+        setResendError(err.title);
+        setResendDetail(err.detail ?? null);
+      } else {
+        setResendError('Could not resend the code.');
+        setResendDetail(null);
+      }
     } finally {
       setResendBusy(false);
     }
@@ -59,14 +81,24 @@ export default function Verify() {
       <form onSubmit={submit}>
         <h1>Verify your email</h1>
         <p>We sent a verification code to {email}.</p>
-        {error && <p role="alert">{error}</p>}
+        {error && (
+          <div role="alert">
+            <p>{error}</p>
+            {detail && <p>{detail}</p>}
+          </div>
+        )}
         <Field label="Verification code" id="code">
           <input id="code" autoComplete="one-time-code" value={code}
                  onChange={(e) => setCode(e.target.value)} />
         </Field>
         <Button type="submit" loading={busy}>Verify</Button>
       </form>
-      {resendError && <p role="alert">{resendError}</p>}
+      {resendError && (
+        <div role="alert">
+          <p>{resendError}</p>
+          {resendDetail && <p>{resendDetail}</p>}
+        </div>
+      )}
       <Button
         type="button"
         variant="secondary"

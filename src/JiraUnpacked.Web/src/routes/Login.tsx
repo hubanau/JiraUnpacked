@@ -11,19 +11,27 @@ export default function Login() {
   const [emailOrUsername, setEmailOrUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [detail, setDetail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    setDetail(null);
     try {
       await signIn(emailOrUsername, password);
       // Return the user to whatever they originally asked for.
       const from = (location.state as { from?: string } | null)?.from ?? '/';
       navigate(from, { replace: true });
     } catch (err) {
-      setError(err instanceof ApiError ? err.title : 'Sign-in failed.');
+      if (err instanceof ApiError) {
+        setError(err.title);
+        setDetail(err.detail ?? null);
+      } else {
+        setError('Sign-in failed.');
+        setDetail(null);
+      }
       setBusy(false);
     }
   }
@@ -32,7 +40,12 @@ export default function Login() {
     <Card>
       <form onSubmit={submit}>
         <h1>Sign in</h1>
-        {error && <p role="alert">{error}</p>}
+        {error && (
+          <div role="alert">
+            <p>{error}</p>
+            {detail && <p>{detail}</p>}
+          </div>
+        )}
         <Field label="Email or username" id="identifier">
           <input id="identifier" autoComplete="username" value={emailOrUsername}
                  onChange={(e) => setEmailOrUsername(e.target.value)} />

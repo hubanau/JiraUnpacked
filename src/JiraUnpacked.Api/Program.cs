@@ -143,6 +143,13 @@ app.MapControllers();
 // SPA fallback below would answer it with index.html and HTTP 200, and clients
 // would parse HTML as JSON. Catch-all routes have the lowest precedence, so
 // every real controller route still wins.
+//
+// Deliberate, known trade-off: Map() (unlike MapGet/MapPost/...) matches
+// every HTTP method, so a request that hits a real route with the wrong
+// verb - e.g. POST /api/auth/me, which only accepts GET - now falls through
+// to this catch-all and gets 404 Not Found instead of the framework's usual
+// 405 Method Not Allowed. Acceptable for a SPA API: callers still get an
+// unambiguous failure, just not the most specific status code.
 app.Map("/api/{**rest}", () => Results.NotFound());
 // Any other unmatched path serves the SPA shell so client-side routing works on
 // a deep-link refresh.

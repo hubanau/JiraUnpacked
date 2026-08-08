@@ -1,18 +1,19 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../test/setup';
 import { REFRESH_KEY, USERNAME_KEY, getAccessToken } from './session';
 import { AuthProvider, useAuth } from './AuthContext';
 
 function Probe() {
-  const { status, role, username, signOut } = useAuth();
+  const { status, role, username, signIn, signOut } = useAuth();
   return (
     <div>
       <span data-testid="status">{status}</span>
       <span data-testid="role">{role ?? 'none'}</span>
       <span data-testid="username">{username ?? 'none'}</span>
+      <button onClick={() => void signIn('someone', 'whatever12A!')}>sign in</button>
       <button onClick={() => void signOut()}>sign out</button>
     </div>
   );
@@ -69,6 +70,37 @@ describe('AuthProvider boot', () => {
 
     expect(await screen.findByText('anonymous')).toBeInTheDocument();
     expect(localStorage.getItem(REFRESH_KEY)).toBeNull();
+  });
+});
+
+describe('signIn', () => {
+  // Regression for: AuthContext.signIn wrote the display username via a raw
+  // localStorage.setItem, so a blocked/full store threw AFTER the tokens
+  // were already saved — the promise rejected, status never reached
+  // 'authenticated', and the user saw "Sign-in failed." despite valid
+  // credentials. It must route through session's safe wrapper instead.
+  it('reaches authenticated even when localStorage.setItem throws', async () => {
+    server.use(
+      http.post('/api/auth/login', () => HttpResponse.json({
+        accessToken: 'access-1', expiresAtUtc: '2099-01-01T00:00:00Z', refreshToken: 'refresh-1',
+      })),
+      http.get('/api/auth/me', () => HttpResponse.json({ sub: 'u', role: 'Admin', endUserId: 'e' })),
+    );
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage disabled');
+    });
+
+    try {
+      renderProbe();
+      await screen.findByText('anonymous');
+
+      await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
+
+      expect(await screen.findByText('authenticated')).toBeInTheDocument();
+      expect(screen.getByTestId('username')).toHaveTextContent('someone');
+    } finally {
+      setItemSpy.mockRestore();
+    }
   });
 });
 
