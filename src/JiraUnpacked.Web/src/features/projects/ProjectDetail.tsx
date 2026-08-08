@@ -5,6 +5,8 @@ import { Button, Card, ErrorState, Spinner } from '../../ui';
 import { ApiError } from '../../api/errors';
 import { getProject, MIN_SYNC_INTERVAL_MINUTES, updateSyncInterval } from '../../api/projects';
 import { queryKeys } from '../../api/queryKeys';
+import { FieldMappingsEditor } from '../config/FieldMappingsEditor';
+import { StatusSemanticsEditor } from '../config/StatusSemanticsEditor';
 import { SyncIntervalField } from './SyncIntervalField';
 
 type TabKey = 'overview' | 'fields' | 'statuses';
@@ -117,11 +119,9 @@ export default function ProjectDetail() {
             </p>
           )}
           {activeTab === 'fields' && (
-            <p className="text-sm text-[var(--ju-muted)]">Field mappings will appear here.</p>
+            <FieldMappingsEditor projectId={id} connectionId={project.jiraConnectionId} />
           )}
-          {activeTab === 'statuses' && (
-            <p className="text-sm text-[var(--ju-muted)]">Status semantics will appear here.</p>
-          )}
+          {activeTab === 'statuses' && <StatusSemanticsEditor projectId={id} />}
         </div>
       </div>
     </div>
