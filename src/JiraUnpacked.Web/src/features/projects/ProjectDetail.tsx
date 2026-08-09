@@ -3,9 +3,12 @@ import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, ErrorState, Spinner } from '../../ui';
 import { ApiError } from '../../api/errors';
+import { getFieldMappings, getIssueTypes, getStatusSemantics, listJiraStatuses } from '../../api/mappings';
 import { getProject, MIN_SYNC_INTERVAL_MINUTES, updateSyncInterval } from '../../api/projects';
 import { queryKeys } from '../../api/queryKeys';
 import { FieldMappingsEditor } from '../config/FieldMappingsEditor';
+import { ReadinessChecklist } from '../config/ReadinessChecklist';
+import { deriveReadiness } from '../config/readiness';
 import { StatusSemanticsEditor } from '../config/StatusSemanticsEditor';
 import { SyncControls } from '../sync/SyncControls';
 import { SyncRunTable } from '../sync/SyncRunTable';
@@ -35,6 +38,28 @@ export default function ProjectDetail() {
   const { data: project, isPending, error } = useQuery({
     queryKey: queryKeys.project(id),
     queryFn: () => getProject(id),
+  });
+
+  // Readiness needs these three lists too, but the checklist itself must
+  // never gate rendering of the project — Rules of Hooks means every one of
+  // these stays above the pending/error return below, paired with `?? []`
+  // and `.data` optional chaining since each is undefined while in flight.
+  const fieldMappingsQuery = useQuery({
+    queryKey: queryKeys.fieldMappings(id),
+    queryFn: () => getFieldMappings(id),
+  });
+  const jiraStatusesQuery = useQuery({
+    queryKey: queryKeys.jiraStatuses(id),
+    queryFn: () => listJiraStatuses(id),
+  });
+  const statusSemanticsQuery = useQuery({
+    queryKey: queryKeys.statusSemantics(id),
+    queryFn: () => getStatusSemantics(id),
+  });
+  const issueTypesQuery = useQuery({
+    queryKey: queryKeys.issueTypes(project?.jiraConnectionId ?? ''),
+    queryFn: () => getIssueTypes(project?.jiraConnectionId ?? ''),
+    enabled: Boolean(project?.jiraConnectionId),
   });
 
   const save = useMutation({
@@ -84,7 +109,18 @@ export default function ProjectDetail() {
         </Card>
       </header>
 
-      {/* CF6 inserts the readiness checklist here, between the header and the tab strip. */}
+      {fieldMappingsQuery.data && jiraStatusesQuery.data && statusSemanticsQuery.data && issueTypesQuery.data && (
+        <ReadinessChecklist
+          readiness={deriveReadiness({
+            fieldMappings: fieldMappingsQuery.data,
+            jiraStatuses: jiraStatusesQuery.data,
+            statusSemantics: statusSemanticsQuery.data,
+            issueTypes: issueTypesQuery.data,
+          })}
+          connectionId={project.jiraConnectionId}
+          onSelectTab={setActiveTab}
+        />
+      )}
 
       <div>
         <div role="tablist" aria-label="Project sections" className="flex gap-4 border-b border-[var(--ju-border)]">
