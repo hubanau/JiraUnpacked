@@ -96,6 +96,16 @@ describe('FieldMappingsEditor', () => {
     );
     renderEditor();
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/could not load fields/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/something went wrong/i);
+  });
+
+  it('shows the upstream-Jira message when the live field list 502s', async () => {
+    server.use(
+      http.get('/api/connections/c1/fields', () => new HttpResponse(null, { status: 502 })),
+      http.get('/api/projects/p1/field-mappings', () => HttpResponse.json(SAVED_MAPPINGS)),
+    );
+    renderEditor();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/jira did not respond as expected/i);
   });
 });

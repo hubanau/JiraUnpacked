@@ -84,7 +84,13 @@ describe('mappings api sends replace-all bodies', () => {
 
     expect(body).toEqual({ statuses: [{ jiraStatusId: '1', statusName: 'To Do', class: 'Active' }] });
   });
+});
 
+// Unlike the two replace-all endpoints above, PUT .../issue-types is
+// additive: SetAsync mutates only the listed rows and leaves unlisted ones
+// alone. It does validate the whole batch before mutating anything, so one
+// unknown id rejects the entire request with 400 {error}.
+describe('mappings api: issue types (additive, not replace-all)', () => {
   it('wraps issue types under `issueTypes` and surfaces the {error} 400 shape', async () => {
     server.use(http.put('/api/connections/c1/issue-types', () =>
       HttpResponse.json({ error: 'Unknown jiraIssueTypeId: 99' }, { status: 400 })));

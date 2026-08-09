@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { Badge, Card } from '../../ui';
 import type { Readiness } from './readiness';
 
-export type ReadinessTab = 'fields' | 'statuses';
+type ReadinessTab = 'fields' | 'statuses';
 
 interface ReadinessChecklistProps {
   readiness: Readiness;
@@ -52,7 +52,8 @@ export function ReadinessChecklist({ readiness, connectionId, onSelectTab }: Rea
             <p className="text-sm text-[var(--ju-text)]">All statuses are classified.</p>
           ) : (
             <p className="text-sm text-[var(--ju-text)]">
-              {readiness.statusSemantics.missingStatusNames.length} statuses unclassified:{' '}
+              {readiness.statusSemantics.missingStatusNames.length}{' '}
+              {readiness.statusSemantics.missingStatusNames.length === 1 ? 'status' : 'statuses'} unclassified:{' '}
               {readiness.statusSemantics.missingStatusNames.join(', ')} — cycle time and throughput
               cannot be computed until every status has a class.{' '}
               <button type="button" className="text-[var(--ju-primary)] underline" onClick={() => onSelectTab('statuses')}>

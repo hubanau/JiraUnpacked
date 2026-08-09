@@ -8,7 +8,7 @@ export interface ReadinessInput {
 }
 
 export interface ReadinessStep { ready: boolean }
-export interface StatusStep extends ReadinessStep { missingStatusNames: string[] }
+interface StatusStep extends ReadinessStep { missingStatusNames: string[] }
 
 export interface Readiness {
   fieldMappings: ReadinessStep;

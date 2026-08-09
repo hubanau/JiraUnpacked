@@ -55,7 +55,7 @@ describe('ReadinessChecklist (mounted in ProjectDetail)', () => {
     useIncompleteSetupHandlers();
     renderProjectDetail();
 
-    expect(await screen.findByText(/statuses unclassified/i)).toBeInTheDocument();
+    expect(await screen.findByText(/unclassified/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /sync now/i })).toBeEnabled();
   });
 
@@ -63,6 +63,9 @@ describe('ReadinessChecklist (mounted in ProjectDetail)', () => {
     useIncompleteSetupHandlers();
     renderProjectDetail();
 
-    expect(await screen.findByText(/Done/)).toBeInTheDocument();
+    // Exactly one status ("Done") is missing here, so the singular form
+    // applies — this also pins the pluralisation, not just that some
+    // element somewhere contains the word "Done".
+    expect(await screen.findByText(/1 status unclassified: Done/i)).toBeInTheDocument();
   });
 });

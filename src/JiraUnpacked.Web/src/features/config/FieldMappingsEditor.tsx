@@ -44,7 +44,18 @@ export function FieldMappingsEditor({ projectId, connectionId }: { projectId: st
   });
 
   if (fields.isPending || saved.isPending) return <Spinner aria-label="Loading field mappings" />;
-  if (fields.error || saved.error) return <ErrorState title="Could not load fields." />;
+  if (fields.error) {
+    return (
+      <ErrorState title={fields.error instanceof ApiError ? fields.error.title : 'Could not load fields.'} />
+    );
+  }
+  if (saved.error) {
+    return (
+      <ErrorState
+        title={saved.error instanceof ApiError ? saved.error.title : 'Could not load field mappings.'}
+      />
+    );
+  }
 
   const visible = fields.data.filter((f) =>
     f.name.toLowerCase().includes(filter.trim().toLowerCase()));

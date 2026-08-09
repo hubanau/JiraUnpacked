@@ -13,7 +13,11 @@ export function IssueTypeClassEditor({ connectionId }: { connectionId: string })
   });
 
   // Local edits keyed by issue-type id; the submit merges them back over the
-  // full fetched list so untouched rows are still sent (the PUT is replace-all).
+  // full fetched list so every row is sent, not only the edited ones. Sends
+  // the complete set for consistency with the replace-all editors. This
+  // endpoint is additive — unlisted types keep their class — so omitting
+  // rows would be safe, but the whole batch is validated, so every id must
+  // be valid.
   const [edits, setEdits] = useState<Record<string, IssueTypeClass>>({});
 
   const save = useMutation({
