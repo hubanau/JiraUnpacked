@@ -7,14 +7,15 @@ import { getProject, MIN_SYNC_INTERVAL_MINUTES, updateSyncInterval } from '../..
 import { queryKeys } from '../../api/queryKeys';
 import { FieldMappingsEditor } from '../config/FieldMappingsEditor';
 import { StatusSemanticsEditor } from '../config/StatusSemanticsEditor';
+import { SyncControls } from '../sync/SyncControls';
+import { SyncRunTable } from '../sync/SyncRunTable';
 import { SyncIntervalField } from './SyncIntervalField';
 
 type TabKey = 'overview' | 'fields' | 'statuses';
 
 // CF4 fills Fields and Statuses with the mapping editors; CF5 fills
-// Overview with sync controls and run history. This task only renders the
-// shell — a tab strip in local state (no router nesting needed) with a
-// placeholder per tab.
+// Overview with sync controls and run history. The tab strip itself is
+// local state (no router nesting needed).
 const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
   { key: 'overview', label: 'Overview' },
   { key: 'fields', label: 'Fields' },
@@ -114,9 +115,10 @@ export default function ProjectDetail() {
           className="pt-4"
         >
           {activeTab === 'overview' && (
-            <p className="text-sm text-[var(--ju-muted)]">
-              Sync controls and run history will appear here.
-            </p>
+            <div className="flex flex-col gap-4">
+              <SyncControls projectId={id} />
+              <SyncRunTable projectId={id} />
+            </div>
           )}
           {activeTab === 'fields' && (
             <FieldMappingsEditor projectId={id} connectionId={project.jiraConnectionId} />
