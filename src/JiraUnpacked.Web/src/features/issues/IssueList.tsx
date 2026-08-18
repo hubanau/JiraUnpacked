@@ -6,6 +6,7 @@ import { DEFAULT_PAGE_SIZE, queryIssues } from '../../api/issues';
 import type { FilterCondition, IssueFilterRequest, IssueListItem, PagedResult } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
 import { Button, EmptyState, Spinner, Table, TBody, TD, TH, THead, TR } from '../../ui';
+import { FilterBuilder } from './FilterBuilder';
 
 const EMPTY = '—'; // '—' — never render the string "null" for a nullable field.
 
@@ -24,11 +25,6 @@ export default function IssueList({ initialConditions = [] }: IssueListProps = {
   // IssueList owns this state so EX3's FilterBuilder can drive it via
   // onChange once it mounts in the slot below.
   const [conditions, setConditions] = useState<FilterCondition[]>(initialConditions);
-  // `setConditions` has no caller yet — EX3 wires `onChange={setConditions}`
-  // when it mounts <FilterBuilder /> in the slot below. Referencing it here
-  // keeps the state (and its setter) already owned by this component ahead
-  // of that, without tripping noUnusedLocals in the meantime.
-  void setConditions;
 
   const [page, setPage] = useState(1);
 
@@ -81,7 +77,7 @@ export default function IssueList({ initialConditions = [] }: IssueListProps = {
         </p>
       )}
 
-      {/* EX3 mounts <FilterBuilder conditions={conditions} onChange={setConditions} /> here. */}
+      <FilterBuilder conditions={conditions} onChange={setConditions} />
 
       {showEmpty && conditions.length === 0 && (
         <EmptyState

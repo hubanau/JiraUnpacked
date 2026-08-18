@@ -115,6 +115,34 @@ describe('IssueList', () => {
     await waitFor(() => expect(pages).toContain(2));
   });
 
+  it('resets to page 1 when a filter condition changes', async () => {
+    // Narrowing a filter can shrink the result set below the page the user
+    // was sitting on — without this reset, that looks exactly like "no
+    // matches this filter" when it is really just a stale page number.
+    // EX3's FilterBuilder is the first thing that can drive `conditions`
+    // through the UI, so this is the first place that can exercise it.
+    const pages: number[] = [];
+    server.use(
+      http.post('/api/projects/p1/issues/query', async ({ request }) => {
+        const body = (await request.json()) as { page: number };
+        pages.push(body.page);
+        return HttpResponse.json({ items: [row('ACME-1')], page: body.page, pageSize: 50, totalCount: 120 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderList();
+    await screen.findByText('ACME-1');
+
+    await user.click(screen.getByRole('button', { name: /next/i }));
+    await waitFor(() => expect(pages).toContain(2));
+
+    // Changing the condition set (adding a row is enough) must send the
+    // very next request back on page 1.
+    await user.click(screen.getByRole('button', { name: /add condition/i }));
+
+    await waitFor(() => expect(pages[pages.length - 1]).toBe(1));
+  });
+
   it('never requests a pageSize above the API maximum', async () => {
     let sent = 0;
     server.use(
