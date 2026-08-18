@@ -162,3 +162,17 @@ export default function IssueList({ initialConditions = [] }: IssueListProps = {
     </div>
   );
 }
+
+/**
+ * Route-level wrapper. React Router does not remount a component when only
+ * a route param changes at the same path — a direct
+ * /projects/A/issues -> /projects/B/issues transition would otherwise carry
+ * IssueList's `page`, `conditions`, and `lastGoodData` state from project A
+ * into project B, so a failed request for B could render its error above
+ * A's stale rows (looking like real data for the wrong project). Keying by
+ * `id` forces a clean remount on every project switch instead.
+ */
+export function IssueListRoute() {
+  const { id = '' } = useParams();
+  return <IssueList key={id} />;
+}

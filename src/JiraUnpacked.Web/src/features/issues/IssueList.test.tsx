@@ -1,11 +1,11 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/setup';
-import IssueList from './IssueList';
+import IssueList, { IssueListRoute } from './IssueList';
 import type { FilterCondition, IssueListItem } from '../../api/issues';
 import { MAX_PAGE_SIZE } from '../../api/issues';
 
@@ -16,6 +16,33 @@ function renderList({ initialConditions }: { initialConditions?: FilterCondition
       <MemoryRouter initialEntries={['/projects/p1/issues']}>
         <Routes>
           <Route path="/projects/:id/issues" element={<IssueList initialConditions={initialConditions} />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+// Drives a same-app navigation between two projects' issue lists, the way a
+// real project switcher (or EX5's Home/ProjectDetail links) eventually will,
+// so the regression test below exercises the actual route wiring rather
+// than a contrived remount.
+function NavigateButton({ to }: { to: string }) {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => navigate(to)}>
+      switch project
+    </button>
+  );
+}
+
+function renderRoute() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/projects/p1/issues']}>
+        <NavigateButton to="/projects/p2/issues" />
+        <Routes>
+          <Route path="/projects/:id/issues" element={<IssueListRoute />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -122,5 +149,26 @@ describe('IssueList', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/unknown field/i);
     expect(screen.getByText('ACME-1')).toBeInTheDocument();
+  });
+
+  it('does not leak stale rows from one project into another after navigating between projects', async () => {
+    // React Router does not remount on a param-only change at the same
+    // route path, so page/conditions/lastGoodData could otherwise survive
+    // a project switch. p1 succeeds with a row; switching to p2 (whose
+    // request 400s) must show p2's error WITHOUT p1's row still on screen.
+    server.use(
+      http.post('/api/projects/p1/issues/query', () =>
+        HttpResponse.json({ items: [row('ACME-1')], page: 1, pageSize: 50, totalCount: 1 })),
+      http.post('/api/projects/p2/issues/query', () =>
+        HttpResponse.json({ title: 'Unknown field: bogus' }, { status: 400 })),
+    );
+    const user = userEvent.setup();
+    renderRoute();
+    await screen.findByText('ACME-1');
+
+    await user.click(screen.getByRole('button', { name: /switch project/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/unknown field/i);
+    expect(screen.queryByText('ACME-1')).not.toBeInTheDocument();
   });
 });
