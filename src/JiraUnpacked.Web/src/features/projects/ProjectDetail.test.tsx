@@ -74,4 +74,12 @@ describe('ProjectDetail sync interval', () => {
       expect(body).toEqual({ syncIntervalMinutes: 120 });
     });
   });
+
+  it('offers a link to the project’s issue list', async () => {
+    useBaseHandlers();
+    renderProjectDetail();
+
+    expect(await screen.findByRole('link', { name: /browse issues/i }))
+      .toHaveAttribute('href', '/projects/p1/issues');
+  });
 });

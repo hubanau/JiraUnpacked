@@ -55,7 +55,7 @@ describe('FilterBuilder', () => {
 
   it('sends neither value nor values for IsNull', async () => {
     const { bodies } = mockIssuesQuery();
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderIssueList();
     await addCondition(user);
 
@@ -72,7 +72,7 @@ describe('FilterBuilder', () => {
 
   it('sends values (not value) for In', async () => {
     const { bodies } = mockIssuesQuery();
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderIssueList();
     await addCondition(user);
 
@@ -94,7 +94,7 @@ describe('FilterBuilder', () => {
 
   it('sends value (not values) for a single-value operator', async () => {
     const { bodies } = mockIssuesQuery();
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderIssueList();
     await addCondition(user);
 
@@ -115,7 +115,7 @@ describe('FilterBuilder', () => {
 
   it('sends a number for a Decimal field', async () => {
     const { bodies } = mockIssuesQuery();
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderIssueList();
     await addCondition(user);
 
@@ -135,7 +135,7 @@ describe('FilterBuilder', () => {
 
   it('resets an operator the new field does not allow', async () => {
     mockIssuesQuery();
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderIssueList();
     await addCondition(user);
 
@@ -149,7 +149,7 @@ describe('FilterBuilder', () => {
 
   it('offers only the operators the chosen field allows', async () => {
     mockIssuesQuery();
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderIssueList();
     await addCondition(user);
 
@@ -163,7 +163,7 @@ describe('FilterBuilder', () => {
 
   it('blocks a 21st condition', async () => {
     mockIssuesQuery();
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderIssueList();
 
     for (let i = 0; i < MAX_CONDITIONS; i++) {
@@ -172,11 +172,18 @@ describe('FilterBuilder', () => {
 
     expect(screen.getByRole('button', { name: /add condition/i })).toBeDisabled();
     expect(screen.getByText(/at most 20 conditions/i)).toBeInTheDocument();
-  });
+    // This test legitimately drives MAX_CONDITIONS (20) sequential UI
+    // interactions, so it is inherently the slowest in the suite. `delay: null`
+    // above removed userEvent's artificial inter-event wait — the time left is
+    // real render work, which still lands near Vitest's 5s default under
+    // parallel load. The generous budget here is headroom for a slower CI
+    // runner, NOT a way to hide a slow assertion: the loop still adds exactly
+    // 20 conditions and still asserts the guard.
+  }, 30_000);
 
   it('blocks a 101st In value', async () => {
     mockIssuesQuery();
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderIssueList();
     await addCondition(user);
     await user.selectOptions(screen.getByLabelText(/operator for condition 1/i), 'In');
@@ -194,7 +201,7 @@ describe('FilterBuilder', () => {
 
   it('still shows a server 400 when the client thought the filter was fine', async () => {
     mockIssuesQuery();
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderIssueList();
     await addCondition(user);
 
@@ -215,7 +222,7 @@ describe('FilterBuilder', () => {
 
   it('shows the Neq-on-dictionary-field note only while a row uses it', async () => {
     mockIssuesQuery();
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderIssueList();
     await addCondition(user);
 
@@ -234,7 +241,7 @@ describe('FilterBuilder', () => {
 
   it('Clear all returns to the collapsed no-filter state', async () => {
     mockIssuesQuery();
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderIssueList();
     await addCondition(user);
     expect(screen.getByRole('button', { name: /clear all/i })).toBeInTheDocument();
