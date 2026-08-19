@@ -75,6 +75,7 @@ export default function Home() {
             <TR>
               <TH>Project</TH>
               <TH>Sync interval</TH>
+              <TH>Issues</TH>
             </TR>
           </THead>
           <TBody>
@@ -86,6 +87,11 @@ export default function Home() {
                   </Link>
                 </TD>
                 <TD>{project.syncIntervalMinutes} minutes</TD>
+                <TD>
+                  <Link to={`/projects/${project.id}/issues`} className="text-[var(--ju-primary)] hover:underline">
+                    Issues
+                  </Link>
+                </TD>
               </TR>
             ))}
           </TBody>

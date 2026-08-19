@@ -15,4 +15,10 @@ export const queryKeys = {
   fieldMappings: (projectId: string) => ['projects', projectId, 'field-mappings'] as const,
   statusSemantics: (projectId: string) => ['projects', projectId, 'status-semantics'] as const,
   syncRuns: (projectId: string) => ['projects', projectId, 'sync-runs'] as const,
+  // The request is part of the key so a different filter or page is a
+  // different cache entry rather than silently reusing the previous results.
+  issues: (projectId: string, request: unknown) =>
+    ['projects', projectId, 'issues', JSON.stringify(request ?? {})] as const,
+  issueDetail: (projectId: string, jiraIssueId: string) =>
+    ['projects', projectId, 'issues', jiraIssueId] as const,
 } as const;

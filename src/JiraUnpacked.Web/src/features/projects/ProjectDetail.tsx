@@ -87,11 +87,19 @@ export default function ProjectDetail() {
         >
           &larr; Back to connection
         </Link>
-        <div>
-          <h1 className="text-lg font-semibold text-[var(--ju-text)]">{project.jiraProjectKey}</h1>
-          <p className="text-sm text-[var(--ju-muted)]">
-            Syncs every {project.syncIntervalMinutes} minutes
-          </p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-semibold text-[var(--ju-text)]">{project.jiraProjectKey}</h1>
+            <p className="text-sm text-[var(--ju-muted)]">
+              Syncs every {project.syncIntervalMinutes} minutes
+            </p>
+          </div>
+          <Link
+            to={`/projects/${id}/issues`}
+            className="text-sm font-medium text-[var(--ju-primary)] hover:underline"
+          >
+            Browse issues
+          </Link>
         </div>
 
         <Card className="flex flex-col gap-3 sm:flex-row sm:items-end">

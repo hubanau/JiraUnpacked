@@ -58,4 +58,18 @@ describe('Home', () => {
     expect(await screen.findByText(/no projects yet/i)).toBeInTheDocument();
     expect(screen.queryByText(/no connections yet/i)).not.toBeInTheDocument();
   });
+
+  it('links each project to its issue list', async () => {
+    server.use(
+      http.get('/api/connections', () => HttpResponse.json([CONNECTION_1])),
+      http.get('/api/connections/c1/projects', () => HttpResponse.json([
+        { id: 'p1', jiraConnectionId: 'c1', jiraProjectKey: 'ACME', jiraProjectId: '1', syncIntervalMinutes: 60, createdAtUtc: '2026-01-01T00:00:00Z' },
+      ])),
+    );
+
+    renderHome();
+
+    expect(await screen.findByRole('link', { name: /issues/i }))
+      .toHaveAttribute('href', '/projects/p1/issues');
+  });
 });
