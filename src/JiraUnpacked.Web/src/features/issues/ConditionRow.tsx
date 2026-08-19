@@ -26,6 +26,21 @@ export function ConditionRow({ condition, onChange, onRemove, index }: Condition
   // is not part of the submitted condition until "Add value" commits it.
   const [inDraft, setInDraft] = useState('');
 
+  // FilterBuilder keys rows by array index, so removing a row shifts index
+  // identity onto a different condition — this component instance stays
+  // mounted but starts receiving a different `condition` object. Without
+  // this reset, `inDraft` (which is not part of `condition`) would survive
+  // that shift and appear to belong to the condition that took its place.
+  // Comparing against the previous condition during render (rather than in
+  // an effect) clears it in the same render that shows the new condition,
+  // before anything paints. Condition objects are only re-created on real
+  // edits, so this does not cause spurious resets.
+  const [prev, setPrev] = useState(condition);
+  if (prev !== condition) {
+    setPrev(condition);
+    setInDraft('');
+  }
+
   const fieldType = typeFor(condition.field);
   const ops = operatorsFor(condition.field);
   const rowNumber = index + 1;
