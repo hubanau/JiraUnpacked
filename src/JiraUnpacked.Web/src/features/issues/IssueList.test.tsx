@@ -2,20 +2,20 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { http, HttpResponse } from 'msw';
+import { delay, http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/setup';
 import IssueList, { IssueListRoute } from './IssueList';
-import type { FilterCondition, IssueListItem } from '../../api/issues';
-import { MAX_PAGE_SIZE } from '../../api/issues';
+import type { IssueListItem } from '../../api/issues';
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../../api/issues';
 
-function renderList({ initialConditions }: { initialConditions?: FilterCondition[] } = {}) {
+function renderList() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={['/projects/p1/issues']}>
         <Routes>
-          <Route path="/projects/:id/issues" element={<IssueList initialConditions={initialConditions} />} />
+          <Route path="/projects/:id/issues" element={<IssueList />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -88,13 +88,75 @@ describe('IssueList', () => {
         HttpResponse.json({ items: [], page: 1, pageSize: 50, totalCount: 0 })),
     );
 
-    // Render with a condition already present, so the empty result is a
-    // filtered one. EX3's builder produces this state interactively.
-    renderList({ initialConditions: [{ field: 'status', op: 'Eq', value: 'Done' }] });
+    // Drive a real condition through the builder (EX3's actual UI), rather
+    // than seeding state directly — IssueList no longer accepts a
+    // test-only prop for this.
+    const user = userEvent.setup({ delay: null });
+    renderList();
+    await user.click(await screen.findByRole('button', { name: /add condition/i }));
+    await user.type(screen.getByLabelText(/value for condition 1/i), 'Done');
 
     expect(await screen.findByText(/no issues match this filter/i)).toBeInTheDocument();
     expect(screen.queryByText(/no issues yet/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /go to sync/i })).not.toBeInTheDocument();
+  });
+
+  it('does not flash the unfiltered empty state while the request after clearing a filter is still in flight', async () => {
+    // Regression test: TanStack's placeholderData keeps `data` pointing at
+    // the *previous* result for the whole in-flight duration of a new
+    // query key. If a filtered request had returned 0 matches and the user
+    // clears the filter, deriving the empty state from that stale
+    // placeholder (instead of gating on isPlaceholderData) would show
+    // "No issues yet — Run a sync" — complete with the Go-to-sync link —
+    // on a project that is actually healthy, for as long as the new
+    // (unfiltered) request is pending.
+    //
+    // gcTime: 0 evicts the unfiltered query's cache entry as soon as it
+    // becomes inactive (i.e. as soon as a condition is added), so
+    // clearing the filter back to it later genuinely goes through a
+    // pending/placeholder phase instead of being served warm from cache —
+    // the same as a real project the user is filtering for the first time.
+    server.use(
+      http.post('/api/projects/p1/issues/query', async ({ request }) => {
+        const body = (await request.json()) as { conditions?: unknown[] };
+        if (body.conditions && body.conditions.length > 0) {
+          return HttpResponse.json({ items: [], page: 1, pageSize: 50, totalCount: 0 });
+        }
+        // Delayed so the pending/placeholder phase of the unfiltered
+        // request is observable by the assertions below instead of
+        // resolving before this test can inspect it.
+        await delay(300);
+        return HttpResponse.json({ items: [row('ACME-1')], page: 1, pageSize: 50, totalCount: 1 });
+      }),
+    );
+    const user = userEvent.setup({ delay: null });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/projects/p1/issues']}>
+          <Routes>
+            <Route path="/projects/:id/issues" element={<IssueList />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: /add condition/i }));
+    await user.type(screen.getByLabelText(/value for condition 1/i), 'Done');
+    expect(await screen.findByText(/no issues match this filter/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /clear all/i }));
+
+    // The unfiltered request is now in flight; `data` is still the
+    // placeholder 0-item filtered result. Neither empty state — least of
+    // all the "run a sync" one — may show while it settles.
+    expect(screen.queryByText(/no issues yet/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no issues match this filter/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /go to sync/i })).not.toBeInTheDocument();
+
+    // The healthy project's rows do eventually load once the delayed
+    // request settles.
+    await screen.findByText('ACME-1');
   });
 
   it('requests page 2 when Next is clicked', async () => {
@@ -143,7 +205,7 @@ describe('IssueList', () => {
     await waitFor(() => expect(pages[pages.length - 1]).toBe(1));
   });
 
-  it('never requests a pageSize above the API maximum', async () => {
+  it('requests the default page size, which itself never exceeds the API maximum', async () => {
     let sent = 0;
     server.use(
       http.post('/api/projects/p1/issues/query', async ({ request }) => {
@@ -153,7 +215,11 @@ describe('IssueList', () => {
     );
     renderList();
     await waitFor(() => expect(sent).toBeGreaterThan(0));
-    expect(sent).toBeLessThanOrEqual(MAX_PAGE_SIZE);
+    // The request body actually sent must be DEFAULT_PAGE_SIZE — there is
+    // no pageSize UI to vary it — and that constant must itself respect
+    // the API's ceiling.
+    expect(sent).toBe(DEFAULT_PAGE_SIZE);
+    expect(DEFAULT_PAGE_SIZE).toBeLessThanOrEqual(MAX_PAGE_SIZE);
   });
 
   it('keeps the previous results on screen when the server rejects a filter', async () => {

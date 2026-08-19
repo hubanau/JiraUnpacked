@@ -10,21 +10,29 @@ import { FilterBuilder } from './FilterBuilder';
 
 const EMPTY = '—'; // '—' — never render the string "null" for a nullable field.
 
-interface IssueListProps {
-  // Exists purely so this task's tests can render a filtered-empty state
-  // before EX3's FilterBuilder lands. Production never passes it — it
-  // always mounts with an empty condition set.
-  initialConditions?: FilterCondition[];
+/**
+ * A condition the user has started but not finished — a single-value
+ * operator with no value typed yet, or an `In` with no values added yet —
+ * is unfinished, not invalid. `ConditionRow` necessarily emits these
+ * mid-edit (e.g. a field change drops `value` entirely; picking a
+ * Decimal/DateTime operator emits `value: ''`), and submitting them would
+ * be a guaranteed 400 before the user has had a chance to fill them in.
+ * `IsNull` needs no value at all, so it is always complete.
+ */
+function isCompleteCondition(condition: FilterCondition): boolean {
+  if (condition.op === 'IsNull') return true;
+  if (condition.op === 'In') return (condition.values?.length ?? 0) > 0;
+  return condition.value !== undefined && condition.value !== '';
 }
 
-export default function IssueList({ initialConditions = [] }: IssueListProps = {}) {
+export default function IssueList() {
   // Route always supplies :id here (see App.tsx); the '' fallback only
   // covers the type, not a real navigation state.
   const { id = '' } = useParams();
 
   // IssueList owns this state so EX3's FilterBuilder can drive it via
   // onChange once it mounts in the slot below.
-  const [conditions, setConditions] = useState<FilterCondition[]>(initialConditions);
+  const [conditions, setConditions] = useState<FilterCondition[]>([]);
 
   const [page, setPage] = useState(1);
 
@@ -36,8 +44,14 @@ export default function IssueList({ initialConditions = [] }: IssueListProps = {
     setPage(1);
   }, [conditions]);
 
-  const request: IssueFilterRequest = { conditions, page, pageSize: DEFAULT_PAGE_SIZE };
-  const { data, isPending, error } = useQuery({
+  // The request the server actually sees omits conditions the user has not
+  // finished filling in yet — see isCompleteCondition. This is narrow and
+  // mechanical: it never drops a condition the user *has* filled in, and a
+  // server 400 for a condition that is complete but still invalid must
+  // still render (see the "still shows a server 400" FilterBuilder test).
+  const completeConditions = conditions.filter(isCompleteCondition);
+  const request: IssueFilterRequest = { conditions: completeConditions, page, pageSize: DEFAULT_PAGE_SIZE };
+  const { data, isPending, error, isPlaceholderData } = useQuery({
     queryKey: queryKeys.issues(id, request),
     queryFn: () => queryIssues(id, request),
     // Bridges the *pending* phase of a new page/filter with the previous
@@ -63,10 +77,15 @@ export default function IssueList({ initialConditions = [] }: IssueListProps = {
   }
 
   const totalPages = shown ? Math.max(1, Math.ceil(shown.totalCount / shown.pageSize)) : 1;
-  // Only treat a confirmed current result as "empty" — while a request is
-  // erroring, `shown` may just be the last good (non-empty or empty) page,
-  // and the alert above already says something went wrong with this one.
-  const showEmpty = !error && shown && shown.items.length === 0;
+  // Only treat a confirmed *current* result as "empty" — gated on `data`
+  // (not `shown`, which also covers the last-good/error fallback) and on
+  // !isPlaceholderData. Across a query-key change (e.g. clearing a filter
+  // that had returned 0 matches), placeholderData keeps `data` pointing at
+  // the *previous* result for the whole in-flight duration; without the
+  // isPlaceholderData guard that stale 0-item result would flash the wrong
+  // one of the two empty states (e.g. "Run a sync" on a healthy project)
+  // until the new request settles.
+  const showEmpty = !error && !isPlaceholderData && data?.items.length === 0;
   const showTable = shown && shown.items.length > 0;
 
   return (
