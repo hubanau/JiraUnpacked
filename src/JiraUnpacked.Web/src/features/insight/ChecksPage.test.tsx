@@ -76,7 +76,7 @@ describe('ChecksPage', () => {
     await selectFirstCheck();
 
     expect(await screen.findByText(/could not run/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /issue type/i })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /issue type/i })).toBeInTheDocument();
 
     // Must NOT read as a clean result.
     expect(screen.queryByText(/no violations found/i)).not.toBeInTheDocument();
@@ -100,14 +100,18 @@ describe('ChecksPage', () => {
   });
 
   it('lists violations and links each to its issue detail', async () => {
+    // Id chosen to require encoding (a space) — 'i1' would round-trip
+    // identically through encodeURIComponent whether or not it is actually
+    // applied, so it would not catch a dropped encoding call. Matches the
+    // convention in IssueDetail.test.tsx.
     mockCheck(okEmpty({ violations: { items: [{
-      jiraIssueId: 'i1', jiraKey: 'ACME-1', summary: 'Epic', status: 'Done',
+      jiraIssueId: 'a b', jiraKey: 'ACME-1', summary: 'Epic', status: 'Done',
       class: 'Done', issueType: 'Epic', children: [],
     }], page: 1, pageSize: 50, totalCount: 1 } }));
     await selectFirstCheck();
 
     expect(await screen.findByRole('link', { name: /ACME-1/ }))
-      .toHaveAttribute('href', '/projects/p1/issues/i1');
+      .toHaveAttribute('href', '/projects/p1/issues/a%20b');
   });
 
   it('renders nullable violation fields as an em dash, never the string "null"', async () => {
@@ -123,12 +127,16 @@ describe('ChecksPage', () => {
   });
 
   it('expands a violation to show its offending children', async () => {
+    // Child ids chosen to require encoding (a slash and a space) — 'c1'/'c2'
+    // would round-trip identically through encodeURIComponent whether or
+    // not it is actually applied, so they would not catch a dropped
+    // encoding call. Matches the convention in IssueDetail.test.tsx.
     mockCheck(okEmpty({ violations: { items: [{
       jiraIssueId: 'i1', jiraKey: 'ACME-1', summary: 'Epic', status: 'Done',
       class: 'Done', issueType: 'Epic',
       children: [
-        { jiraIssueId: 'c1', jiraKey: 'ACME-2', summary: 'Open child', status: 'To Do', class: 'Active' },
-        { jiraIssueId: 'c2', jiraKey: 'ACME-3', summary: 'Another', status: 'To Do', class: 'Active' },
+        { jiraIssueId: 'c/d', jiraKey: 'ACME-2', summary: 'Open child', status: 'To Do', class: 'Active' },
+        { jiraIssueId: 'e f', jiraKey: 'ACME-3', summary: 'Another', status: 'To Do', class: 'Active' },
       ],
     }], page: 1, pageSize: 50, totalCount: 1 } }));
     await selectFirstCheck();
@@ -138,7 +146,9 @@ describe('ChecksPage', () => {
     expect(screen.queryByText('ACME-2')).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /show children|expand/i }));
 
-    expect(await screen.findByText('ACME-2')).toBeInTheDocument();
-    expect(screen.getByText('ACME-3')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /ACME-2/ }))
+      .toHaveAttribute('href', '/projects/p1/issues/c%2Fd');
+    expect(screen.getByRole('link', { name: /ACME-3/ }))
+      .toHaveAttribute('href', '/projects/p1/issues/e%20f');
   });
 });
