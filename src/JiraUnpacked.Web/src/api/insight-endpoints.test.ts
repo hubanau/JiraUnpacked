@@ -48,15 +48,24 @@ describe('checks api', () => {
     server.use(http.get('/api/projects/p1/checks/:id', ({ request }) => {
       path = new URL(request.url).pathname;
       return HttpResponse.json({
-        check: { id: 'a b', name: 'X', description: 'Y' },
+        check: { id: 'a/b', name: 'X', description: 'Y' },
         status: 'Ok',
         violations: { items: [], page: 1, pageSize: 50, totalCount: 0 },
       });
     }));
 
-    await runCheck('p1', 'a b');
+    // A slash, not a space: the WHATWG URL parser percent-encodes a literal
+    // space in a path segment on its own (`new URL('/x/a b', base).pathname`
+    // is already `/x/a%20b`), so a space-only fixture would pass here even
+    // if `encodeURIComponent` were removed from checks.ts — it only proves
+    // something when asserting a rendered `href` attribute, which React
+    // Router does not normalise (see ChecksPage.test.tsx / IssueDetail.test.tsx).
+    // A slash is different: left unencoded it starts a new path segment,
+    // which MSW's single-segment `:id` route will not match, so this
+    // fixture actually fails if the encode is dropped.
+    await runCheck('p1', 'a/b');
 
-    expect(path).toContain('a%20b');
+    expect(path).toContain('a%2Fb');
   });
 });
 
