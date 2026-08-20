@@ -28,21 +28,28 @@ interface CheckCatalogProps {
   onSelect: (checkId: string) => void;
 }
 
-/** Every check the project exposes, rendered as a toggle group. Clicking one selects it and (via the enabled useQuery below) runs it. */
+/**
+ * Every check the project exposes, rendered as a toggle group. Clicking one
+ * selects it and (via the enabled useQuery below) runs it. The spec calls
+ * for name *and* description visible — a `title` attribute alone only
+ * surfaces on hover (and not at all on touch), so the description is
+ * rendered as real text beside each button instead.
+ */
 function CheckCatalog({ checks, selectedId, onSelect }: CheckCatalogProps) {
   return (
-    <div className="flex flex-wrap gap-2" role="group" aria-label="Available checks">
+    <div className="flex flex-col gap-2" role="group" aria-label="Available checks">
       {checks.map((check) => (
-        <Button
-          key={check.id}
-          type="button"
-          variant={check.id === selectedId ? 'primary' : 'secondary'}
-          aria-pressed={check.id === selectedId}
-          onClick={() => onSelect(check.id)}
-          title={check.description}
-        >
-          {check.name}
-        </Button>
+        <div key={check.id} className="flex flex-wrap items-baseline gap-2">
+          <Button
+            type="button"
+            variant={check.id === selectedId ? 'primary' : 'secondary'}
+            aria-pressed={check.id === selectedId}
+            onClick={() => onSelect(check.id)}
+          >
+            {check.name}
+          </Button>
+          <span className="text-sm text-[var(--ju-muted)]">{check.description}</span>
+        </div>
       ))}
     </div>
   );

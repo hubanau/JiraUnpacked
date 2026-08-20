@@ -75,12 +75,19 @@ describe('ChecksPage', () => {
     mockCheck(okEmpty({ status: 'NotConfigured' }));
     await selectFirstCheck();
 
-    expect(await screen.findByText(/could not run/i)).toBeInTheDocument();
+    // The component's own error fallback also reads "Could not run this
+    // check.", so /could not run/i cannot tell this warning apart from a
+    // load failure. Assert the cause sentence instead — only
+    // NotConfiguredWarning renders it.
+    expect(await screen.findByText(/classified as an Epic/i)).toBeInTheDocument();
     expect(await screen.findByRole('link', { name: /issue type/i })).toBeInTheDocument();
 
-    // Must NOT read as a clean result.
+    // Must NOT read as a clean result. "Clean run" is real copy — the
+    // success Badge rendered only on the Ok+zero path — so this actually
+    // discriminates, unlike the old "0 violations" check, which matched no
+    // copy any path renders and guarded nothing.
     expect(screen.queryByText(/no violations found/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/0 violations/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/clean run/i)).not.toBeInTheDocument();
   });
 
   it('links the NotConfigured warning to the connection issue-type editor', async () => {
@@ -95,7 +102,7 @@ describe('ChecksPage', () => {
     mockCheck(okEmpty({ status: 'SomeFutureStatus' }));
     await selectFirstCheck();
 
-    expect(await screen.findByText(/could not run/i)).toBeInTheDocument();
+    expect(await screen.findByText(/classified as an Epic/i)).toBeInTheDocument();
     expect(screen.queryByText(/no violations found/i)).not.toBeInTheDocument();
   });
 
