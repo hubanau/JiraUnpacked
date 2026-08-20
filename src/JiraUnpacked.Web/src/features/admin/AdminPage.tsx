@@ -193,12 +193,27 @@ function UserActionsSection() {
           Delete user
         </Button>
       </div>
-      {block.isError && <p role="alert">{errorTitle(block.error, 'Could not block the user.')}</p>}
-      {block.isSuccess && <p role="status">User {block.variables} blocked.</p>}
-      {unblock.isError && (
+      {/*
+        The `variables === userId` guard closes a residual race the reset
+        effect above cannot: reset() cannot cancel a request that has
+        already left, so if block/unblock for the *old* id resolves after
+        the admin has already moved on to a new id, its result must not
+        resurface tied to whatever the field now shows. Scoped to the
+        message rendering only (not `loading`/`disabled`), matching what
+        was actually flagged.
+      */}
+      {block.isError && block.variables === userId && (
+        <p role="alert">{errorTitle(block.error, 'Could not block the user.')}</p>
+      )}
+      {block.isSuccess && block.variables === userId && (
+        <p role="status">User {block.variables} blocked.</p>
+      )}
+      {unblock.isError && unblock.variables === userId && (
         <p role="alert">{errorTitle(unblock.error, 'Could not restore the user.')}</p>
       )}
-      {unblock.isSuccess && <p role="status">Access restored for user {unblock.variables}.</p>}
+      {unblock.isSuccess && unblock.variables === userId && (
+        <p role="status">Access restored for user {unblock.variables}.</p>
+      )}
       {deletedUserId && <p role="status">User {deletedUserId} deleted.</p>}
       {/* Mounted only while open, mirroring UserMenu's delete-account dialog
           (src/shell/UserMenu.tsx): an unconditionally-mounted dialog would let
