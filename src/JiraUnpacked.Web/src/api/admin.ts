@@ -6,11 +6,11 @@ export const createInviteCode = () =>
   apiFetch<InviteCodeResponse>('/api/admin/invite-codes', { method: 'POST' });
 
 export const blockUser = (userId: string) =>
-  apiFetch<void>(`/api/admin/users/${userId}/block`, { method: 'POST' });
+  apiFetch<void>(`/api/admin/users/${encodeURIComponent(userId)}/block`, { method: 'POST' });
 
 export const unblockUser = (userId: string) =>
-  apiFetch<void>(`/api/admin/users/${userId}/unblock`, { method: 'POST' });
+  apiFetch<void>(`/api/admin/users/${encodeURIComponent(userId)}/unblock`, { method: 'POST' });
 
 /** Irreversible: cascades across every tenant table. Gate behind a typed confirmation. */
 export const deleteUser = (userId: string) =>
-  apiFetch<void>(`/api/admin/users/${userId}`, { method: 'DELETE' });
+  apiFetch<void>(`/api/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' });
