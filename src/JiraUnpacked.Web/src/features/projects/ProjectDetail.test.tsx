@@ -82,4 +82,14 @@ describe('ProjectDetail sync interval', () => {
     expect(await screen.findByRole('link', { name: /browse issues/i }))
       .toHaveAttribute('href', '/projects/p1/issues');
   });
+
+  it('links to the project’s metrics and checks', async () => {
+    useBaseHandlers();
+    renderProjectDetail();
+
+    expect(await screen.findByRole('link', { name: /metrics/i }))
+      .toHaveAttribute('href', '/projects/p1/metrics');
+    expect(screen.getByRole('link', { name: /checks/i }))
+      .toHaveAttribute('href', '/projects/p1/checks');
+  });
 });
