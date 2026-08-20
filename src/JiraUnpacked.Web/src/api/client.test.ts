@@ -90,6 +90,45 @@ describe('apiFetch', () => {
     expect(onAuthFailure).toHaveBeenCalledTimes(1);
   });
 
+  it('does not sign the user out when a 401 after a successful refresh carries a ProblemDetails body', async () => {
+    // Simulates JiraApiExceptionFilter mapping a revoked/expired *Jira*
+    // token to 401 with a titled ProblemDetails body. Our own session is
+    // fine — refresh below succeeds and the retry uses a fresh token — so
+    // this must be surfaced as a normal error, not treated as our session
+    // having expired.
+    let calls = 0;
+    server.use(http.get('/api/thing', ({ request }) => {
+      calls++;
+      if (request.headers.get('authorization') === 'Bearer good') {
+        return HttpResponse.json({ title: 'Jira rejected the stored credentials.' }, { status: 401 });
+      }
+      return new HttpResponse(null, { status: 401 });
+    }));
+
+    let token = 'stale';
+    const refresh = vi.fn(async () => { token = 'good'; return true; });
+    const onAuthFailure = vi.fn();
+    setAuthBridge({ getAccessToken: () => token, refresh, onAuthFailure });
+
+    await expect(apiFetch('/api/thing')).rejects.toMatchObject({
+      status: 401,
+      title: 'Jira rejected the stored credentials.',
+    });
+    expect(onAuthFailure).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(calls).toBe(2);
+  });
+
+  it('still signs the user out when the retry 401 is bodiless (the real bearer-token challenge)', async () => {
+    server.use(http.get('/api/thing', () => new HttpResponse(null, { status: 401 })));
+    const refresh = vi.fn(async () => true);
+    const onAuthFailure = vi.fn();
+    setAuthBridge({ getAccessToken: () => 'x', refresh, onAuthFailure });
+
+    await expect(apiFetch('/api/thing')).rejects.toBeInstanceOf(ApiError);
+    expect(onAuthFailure).toHaveBeenCalledTimes(1);
+  });
+
   it('never retries when skipAuthRetry is set', async () => {
     server.use(http.post('/api/auth/refresh', () => new HttpResponse(null, { status: 401 })));
     const refresh = vi.fn(async () => true);

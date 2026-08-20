@@ -3,6 +3,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './auth/AuthContext';
 import { RequireAuth } from './auth/RequireAuth';
 import AppShell from './shell/AppShell';
+import AddConnection from './features/connections/AddConnection';
+import ConnectionDetail from './features/connections/ConnectionDetail';
+import ConnectionsList from './features/connections/ConnectionsList';
+import AddProject from './features/projects/AddProject';
+import ProjectDetail from './features/projects/ProjectDetail';
+import IssueDetail from './features/issues/IssueDetail';
+import { IssueListRoute } from './features/issues/IssueList';
 import Home from './routes/Home';
 import Login from './routes/Login';
 import NotFound from './routes/NotFound';
@@ -25,6 +32,13 @@ export default function App() {
             <Route element={<RequireAuth />}>
               <Route element={<AppShell />}>
                 <Route path="/" element={<Home />} />
+                <Route path="/connections" element={<ConnectionsList />} />
+                <Route path="/connections/new" element={<AddConnection />} />
+                <Route path="/connections/:id" element={<ConnectionDetail />} />
+                <Route path="/connections/:connectionId/projects/new" element={<AddProject />} />
+                <Route path="/projects/:id" element={<ProjectDetail />} />
+                <Route path="/projects/:id/issues" element={<IssueListRoute />} />
+                <Route path="/projects/:id/issues/:jiraIssueId" element={<IssueDetail />} />
               </Route>
             </Route>
             <Route path="/404" element={<NotFound />} />
