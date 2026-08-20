@@ -115,8 +115,24 @@ describe('MetricsPage', () => {
     } });
     renderMetrics();
 
+    // Table cell: exact match on the shared display-rule constant.
     expect(await screen.findByText(NO_STATUS_LABEL)).toBeInTheDocument();
     expect(screen.queryByText('null')).not.toBeInTheDocument();
+
+    // Bar label: MetricsPage folds the class into the bar's label (e.g.
+    // "(no status) (Other)") to disambiguate rows with no adjacent Class
+    // column, so it is never byte-identical to the table cell above — the
+    // exact-match assertion on NO_STATUS_LABEL can't see it, and a
+    // regression that broke *only* the bar label (e.g. falling back to the
+    // literal string 'null' instead of formatStatusLabel) would slip past
+    // it. Assert the bar label directly: exactly two nodes on the page
+    // contain "no status" (the table cell and the bar label), and neither
+    // one ever contains "null".
+    const noStatusNodes = screen.getAllByText(/no status/i);
+    expect(noStatusNodes).toHaveLength(2); // table cell + bar label
+    for (const node of noStatusNodes) {
+      expect(node).not.toHaveTextContent(/null/i);
+    }
   });
 
   it('renders throughput bars even when every bucket is zero', async () => {
@@ -126,7 +142,10 @@ describe('MetricsPage', () => {
     renderMetrics();
 
     expect(await screen.findByText('2026-01-05')).toBeInTheDocument();
-    expect(screen.queryByText(/no data/i)).not.toBeInTheDocument();
+    // Points at ThroughputSection's actual EmptyState copy (not a generic
+    // "no data" string it never renders) so this assertion fails if the
+    // all-zero period is ever collapsed into that empty state.
+    expect(screen.queryByText('No periods in this range')).not.toBeInTheDocument();
   });
 
   it('shows the server message verbatim for an invalid bucket', async () => {
@@ -136,12 +155,24 @@ describe('MetricsPage', () => {
     expect(await screen.findByText(/bucket must be one of/i)).toBeInTheDocument();
   });
 
-  // Section isolation: one failure must not blank the page.
+  it('shows the server message verbatim when from is later than to', async () => {
+    mockMetrics({ throughputStatus: 400, throughputBody: { error: 'from must not be later than to' } });
+    renderMetrics();
+
+    expect(await screen.findByText(/from must not be later than to/i)).toBeInTheDocument();
+  });
+
+  // Section isolation: one failure must not blank the page — the other
+  // *three* sections (not just one of them) must keep rendering their own
+  // data, since the point being proven is that all four queries are
+  // independent, not that one particular pair happens to be.
   it('renders the other sections when one metric fails', async () => {
     mockMetrics({ storyCountsStatus: 500 });
     renderMetrics();
 
     expect(await screen.findByText(NOT_ENOUGH_DATA)).toBeInTheDocument(); // time-in-progress still rendered
+    expect(await screen.findByText('2026-01-05')).toBeInTheDocument(); // throughput still rendered
+    expect(await screen.findByText('0-7')).toBeInTheDocument(); // status-aging histogram still rendered
     expect(screen.getByRole('alert')).toBeInTheDocument(); // story-counts error shown
   });
 });
