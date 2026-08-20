@@ -43,7 +43,10 @@ function StoryCountsSection({ query }: { query: UseQueryResult<StoryCountsReport
       <SectionHeading>Story counts</SectionHeading>
       {isPending && <Spinner aria-label="Loading story counts" />}
       {error && <ErrorState title={sectionErrorTitle(error, 'Could not load story counts.')} />}
-      {data && (
+      {data && data.byStatus.length === 0 && (
+        <EmptyState title="No stories found" description="There is nothing to count for this project yet." />
+      )}
+      {data && data.byStatus.length > 0 && (
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             {data.byStatus.map((s, i) => (
@@ -57,6 +60,7 @@ function StoryCountsSection({ query }: { query: UseQueryResult<StoryCountsReport
                 label={`${formatStatusLabel(s.status)} (${s.class})`}
                 value={s.count}
                 max={max}
+                suffix={`(${s.storyPoints} pts)`}
               />
             ))}
           </div>
