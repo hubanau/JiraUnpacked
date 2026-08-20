@@ -336,7 +336,7 @@ export function barPercent(value: number, max: number): number {
 - [ ] **Step 8: Run to verify it passes**
 
 Run: `npm run test -- format`
-Expected: PASS (11 tests).
+Expected: PASS (10 tests).
 
 - [ ] **Step 9: Write the endpoint test**
 
