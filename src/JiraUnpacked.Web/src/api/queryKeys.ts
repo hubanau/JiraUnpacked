@@ -21,4 +21,13 @@ export const queryKeys = {
     ['projects', projectId, 'issues', JSON.stringify(request ?? {})] as const,
   issueDetail: (projectId: string, jiraIssueId: string) =>
     ['projects', projectId, 'issues', jiraIssueId] as const,
+  storyCounts: (projectId: string) => ['projects', projectId, 'metrics', 'story-counts'] as const,
+  timeInProgress: (projectId: string) => ['projects', projectId, 'metrics', 'time-in-progress'] as const,
+  throughput: (projectId: string, bucket: string, from: string, to: string) =>
+    ['projects', projectId, 'metrics', 'throughput', bucket, from, to] as const,
+  statusAging: (projectId: string, page: number) =>
+    ['projects', projectId, 'metrics', 'status-aging', page] as const,
+  checks: (projectId: string) => ['projects', projectId, 'checks'] as const,
+  checkResult: (projectId: string, checkId: string, page: number) =>
+    ['projects', projectId, 'checks', checkId, page] as const,
 } as const;

@@ -10,6 +10,9 @@ import AddProject from './features/projects/AddProject';
 import ProjectDetail from './features/projects/ProjectDetail';
 import IssueDetail from './features/issues/IssueDetail';
 import { IssueListRoute } from './features/issues/IssueList';
+import MetricsPage from './features/insight/MetricsPage';
+import ChecksPage from './features/insight/ChecksPage';
+import AdminPage from './features/admin/AdminPage';
 import Home from './routes/Home';
 import Login from './routes/Login';
 import NotFound from './routes/NotFound';
@@ -39,6 +42,9 @@ export default function App() {
                 <Route path="/projects/:id" element={<ProjectDetail />} />
                 <Route path="/projects/:id/issues" element={<IssueListRoute />} />
                 <Route path="/projects/:id/issues/:jiraIssueId" element={<IssueDetail />} />
+                <Route path="/projects/:id/metrics" element={<MetricsPage />} />
+                <Route path="/projects/:id/checks" element={<ChecksPage />} />
+                <Route path="/admin" element={<AdminPage />} />
               </Route>
             </Route>
             <Route path="/404" element={<NotFound />} />

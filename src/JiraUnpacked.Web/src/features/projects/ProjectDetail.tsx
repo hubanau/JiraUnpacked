@@ -94,12 +94,26 @@ export default function ProjectDetail() {
               Syncs every {project.syncIntervalMinutes} minutes
             </p>
           </div>
-          <Link
-            to={`/projects/${id}/issues`}
-            className="text-sm font-medium text-[var(--ju-primary)] hover:underline"
-          >
-            Browse issues
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link
+              to={`/projects/${id}/issues`}
+              className="text-sm font-medium text-[var(--ju-primary)] hover:underline"
+            >
+              Browse issues
+            </Link>
+            <Link
+              to={`/projects/${id}/metrics`}
+              className="text-sm font-medium text-[var(--ju-primary)] hover:underline"
+            >
+              Metrics
+            </Link>
+            <Link
+              to={`/projects/${id}/checks`}
+              className="text-sm font-medium text-[var(--ju-primary)] hover:underline"
+            >
+              Checks
+            </Link>
+          </div>
         </div>
 
         <Card className="flex flex-col gap-3 sm:flex-row sm:items-end">
