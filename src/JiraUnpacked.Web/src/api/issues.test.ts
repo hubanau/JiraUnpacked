@@ -38,7 +38,7 @@ describe('getIssueDetail', () => {
     server.use(http.get('/api/projects/p1/issues/:id', ({ request }) => {
       seenUrl = new URL(request.url).pathname;
       return HttpResponse.json({
-        issue: { jiraIssueId: 'a b', jiraKey: 'ACME-1', summary: null, status: null,
+        issue: { jiraIssueId: 'a/b', jiraKey: 'ACME-1', summary: null, status: null,
           issueType: null, priority: null, assignee: null, sprint: null, team: null,
           storyPoints: null, parentJiraIssueId: null,
           jiraCreatedAt: '2026-01-01T00:00:00Z', jiraUpdatedAt: '2026-01-01T00:00:00Z' },
@@ -46,9 +46,18 @@ describe('getIssueDetail', () => {
       });
     }));
 
-    await getIssueDetail('p1', 'a b');
+    // A slash, not a space: the WHATWG URL parser percent-encodes a literal
+    // space in a path segment on its own (`new URL('/x/a b', base).pathname`
+    // is already `/x/a%20b`), so a space-only fixture would pass here even
+    // if `encodeURIComponent` were removed from issues.ts — it only proves
+    // something when asserting a rendered `href` attribute, which React
+    // Router does not normalise (see IssueDetail.test.tsx).
+    // A slash is different: left unencoded it starts a new path segment,
+    // which MSW's single-segment `:id` route will not match, so this
+    // fixture actually fails if the encode is dropped.
+    await getIssueDetail('p1', 'a/b');
 
-    expect(seenUrl).toBe('/api/projects/p1/issues/a%20b');
+    expect(seenUrl).toContain('a%2Fb');
   });
 });
 
