@@ -1,14 +1,17 @@
-import { useEffect, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { Button, Card, Field, Modal } from '../../ui';
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
+import { Badge, Button, Card, EmptyState, Field, Modal, Spinner, Table, TBody, TD, TH, THead, TR } from '../../ui';
 import { ApiError } from '../../api/errors';
 import {
   blockUser,
   createInviteCode,
   deleteUser,
+  listUsers,
   unblockUser,
+  type AdminUserListItem,
   type InviteCodeResponse,
 } from '../../api/admin';
+import { queryKeys } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthContext';
 
 const CONFIRM_WORD = 'DELETE';
@@ -84,8 +87,8 @@ function DeleteUserDialog({
   const mutation = useMutation({
     mutationFn: () => deleteUser(userId),
     // Silent success would leave the admin unsure whether the delete
-    // actually happened — name the deleted id back in UserActionsSection's
-    // own status line, then close the dialog.
+    // actually happened — name the deleted id back in UsersSection's own
+    // status line, then close the dialog.
     onSuccess: () => {
       onDeleted(userId);
       onClose();
@@ -122,110 +125,195 @@ function DeleteUserDialog({
   );
 }
 
-function UserActionsSection() {
-  const [userId, setUserId] = useState('');
-  const [deleteOpen, setDeleteOpen] = useState(false);
+type BlockMutation = UseMutationResult<void, unknown, string>;
+
+function UserRow({
+  user,
+  block,
+  unblock,
+  onRequestDelete,
+}: {
+  user: AdminUserListItem;
+  block: BlockMutation;
+  unblock: BlockMutation;
+  onRequestDelete: (userId: string) => void;
+}) {
+  // Guarding every result on `variables === user.id` — not just "is there a
+  // result" — is what keeps a block/unblock response from ever rendering
+  // against a row it wasn't for. `block`/`unblock` are single mutation
+  // instances shared by every row in the table (so a fresh action on any
+  // row cleanly supersedes stale pending/success state from another), and
+  // this guard is what turns "the most recent result" into "the result for
+  // *this* row" — a late response for a different row simply fails the
+  // equality check and renders nothing here.
+  const blockMatches = block.variables === user.id;
+  const unblockMatches = unblock.variables === user.id;
+
+  return (
+    <TR>
+      <TD>{user.username}</TD>
+      <TD>{user.email}</TD>
+      <TD>
+        <Badge tone={user.role === 'Admin' ? 'neutral' : 'success'}>{user.role}</Badge>
+      </TD>
+      <TD>
+        <Badge tone={user.status === 'Blocked' ? 'danger' : 'success'}>{user.status}</Badge>
+      </TD>
+      <TD>{new Date(user.createdAt).toLocaleDateString()}</TD>
+      <TD>
+        <div className="flex flex-col gap-1">
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              onClick={() => block.mutate(user.id)}
+              loading={block.isPending && blockMatches}
+            >
+              Block
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => unblock.mutate(user.id)}
+              loading={unblock.isPending && unblockMatches}
+            >
+              Unblock
+            </Button>
+            <Button type="button" variant="danger" onClick={() => onRequestDelete(user.id)}>
+              Delete user
+            </Button>
+          </div>
+          {block.isError && blockMatches && (
+            <p role="alert">{errorTitle(block.error, 'Could not block the user.')}</p>
+          )}
+          {block.isSuccess && blockMatches && <p role="status">User {user.username} blocked.</p>}
+          {unblock.isError && unblockMatches && (
+            <p role="alert">{errorTitle(unblock.error, 'Could not restore the user.')}</p>
+          )}
+          {unblock.isSuccess && unblockMatches && (
+            <p role="status">Access restored for user {user.username}.</p>
+          )}
+        </div>
+      </TD>
+    </TR>
+  );
+}
+
+function UsersSection() {
+  const queryClient = useQueryClient();
+  const [page, setPage] = useState(1);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [deletedUserId, setDeletedUserId] = useState<string | null>(null);
 
-  // mutationFn takes the id as an argument (rather than closing over
-  // `userId`) so `.variables` records exactly which id a result belongs to
-  // — used below to name the affected user in the success message.
-  const block = useMutation({ mutationFn: (id: string) => blockUser(id) });
-  const unblock = useMutation({ mutationFn: (id: string) => unblockUser(id) });
-  // Pulled out as plain locals (rather than depending on `block.reset`
-  // directly) so the effect below depends only on these — TanStack Query
-  // binds `reset` once on the underlying observer, so these never change
-  // across renders. Depending on `block`/`unblock` themselves instead would
-  // be self-defeating: those objects change on every pending/success/error
-  // transition too, so the effect would fire immediately after mutate()
-  // and reset the very result it just produced.
-  const { reset: resetBlock } = block;
-  const { reset: resetUnblock } = unblock;
+  const { data, isPending, error } = useQuery({
+    queryKey: queryKeys.adminUsers(page),
+    queryFn: () => listUsers(page),
+  });
 
-  // Block/unblock results (and the delete confirmation) must never survive
-  // a change to the User ID field: without this, blocking user A, pasting
-  // user B's id, then clicking Restore access showed "User blocked." AND
-  // "Access restored." simultaneously, with neither naming a user — on an
-  // admin screen whose actions are consequential, that reads as ambiguous
-  // confirmation of who was actually acted on.
-  useEffect(() => {
-    resetBlock();
-    resetUnblock();
-    setDeletedUserId(null);
-  }, [userId, resetBlock, resetUnblock]);
+  const invalidateList = () =>
+    queryClient.invalidateQueries({ queryKey: queryKeys.adminUsers(page) });
 
-  const hasUserId = userId.trim() !== '';
+  // mutationFn takes the id as an argument (rather than closing over a
+  // single selected id) so `.variables` records exactly which row a result
+  // belongs to — see UserRow's blockMatches/unblockMatches guards. Block
+  // and unblock reject non-End-Users server-side with a typed error, so the
+  // server's message is what surfaces here rather than the client hiding
+  // admins from the list.
+  const block = useMutation({
+    mutationFn: (id: string) => blockUser(id),
+    onSuccess: invalidateList,
+  });
+  const unblock = useMutation({
+    mutationFn: (id: string) => unblockUser(id),
+    onSuccess: invalidateList,
+  });
+
+  function handleDeleted(id: string) {
+    setDeletedUserId(id);
+    invalidateList();
+  }
+
+  if (isPending) {
+    return (
+      <Card>
+        <Spinner aria-label="Loading users" />
+      </Card>
+    );
+  }
+
+  const items = data?.items ?? [];
+  const totalPages = data ? Math.max(1, Math.ceil(data.totalCount / data.pageSize)) : 1;
 
   return (
     <Card className="flex flex-col gap-3">
-      <h2 className="text-base font-semibold text-[var(--ju-text)]">User actions</h2>
-      <p className="text-sm text-[var(--ju-muted)]">
-        There is no user directory here — there is no endpoint that lists users. Get the id
-        from the user directly, or look it up in the database, then act on it below.
-      </p>
-      <Field label="User ID" id="userId">
-        <input value={userId} onChange={(e) => setUserId(e.target.value)} autoComplete="off" />
-      </Field>
-      <div className="flex gap-2">
-        <Button
-          type="button"
-          onClick={() => block.mutate(userId)}
-          loading={block.isPending}
-          disabled={!hasUserId}
-        >
-          Block user
-        </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={() => unblock.mutate(userId)}
-          loading={unblock.isPending}
-          disabled={!hasUserId}
-        >
-          Restore access
-        </Button>
-        <Button
-          type="button"
-          variant="danger"
-          onClick={() => setDeleteOpen(true)}
-          disabled={!hasUserId}
-        >
-          Delete user
-        </Button>
-      </div>
-      {/*
-        The `variables === userId` guard closes a residual race the reset
-        effect above cannot: reset() cannot cancel a request that has
-        already left, so if block/unblock for the *old* id resolves after
-        the admin has already moved on to a new id, its result must not
-        resurface tied to whatever the field now shows. Scoped to the
-        message rendering only (not `loading`/`disabled`), matching what
-        was actually flagged.
-      */}
-      {block.isError && block.variables === userId && (
-        <p role="alert">{errorTitle(block.error, 'Could not block the user.')}</p>
+      <h2 className="text-base font-semibold text-[var(--ju-text)]">Users</h2>
+      {error && <p role="alert">{errorTitle(error, 'Could not load users.')}</p>}
+
+      {!error && items.length === 0 && (
+        <EmptyState
+          title="No users yet"
+          description="Generate an invite code above to create the first account."
+        />
       )}
-      {block.isSuccess && block.variables === userId && (
-        <p role="status">User {block.variables} blocked.</p>
+
+      {data && items.length > 0 && (
+        <>
+          <Table>
+            <THead>
+              <TR>
+                <TH>Username</TH>
+                <TH>Email</TH>
+                <TH>Role</TH>
+                <TH>Status</TH>
+                <TH>Created</TH>
+                <TH>Actions</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {items.map((user) => (
+                <UserRow
+                  key={user.id}
+                  user={user}
+                  block={block}
+                  unblock={unblock}
+                  onRequestDelete={setDeleteTargetId}
+                />
+              ))}
+            </TBody>
+          </Table>
+
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-[var(--ju-muted)]">
+              Page {data.page} of {totalPages} · {data.totalCount} users
+            </p>
+            <div className="flex gap-2">
+              <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                Previous
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        </>
       )}
-      {unblock.isError && unblock.variables === userId && (
-        <p role="alert">{errorTitle(unblock.error, 'Could not restore the user.')}</p>
-      )}
-      {unblock.isSuccess && unblock.variables === userId && (
-        <p role="status">Access restored for user {unblock.variables}.</p>
-      )}
+
       {deletedUserId && <p role="status">User {deletedUserId} deleted.</p>}
-      {/* Mounted only while open, mirroring UserMenu's delete-account dialog
-          (src/shell/UserMenu.tsx): an unconditionally-mounted dialog would let
-          its typed confirmation and mutation state survive a close, so
-          reopening after Escape could show the confirm button already
-          enabled — that shipped as a real bug in Spec 1. */}
-      {deleteOpen && (
+
+      {/* Mounted only while a row's delete is requested, mirroring UserMenu's
+          delete-account dialog (src/shell/UserMenu.tsx): an unconditionally
+          mounted dialog would let its typed confirmation and mutation state
+          survive a close, so reopening after Escape could show the confirm
+          button already enabled — that shipped as a real bug in Spec 1. */}
+      {deleteTargetId && (
         <DeleteUserDialog
-          userId={userId}
+          userId={deleteTargetId}
           open
-          onClose={() => setDeleteOpen(false)}
-          onDeleted={setDeletedUserId}
+          onClose={() => setDeleteTargetId(null)}
+          onDeleted={handleDeleted}
         />
       )}
     </Card>
@@ -238,11 +326,14 @@ export default function AdminPage() {
   // This check only hides the controls for a nicer UX when the client's
   // notion of role happens to be non-admin — it is NOT the security
   // boundary. The `Admin` policy is enforced server-side on every
-  // /api/admin/* endpoint, so a stale or forged client role can, at worst,
-  // reveal these buttons; it can never grant an action. Any 403 the server
-  // returns must still surface to the admin verbatim (see the mutation
-  // error handling in InviteCodeSection / UserActionsSection /
-  // DeleteUserDialog above) rather than being treated as unreachable.
+  // /api/admin/* endpoint (including GET /api/admin/users itself — Users
+  // carries no tenant query filter, so that policy is the only guard
+  // between an End User and every account on the platform), so a stale or
+  // forged client role can, at worst, reveal these controls; it can never
+  // grant an action. Any 403 the server returns must still surface to the
+  // admin verbatim (see the mutation error handling in InviteCodeSection /
+  // UserRow / DeleteUserDialog above) rather than being treated as
+  // unreachable.
   if (role !== 'Admin') {
     return (
       <Card>
@@ -255,7 +346,7 @@ export default function AdminPage() {
     <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold text-[var(--ju-text)]">Admin</h1>
       <InviteCodeSection />
-      <UserActionsSection />
+      <UsersSection />
     </div>
   );
 }

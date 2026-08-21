@@ -18,6 +18,11 @@ public sealed class AdminUsersController : ControllerBase
         _deletion = deletion;
     }
 
+    [HttpGet]
+    public async Task<IActionResult> List(
+        [FromQuery] int page = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
+        => Ok(await _users.ListAsync(page, pageSize, ct));
+
     [HttpPost("{id:guid}/block")]
     public async Task<IActionResult> Block(Guid id, CancellationToken ct)
         => Map(await _users.BlockAsync(id, ct));

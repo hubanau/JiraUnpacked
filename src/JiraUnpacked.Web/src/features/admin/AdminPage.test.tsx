@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/setup';
 import AdminPage from './AdminPage';
 import { useAuth } from '../../auth/AuthContext';
+import type { AdminUserListItem } from '../../api/admin';
 
 // vi.mock, not vi.spyOn: ES module namespace objects are frozen, so spying on
 // a live export is unreliable under Vitest. Mocking the module is the stable way.
@@ -28,10 +29,40 @@ function renderAdmin({ role }: { role: string }) {
   );
 }
 
+const user1: AdminUserListItem = {
+  id: 'u1',
+  email: 'user1@example.com',
+  username: 'user1',
+  role: 'EndUser',
+  status: 'Active',
+  createdAt: '2026-01-01T00:00:00Z',
+};
+
+const user2: AdminUserListItem = {
+  id: 'u2',
+  email: 'user2@example.com',
+  username: 'user2',
+  role: 'EndUser',
+  status: 'Active',
+  createdAt: '2026-01-02T00:00:00Z',
+};
+
+// The Admin panel now fetches the list on mount, so — with the harness set
+// to onUnhandledRequest: 'error' — every test rendering as an Admin must
+// mock this, even when the test's focus is elsewhere.
+function usersListHandler(items: AdminUserListItem[]) {
+  return http.get('/api/admin/users', () =>
+    HttpResponse.json({ items, page: 1, pageSize: 50, totalCount: items.length }),
+  );
+}
+
 describe('AdminPage', () => {
   it('shows the generated code and warns it cannot be retrieved again', async () => {
-    server.use(http.post('/api/admin/invite-codes', () =>
-      HttpResponse.json({ code: 'ABC123', expiresAtUtc: '2026-09-01T00:00:00Z' })));
+    server.use(
+      usersListHandler([]),
+      http.post('/api/admin/invite-codes', () =>
+        HttpResponse.json({ code: 'ABC123', expiresAtUtc: '2026-09-01T00:00:00Z' })),
+    );
     renderAdmin({ role: 'Admin' });
 
     await userEvent.click(screen.getByRole('button', { name: /generate/i }));
@@ -40,10 +71,25 @@ describe('AdminPage', () => {
     expect(screen.getByText(/cannot be (retrieved|shown) again/i)).toBeInTheDocument();
   });
 
-  it('keeps delete disabled until DELETE is typed', async () => {
+  it('renders the fetched users in a table, with role and status shown', async () => {
+    server.use(usersListHandler([user1, user2]));
     renderAdmin({ role: 'Admin' });
-    await userEvent.type(screen.getByLabelText(/user id/i), 'u1');
-    await userEvent.click(screen.getByRole('button', { name: /delete user/i }));
+
+    expect(await screen.findByText('user1')).toBeInTheDocument();
+    expect(screen.getByText('user1@example.com')).toBeInTheDocument();
+    expect(screen.getByText('user2')).toBeInTheDocument();
+    // role/status are shown rather than hidden, since block/unblock reject
+    // non-End-Users server-side with a typed error rather than the client
+    // pre-filtering them out of the list.
+    expect(screen.getAllByText('EndUser').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Active').length).toBeGreaterThan(0);
+  });
+
+  it('keeps delete disabled until DELETE is typed', async () => {
+    server.use(usersListHandler([user1]));
+    renderAdmin({ role: 'Admin' });
+
+    await userEvent.click(await screen.findByRole('button', { name: /delete user/i }));
 
     const confirm = await screen.findByRole('button', { name: /^delete$/i });
     expect(confirm).toBeDisabled();
@@ -54,15 +100,16 @@ describe('AdminPage', () => {
 
   it('resets the confirmation when the dialog is reopened', async () => {
     const user = userEvent.setup();
+    server.use(usersListHandler([user1]));
     renderAdmin({ role: 'Admin' });
-    await user.type(screen.getByLabelText(/user id/i), 'u1');
 
-    await user.click(screen.getByRole('button', { name: /delete user/i }));
+    const deleteUserButton = await screen.findByRole('button', { name: /delete user/i });
+    await user.click(deleteUserButton);
     await user.type(await screen.findByLabelText(/type delete/i), 'DELETE');
     expect(screen.getByRole('button', { name: /^delete$/i })).toBeEnabled();
 
     await user.keyboard('{Escape}');
-    await user.click(screen.getByRole('button', { name: /delete user/i }));
+    await user.click(deleteUserButton);
 
     // Spec 1 shipped exactly this bug: a lingering dialog reopened pre-filled
     // with the confirm button already enabled, so one stray click could erase
@@ -72,76 +119,83 @@ describe('AdminPage', () => {
   });
 
   it('surfaces a 403 rather than assuming the client role check was sufficient', async () => {
-    server.use(http.post('/api/admin/users/u1/block', () =>
-      HttpResponse.json({ title: 'Forbidden' }, { status: 403 })));
+    server.use(
+      usersListHandler([user1]),
+      http.post('/api/admin/users/u1/block', () =>
+        HttpResponse.json({ title: 'Forbidden' }, { status: 403 })),
+    );
     renderAdmin({ role: 'Admin' });
 
-    await userEvent.type(screen.getByLabelText(/user id/i), 'u1');
-    await userEvent.click(screen.getByRole('button', { name: /block/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /^block$/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/forbidden/i);
   });
 
-  it('clears a block result when the User ID changes, before it can be mistaken for someone else', async () => {
-    server.use(http.post('/api/admin/users/u1/block', () => new HttpResponse(null, { status: 204 })));
+  it('a row action targets only that row\'s id', async () => {
+    server.use(
+      usersListHandler([user1, user2]),
+      http.post('/api/admin/users/u2/block', () => new HttpResponse(null, { status: 204 })),
+      // No handler for u1's block: if the click were misrouted to user1,
+      // onUnhandledRequest: 'error' would fail this test.
+    );
     renderAdmin({ role: 'Admin' });
 
-    const userIdInput = screen.getByLabelText(/user id/i);
-    await userEvent.type(userIdInput, 'u1');
-    await userEvent.click(screen.getByRole('button', { name: /^block user$/i }));
+    await screen.findByText('user1');
+    const rows = screen.getAllByRole('row');
+    // rows[0] is the header row; user1 is rows[1], user2 is rows[2].
+    const secondRowBlock = within(rows[2]).getByRole('button', { name: /^block$/i });
+    await userEvent.click(secondRowBlock);
 
-    expect(await screen.findByText(/blocked/i)).toBeInTheDocument();
-
-    // Editing the id — not firing any new action — must clear the stale
-    // result immediately. Before the reset effect existed, this message
-    // survived a change to the id field, so blocking u1 then pasting u2 and
-    // clicking Restore access showed "User blocked." and "Access restored."
-    // at once, naming neither user.
-    await userEvent.clear(userIdInput);
-    await userEvent.type(userIdInput, 'u2');
-
-    expect(screen.queryByText(/blocked/i)).not.toBeInTheDocument();
+    expect(await screen.findByText(/user2 blocked/i)).toBeInTheDocument();
+    expect(screen.queryByText(/user1 blocked/i)).not.toBeInTheDocument();
   });
 
-  it('does not resurface a block result for an id the field no longer shows', async () => {
-    // A manually-resolved response, not a wall-clock delay: the request is
-    // held open until resolveBlock() is called below, after the id field
-    // has already moved on to u2 — deterministically reproducing the race
-    // where an in-flight request (which reset() cannot cancel) settles
-    // after the admin has stopped looking at the id it was sent for.
-    let resolveBlock: () => void = () => {};
-    const blockResponse = new Promise<void>((resolve) => {
-      resolveBlock = resolve;
+  it("does not let one row's result leak onto another", async () => {
+    let resolveBlockU1: () => void = () => {};
+    const blockU1Response = new Promise<void>((resolve) => {
+      resolveBlockU1 = resolve;
     });
-    server.use(http.post('/api/admin/users/u1/block', async () => {
-      await blockResponse;
-      return new HttpResponse(null, { status: 204 });
-    }));
+    server.use(
+      usersListHandler([user1, user2]),
+      // Held open until resolveBlockU1() is called below, after the admin
+      // has already acted on user2 — deterministically reproducing the race
+      // where an in-flight request for one row settles after the admin has
+      // moved on to another.
+      http.post('/api/admin/users/u1/block', async () => {
+        await blockU1Response;
+        return new HttpResponse(null, { status: 204 });
+      }),
+      http.post('/api/admin/users/u2/block', () => new HttpResponse(null, { status: 204 })),
+    );
     renderAdmin({ role: 'Admin' });
 
-    const userIdInput = screen.getByLabelText(/user id/i);
-    const blockButton = screen.getByRole('button', { name: /^block user$/i });
-    await userEvent.type(userIdInput, 'u1');
-    await userEvent.click(blockButton);
+    await screen.findByText('user1');
+    const blockButtons = screen.getAllByRole('button', { name: /^block$/i });
 
-    await userEvent.clear(userIdInput);
-    await userEvent.type(userIdInput, 'u2');
+    await userEvent.click(blockButtons[0]); // block user1 — left pending
+    await userEvent.click(blockButtons[1]); // block user2 — resolves immediately
 
-    resolveBlock();
-    // aria-busy is driven by isPending alone (not gated on `variables`), so
-    // waiting for it to clear proves the delayed response has actually been
-    // processed, without relying on wall-clock timing.
-    await waitFor(() => expect(blockButton).not.toHaveAttribute('aria-busy'));
+    expect(await screen.findByText(/user2 blocked/i)).toBeInTheDocument();
+    expect(screen.queryByText(/user1 blocked/i)).not.toBeInTheDocument();
 
-    expect(screen.queryByText(/blocked/i)).not.toBeInTheDocument();
+    resolveBlockU1();
+    await waitFor(() => expect(blockButtons[0]).not.toHaveAttribute('aria-busy'));
+
+    // user1's request has now actually resolved server-side, but the most
+    // recent action the admin took was against user2 — user1's row must
+    // still never show a result that belongs to a different row.
+    expect(screen.queryByText(/user1 blocked/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/user2 blocked/i)).toBeInTheDocument();
   });
 
   it('shows a visible confirmation naming the deleted user, not a silent close', async () => {
-    server.use(http.delete('/api/admin/users/u1', () => new HttpResponse(null, { status: 204 })));
+    server.use(
+      usersListHandler([user1]),
+      http.delete('/api/admin/users/u1', () => new HttpResponse(null, { status: 204 })),
+    );
     renderAdmin({ role: 'Admin' });
 
-    await userEvent.type(screen.getByLabelText(/user id/i), 'u1');
-    await userEvent.click(screen.getByRole('button', { name: /delete user/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /delete user/i }));
     await userEvent.type(await screen.findByLabelText(/type delete/i), 'DELETE');
     await userEvent.click(screen.getByRole('button', { name: /^delete$/i }));
 

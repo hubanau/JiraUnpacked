@@ -57,4 +57,27 @@ public sealed class UserAdminService : IUserAdminService
         await _db.SaveChangesAsync(ct);
         return BlockResult.Ok();
     }
+
+    public async Task<PagedResult<AdminUserListItem>> ListAsync(
+        int page, int pageSize, CancellationToken ct = default)
+    {
+        var p = page < 1 ? 1 : page;
+        var size = pageSize < 1 ? 50 : Math.Min(pageSize, 100);
+
+        // Users carries no tenant query filter by design: it IS the tenant root,
+        // and an Admin is a platform operator acting across tenants. The Admin
+        // policy on the controller is therefore the ONLY guard on this read.
+        var q = _db.Users;
+        var total = await q.CountAsync(ct);
+
+        var items = await q
+            .OrderByDescending(u => u.CreatedAt).ThenBy(u => u.Id)
+            .Skip((p - 1) * size).Take(size)
+            // Project explicitly — never select the entity, which carries PasswordHash.
+            .Select(u => new AdminUserListItem(
+                u.Id, u.Email, u.Username, u.Role.ToString(), u.Status.ToString(), u.CreatedAt))
+            .ToListAsync(ct);
+
+        return new PagedResult<AdminUserListItem>(items, p, size, total);
+    }
 }
