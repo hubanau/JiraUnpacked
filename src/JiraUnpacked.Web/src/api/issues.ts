@@ -13,9 +13,11 @@ export interface FilterFieldInfo {
 
 /**
  * The server's closed filter-field allow-list (GET /api/filter-catalog).
- * Static and tenant-independent — fetched once and cached, never mirrored
- * client-side, so drift between what the UI offers and what the server
- * accepts is impossible rather than merely detected.
+ * Static and tenant-independent, so the query that fetches it (see
+ * FilterBuilder) is given `staleTime: Infinity` — fetched once per page
+ * load and reused across every mount, never mirrored client-side, so drift
+ * between what the UI offers and what the server accepts is impossible
+ * rather than merely detected.
  */
 export interface FilterCatalog {
   fields: FilterFieldInfo[];

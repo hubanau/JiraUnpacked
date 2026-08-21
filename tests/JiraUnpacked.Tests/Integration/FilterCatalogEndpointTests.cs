@@ -20,6 +20,32 @@ public sealed class FilterCatalogEndpointTests : IClassFixture<JiraUnpackedApiFa
         "storyPoints", "createdAt", "updatedAt", "summary", "jiraKey", "parent",
     };
 
+    // Pins the emitted `type` string per field, matched exactly (not by
+    // containment) against the full field set above. The client's FieldType
+    // union ('DictName' | 'Decimal' | 'DateTime' | 'Text' | 'ParentRef' — see
+    // src/JiraUnpacked.Web/src/api/issues.ts) is hand-typed to mirror
+    // whatever FilterField.cs's internal FieldType enum serialises to
+    // (FilterCatalogService projects it via f.Type.ToString()), so nothing
+    // else in the build would catch a renamed enum member — this dictionary
+    // is the only thing standing between that rename and a client-side
+    // isDictionaryField/typeFor break that ships silently.
+    private static readonly IReadOnlyDictionary<string, string> ExpectedFieldTypes =
+        new Dictionary<string, string>
+        {
+            ["status"] = "DictName",
+            ["issueType"] = "DictName",
+            ["priority"] = "DictName",
+            ["assignee"] = "DictName",
+            ["sprint"] = "DictName",
+            ["team"] = "DictName",
+            ["storyPoints"] = "Decimal",
+            ["createdAt"] = "DateTime",
+            ["updatedAt"] = "DateTime",
+            ["summary"] = "Text",
+            ["jiraKey"] = "Text",
+            ["parent"] = "ParentRef",
+        };
+
     [Fact]
     public async Task Authenticated_get_returns_the_full_catalog_with_exact_operator_sets()
     {
@@ -51,6 +77,23 @@ public sealed class FilterCatalogEndpointTests : IClassFixture<JiraUnpackedApiFa
 
         var jiraKey = catalog.Fields.Single(f => f.Name == "jiraKey");
         Assert.True(new HashSet<string> { "Eq", "Contains", "StartsWith" }.SetEquals(jiraKey.Operators));
+
+        // Exact per-field `type`, and — via SetEquals against
+        // ExpectedFieldTypes.Values.Distinct() — the exact distinct set of
+        // types the catalog ever emits. Renaming a FieldType member (or
+        // reassigning a field to a different one) fails this immediately,
+        // whether or not it happens to collide with an existing string.
+        foreach (var field in catalog.Fields)
+        {
+            Assert.True(
+                ExpectedFieldTypes.TryGetValue(field.Name, out var expectedType),
+                $"Unexpected field '{field.Name}' with no expected type entry.");
+            Assert.Equal(expectedType, field.Type);
+        }
+        Assert.True(
+            ExpectedFieldTypes.Values.ToHashSet().SetEquals(catalog.Fields.Select(f => f.Type)),
+            $"Expected exactly the types {string.Join(", ", ExpectedFieldTypes.Values.Distinct())}, " +
+            $"got {string.Join(", ", catalog.Fields.Select(f => f.Type).Distinct())}");
     }
 
     [Fact]

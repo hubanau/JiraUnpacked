@@ -7,6 +7,8 @@ namespace JiraUnpacked.Infrastructure.Services;
 
 public sealed class UserAdminService : IUserAdminService
 {
+    private const int MaxPageSize = 100;
+    private const int DefaultPageSize = 50;
     private readonly AppDbContext _db;
     private readonly IClock _clock;
 
@@ -62,7 +64,7 @@ public sealed class UserAdminService : IUserAdminService
         int page, int pageSize, CancellationToken ct = default)
     {
         var p = page < 1 ? 1 : page;
-        var size = pageSize < 1 ? 50 : Math.Min(pageSize, 100);
+        var size = pageSize < 1 ? DefaultPageSize : Math.Min(pageSize, MaxPageSize);
 
         // Users carries no tenant query filter by design: it IS the tenant root,
         // and an Admin is a platform operator acting across tenants. The Admin

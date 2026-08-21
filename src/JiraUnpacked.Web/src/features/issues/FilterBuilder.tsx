@@ -35,6 +35,11 @@ export function FilterBuilder({ conditions, onChange }: FilterBuilderProps) {
   const { data: catalog, isPending, error } = useQuery({
     queryKey: queryKeys.filterCatalog(),
     queryFn: getFilterCatalog,
+    // The catalog is static and tenant-independent (see issues.ts) — without
+    // this, the default staleTime of 0 refetches it on every IssueList
+    // mount, which is pure waste for data that cannot change during a
+    // session.
+    staleTime: Infinity,
   });
 
   if (isPending) return <Spinner aria-label="Loading filter catalog" />;

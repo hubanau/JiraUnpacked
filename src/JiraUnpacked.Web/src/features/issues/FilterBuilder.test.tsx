@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { http, HttpResponse } from 'msw';
+import { delay, http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/setup';
 import IssueList from './IssueList';
@@ -78,6 +78,47 @@ async function addCondition(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('FilterBuilder', () => {
+  it('shows a spinner while the filter catalog is loading', async () => {
+    // Rendered directly (no IssueList/router wrapper needed) with a request
+    // that never resolves, so the pending phase is observable rather than
+    // racing past it — the same technique the maxConditions/maxInValues
+    // tests below use to render FilterBuilder/ConditionRow standalone.
+    server.use(
+      http.get('/api/filter-catalog', async () => {
+        await delay('infinite');
+        return HttpResponse.json(CATALOG);
+      }),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <FilterBuilder conditions={[]} onChange={() => {}} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('status', { name: /loading filter catalog/i })).toBeInTheDocument();
+  });
+
+  it('shows the server error when the filter catalog fails to load', async () => {
+    server.use(
+      http.get('/api/filter-catalog', () =>
+        HttpResponse.json(
+          { title: 'Could not load the filter catalog right now.' },
+          { status: 500 },
+        )),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <FilterBuilder conditions={[]} onChange={() => {}} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /could not load the filter catalog right now/i,
+    );
+  });
+
   it('shows a collapsed summary and an Add condition control when there is no filter', async () => {
     mockIssuesQuery();
     renderIssueList();

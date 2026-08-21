@@ -23,7 +23,8 @@ public sealed class AdminUserListTests : IClassFixture<JiraUnpackedApiFactory>, 
 
     private const string Password = "Correct-Horse-9!";
 
-    private async Task<(Guid id, string email)> SeedUserAsync(UserRole role)
+    private async Task<(Guid id, string email)> SeedUserAsync(
+        UserRole role, DateTime? createdAt = null, Guid? id = null)
     {
         var unique = Guid.NewGuid().ToString("N");
         using var scope = _factory.Services.CreateScope();
@@ -32,13 +33,13 @@ public sealed class AdminUserListTests : IClassFixture<JiraUnpackedApiFactory>, 
 
         var user = new User
         {
-            Id = Guid.NewGuid(),
+            Id = id ?? Guid.NewGuid(),
             Email = $"user-{unique}@example.com",
             Username = $"user-{unique}",
             PasswordHash = hasher.Hash(Password),
             Role = role,
             Status = UserStatus.Active,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = createdAt ?? DateTime.UtcNow
         };
         db.Users.Add(user);
         await db.SaveChangesAsync();
@@ -107,5 +108,87 @@ public sealed class AdminUserListTests : IClassFixture<JiraUnpackedApiFactory>, 
         Assert.True(result.TotalCount >= 2);
         Assert.Equal(1, result.Page);
         Assert.Equal(1, result.PageSize);
+    }
+
+    // UserAdminService.ListAsync now clamps page/pageSize through the same
+    // DefaultPageSize/MaxPageSize consts IssueQueryService, GapCheckRunner,
+    // and MetricsQueryService use — these pin the three clamp boundaries
+    // through the actual endpoint rather than just the constant values.
+
+    [Fact]
+    public async Task Page_below_one_clamps_to_one()
+    {
+        var admin = await AdminClientAsync();
+
+        var response = await admin.GetAsync("/api/admin/users?page=0&pageSize=5");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = await response.Content.ReadFromJsonAsync<PagedResult<AdminUserListItem>>();
+        Assert.NotNull(result);
+        Assert.Equal(1, result!.Page);
+    }
+
+    [Fact]
+    public async Task PageSize_below_one_clamps_to_default_of_fifty()
+    {
+        var admin = await AdminClientAsync();
+
+        var response = await admin.GetAsync("/api/admin/users?page=1&pageSize=0");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = await response.Content.ReadFromJsonAsync<PagedResult<AdminUserListItem>>();
+        Assert.NotNull(result);
+        Assert.Equal(50, result!.PageSize);
+    }
+
+    [Fact]
+    public async Task PageSize_above_max_clamps_to_one_hundred()
+    {
+        var admin = await AdminClientAsync();
+
+        var response = await admin.GetAsync("/api/admin/users?page=1&pageSize=1000");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = await response.Content.ReadFromJsonAsync<PagedResult<AdminUserListItem>>();
+        Assert.NotNull(result);
+        Assert.Equal(100, result!.PageSize);
+    }
+
+    [Fact]
+    public async Task Lists_users_ordered_by_created_at_desc_then_id_ascending_on_ties()
+    {
+        var admin = await AdminClientAsync();
+
+        // Far-future timestamps guarantee these rank ahead of every other
+        // row this shared, never-truncated-between-tests database
+        // accumulates (see JiraUnpackedApiFactory.EnsureDatabaseAsync —
+        // it migrates, it does not reset) without needing to assume
+        // anything about total row count or exact page position.
+        var farFuture = new DateTime(3000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var (newestId, _) = await SeedUserAsync(UserRole.EndUser, farFuture.AddDays(2));
+        var (olderId, _) = await SeedUserAsync(UserRole.EndUser, farFuture.AddDays(1));
+        // Same CreatedAt on both — only the Id tie-break can order these two.
+        // Postgres compares uuid byte-for-byte in the order the canonical
+        // string is written, so this literal pair is ordered the same way
+        // as the string comparison "...0001" < "...0002" suggests.
+        var (tieLowId, _) = await SeedUserAsync(
+            UserRole.EndUser, farFuture, Guid.Parse("00000000-0000-0000-0000-000000000001"));
+        var (tieHighId, _) = await SeedUserAsync(
+            UserRole.EndUser, farFuture, Guid.Parse("00000000-0000-0000-0000-000000000002"));
+
+        var response = await admin.GetAsync("/api/admin/users?page=1&pageSize=100");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<PagedResult<AdminUserListItem>>();
+        Assert.NotNull(result);
+
+        var order = result!.Items.Select(u => u.Id).ToList();
+        var positions = new[] { newestId, olderId, tieLowId, tieHighId }
+            .Select(id => order.IndexOf(id))
+            .ToList();
+
+        Assert.All(positions, p => Assert.True(p >= 0, "a seeded far-future user is missing from the response"));
+        Assert.True(positions[0] < positions[1], "CreatedAt DESC: the newer row must come first");
+        Assert.True(positions[1] < positions[2], "CreatedAt DESC: rows with a later CreatedAt must come first");
+        Assert.True(positions[2] < positions[3], "tie-break: Id ascending when CreatedAt is equal");
     }
 }
