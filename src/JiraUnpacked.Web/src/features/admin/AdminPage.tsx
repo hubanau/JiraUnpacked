@@ -242,6 +242,12 @@ function UsersSection() {
 
   const items = data?.items ?? [];
   const totalPages = data ? Math.max(1, Math.ceil(data.totalCount / data.pageSize)) : 1;
+  // `page > 1` is included on its own, not just `totalPages > 1`: deleting the
+  // last row on the current page shrinks totalCount (and so totalPages) in
+  // the very same response that reports zero items for this page, so a pager
+  // gated on totalPages alone would vanish before the admin ever gets a
+  // chance to click Previous back to a page that still has rows.
+  const showPager = data !== undefined && (totalPages > 1 || page > 1);
 
   return (
     <Card className="flex flex-col gap-3">
@@ -250,55 +256,59 @@ function UsersSection() {
 
       {!error && items.length === 0 && (
         <EmptyState
-          title="No users yet"
-          description="Generate an invite code above to create the first account."
+          title={data && data.totalCount > 0 ? 'No users on this page' : 'No users yet'}
+          description={
+            data && data.totalCount > 0
+              ? 'Go back to a previous page to see existing users.'
+              : 'Generate an invite code above to create the first account.'
+          }
         />
       )}
 
       {data && items.length > 0 && (
-        <>
-          <Table>
-            <THead>
-              <TR>
-                <TH>Username</TH>
-                <TH>Email</TH>
-                <TH>Role</TH>
-                <TH>Status</TH>
-                <TH>Created</TH>
-                <TH>Actions</TH>
-              </TR>
-            </THead>
-            <TBody>
-              {items.map((user) => (
-                <UserRow
-                  key={user.id}
-                  user={user}
-                  block={block}
-                  unblock={unblock}
-                  onRequestDelete={setDeleteTargetId}
-                />
-              ))}
-            </TBody>
-          </Table>
+        <Table>
+          <THead>
+            <TR>
+              <TH>Username</TH>
+              <TH>Email</TH>
+              <TH>Role</TH>
+              <TH>Status</TH>
+              <TH>Created</TH>
+              <TH>Actions</TH>
+            </TR>
+          </THead>
+          <TBody>
+            {items.map((user) => (
+              <UserRow
+                key={user.id}
+                user={user}
+                block={block}
+                unblock={unblock}
+                onRequestDelete={setDeleteTargetId}
+              />
+            ))}
+          </TBody>
+        </Table>
+      )}
 
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-[var(--ju-muted)]">
-              Page {data.page} of {totalPages} · {data.totalCount} users
-            </p>
-            <div className="flex gap-2">
-              <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-                Previous
-              </Button>
-              <Button
-                variant="secondary"
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                Next
-              </Button>
-            </div>
+      {showPager && data && (
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-[var(--ju-muted)]">
+            Page {data.page} of {totalPages} · {data.totalCount} users
+          </p>
+          <div className="flex gap-2">
+            <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+              Previous
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next
+            </Button>
           </div>
-        </>
+        </div>
       )}
 
       {deletedUserId && <p role="status">User {deletedUserId} deleted.</p>}

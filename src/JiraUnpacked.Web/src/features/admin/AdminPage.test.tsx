@@ -205,6 +205,55 @@ describe('AdminPage', () => {
     expect(screen.queryByLabelText(/type delete/i)).not.toBeInTheDocument();
   });
 
+  it('keeps the pager reachable after deleting the last row on the current page', async () => {
+    // Regression test: the pager used to be nested inside the
+    // `items.length > 0` branch, so emptying the current page (by deleting
+    // its only row) hid Previous along with the table — stranding the admin
+    // on a dead page reading "No users yet", even though a user still
+    // exists on page 1.
+    const user = userEvent.setup();
+    let user2Deleted = false;
+    server.use(
+      http.get('/api/admin/users', ({ request }) => {
+        const url = new URL(request.url);
+        const page = Number(url.searchParams.get('page') ?? '1');
+        const totalCount = user2Deleted ? 1 : 2;
+        if (page === 1) {
+          return HttpResponse.json({ items: [user1], page: 1, pageSize: 1, totalCount });
+        }
+        return HttpResponse.json({
+          items: user2Deleted ? [] : [user2],
+          page: 2,
+          pageSize: 1,
+          totalCount,
+        });
+      }),
+      http.delete('/api/admin/users/u2', () => {
+        user2Deleted = true;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    renderAdmin({ role: 'Admin' });
+
+    await screen.findByText('user1');
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+    await screen.findByText('user2');
+
+    await user.click(screen.getByRole('button', { name: /delete user/i }));
+    await user.type(await screen.findByLabelText(/type delete/i), 'DELETE');
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    // The page is now empty, but there is still one user overall — the
+    // empty copy must say so, and Previous must still be there and enabled.
+    expect(await screen.findByText(/no users on this page/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no users yet/i)).not.toBeInTheDocument();
+    const previous = screen.getByRole('button', { name: /^previous$/i });
+    expect(previous).toBeEnabled();
+
+    await user.click(previous);
+    expect(await screen.findByText('user1')).toBeInTheDocument();
+  });
+
   it('does not render admin actions for a non-admin', () => {
     renderAdmin({ role: 'EndUser' });
     expect(screen.queryByRole('button', { name: /generate/i })).not.toBeInTheDocument();
