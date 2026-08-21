@@ -90,33 +90,24 @@ describe('apiFetch', () => {
     expect(onAuthFailure).toHaveBeenCalledTimes(1);
   });
 
-  it('does not sign the user out when a 401 after a successful refresh carries a ProblemDetails body', async () => {
-    // Simulates JiraApiExceptionFilter mapping a revoked/expired *Jira*
-    // token to 401 with a titled ProblemDetails body. Our own session is
-    // fine — refresh below succeeds and the retry uses a fresh token — so
-    // this must be surfaced as a normal error, not treated as our session
-    // having expired.
-    let calls = 0;
-    server.use(http.get('/api/thing', ({ request }) => {
-      calls++;
-      if (request.headers.get('authorization') === 'Bearer good') {
-        return HttpResponse.json({ title: 'Jira rejected the stored credentials.' }, { status: 401 });
-      }
-      return new HttpResponse(null, { status: 401 });
-    }));
-
-    let token = 'stale';
-    const refresh = vi.fn(async () => { token = 'good'; return true; });
+  it('logs out on a post-refresh 401 even when it carries a ProblemDetails body', async () => {
+    // Jira credential failures are 502 now (JiraApiExceptionFilter), so a
+    // 401 that survives a successful refresh — carrying a fresh bearer
+    // token — is never that. It is a genuine session failure, e.g.
+    // AdminUsersController's or AuthController.DeleteMe's "Invalid token.",
+    // both of which carry a ProblemDetails body. The old discriminator saw
+    // that body and skipped signing out, leaving a genuinely invalid token
+    // in a broken half-session — this is the regression test for that.
+    server.use(http.get('/api/thing', () =>
+      HttpResponse.json({ title: 'Invalid token.' }, { status: 401 })));
     const onAuthFailure = vi.fn();
-    setAuthBridge({ getAccessToken: () => token, refresh, onAuthFailure });
+    setAuthBridge({ getAccessToken: () => 'x', refresh: async () => true, onAuthFailure });
 
-    await expect(apiFetch('/api/thing')).rejects.toMatchObject({
-      status: 401,
-      title: 'Jira rejected the stored credentials.',
-    });
-    expect(onAuthFailure).not.toHaveBeenCalled();
-    expect(refresh).toHaveBeenCalledTimes(1);
-    expect(calls).toBe(2);
+    await expect(apiFetch('/api/thing')).rejects.toBeInstanceOf(ApiError);
+
+    // The old discriminator saw the body and skipped this — a genuinely
+    // invalid token then left the user in a broken half-session.
+    expect(onAuthFailure).toHaveBeenCalledTimes(1);
   });
 
   it('still signs the user out when the retry 401 is bodiless (the real bearer-token challenge)', async () => {
