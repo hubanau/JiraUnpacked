@@ -37,23 +37,42 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
+/** Pulls a non-empty ProblemDetails `title` out of a parsed body, if present. */
+function titleOf(body: unknown): string | undefined {
+  if (body && typeof body === 'object') {
+    const shape = body as { title?: unknown };
+    if (typeof shape.title === 'string' && shape.title.length > 0) return shape.title;
+  }
+  return undefined;
+}
+
 /** Normalises every error shape the API produces into one typed error. */
 export async function toApiError(response: Response): Promise<ApiError> {
-  // These two are decided by status alone so the user gets an actionable
-  // message instead of the framework's generic wording.
+  // Decided by status alone so the user gets an actionable message instead
+  // of the framework's generic wording — the rate limiter's body is
+  // framework wording, not ours.
   if (response.status === 429) return new ApiError(429, RATE_LIMIT_MESSAGE);
-  if (response.status === 502) return new ApiError(502, UPSTREAM_JIRA_MESSAGE);
 
   const body = await readJson(response);
+
+  // 502 now carries two distinct causes — a rejected stored credential and an
+  // unreachable Jira — so the server's own wording must win when it sent one.
+  // Falling back to the generic message keeps behaviour for bodiless 502s.
+  if (response.status === 502) {
+    return new ApiError(502, titleOf(body) ?? UPSTREAM_JIRA_MESSAGE);
+  }
+
   if (body && typeof body === 'object') {
-    const shape = body as { title?: unknown; detail?: unknown; error?: unknown };
-    if (typeof shape.title === 'string' && shape.title.length > 0) {
+    const title = titleOf(body);
+    if (title) {
+      const shape = body as { detail?: unknown };
       return new ApiError(
         response.status,
-        shape.title,
+        title,
         typeof shape.detail === 'string' ? shape.detail : undefined,
       );
     }
+    const shape = body as { error?: unknown };
     if (typeof shape.error === 'string' && shape.error.length > 0) {
       return new ApiError(response.status, shape.error);
     }

@@ -39,8 +39,13 @@ describe('toApiError', () => {
     expect(e.title).toBe(RATE_LIMIT_MESSAGE);
   });
 
-  it('maps 502 to the upstream-Jira message', async () => {
-    const e = await toApiError(res(502, { title: 'Bad Gateway' }));
+  it('prefers a 502 ProblemDetails title over the generic upstream message', async () => {
+    const e = await toApiError(res(502, { title: 'Jira rejected the stored credentials.' }));
+    expect(e.title).toBe('Jira rejected the stored credentials.');
+  });
+
+  it('falls back to the generic upstream message for a bodiless 502', async () => {
+    const e = await toApiError(res(502));
     expect(e.title).toBe(UPSTREAM_JIRA_MESSAGE);
   });
 });

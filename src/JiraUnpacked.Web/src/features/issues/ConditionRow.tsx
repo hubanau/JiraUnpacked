@@ -1,6 +1,6 @@
 import { useState, type ChangeEvent } from 'react';
-import type { FilterCondition, FilterOperator } from '../../api/issues';
-import { FILTER_FIELDS, MAX_IN_VALUES, operatorsFor, resetOperatorIfDisallowed, typeFor } from './filterCatalog';
+import type { FilterCatalog, FilterCondition, FilterOperator } from '../../api/issues';
+import { fieldNames, operatorsFor, resetOperatorIfDisallowed, typeFor } from './filterCatalogHelpers';
 import { Badge, Button, Field, Select } from '../../ui';
 
 const INPUT_CLASS =
@@ -9,6 +9,7 @@ const INPUT_CLASS =
 
 interface ConditionRowProps {
   condition: FilterCondition;
+  catalog: FilterCatalog;
   onChange: (next: FilterCondition) => void;
   onRemove: () => void;
   index: number;
@@ -21,7 +22,7 @@ interface ConditionRowProps {
  * in ../../api/issues for why a leftover key of the wrong shape is a runtime
  * 400 that nothing here would otherwise catch.
  */
-export function ConditionRow({ condition, onChange, onRemove, index }: ConditionRowProps) {
+export function ConditionRow({ condition, catalog, onChange, onRemove, index }: ConditionRowProps) {
   // Draft text for the "In" multi-value editor's add box. Local because it
   // is not part of the submitted condition until "Add value" commits it.
   const [inDraft, setInDraft] = useState('');
@@ -41,15 +42,15 @@ export function ConditionRow({ condition, onChange, onRemove, index }: Condition
     setInDraft('');
   }
 
-  const fieldType = typeFor(condition.field);
-  const ops = operatorsFor(condition.field);
+  const fieldType = typeFor(catalog, condition.field);
+  const ops = operatorsFor(catalog, condition.field);
   const rowNumber = index + 1;
 
   const handleFieldChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const nextField = event.target.value;
     // A value valid for the old field's type rarely is for the new one, so
     // it — and any `values` array — is dropped entirely, not carried over.
-    onChange({ field: nextField, op: resetOperatorIfDisallowed(nextField, condition.op) });
+    onChange({ field: nextField, op: resetOperatorIfDisallowed(catalog, nextField, condition.op) });
     setInDraft('');
   };
 
@@ -77,7 +78,7 @@ export function ConditionRow({ condition, onChange, onRemove, index }: Condition
   const handleAddInValue = () => {
     const trimmed = inDraft.trim();
     const current = condition.values ?? [];
-    if (!trimmed || current.length >= MAX_IN_VALUES) return;
+    if (!trimmed || current.length >= catalog.maxInValues) return;
     onChange({ field: condition.field, op: condition.op, values: [...current, trimmed] });
     setInDraft('');
   };
@@ -99,7 +100,7 @@ export function ConditionRow({ condition, onChange, onRemove, index }: Condition
 
     if (condition.op === 'In') {
       const values = condition.values ?? [];
-      const atLimit = values.length >= MAX_IN_VALUES;
+      const atLimit = values.length >= catalog.maxInValues;
       return (
         <div className="flex flex-col gap-2">
           <div className="flex items-end gap-2">
@@ -117,7 +118,7 @@ export function ConditionRow({ condition, onChange, onRemove, index }: Condition
           </div>
           {atLimit && (
             <p className="text-xs text-[var(--ju-muted)]">
-              You can add at most {MAX_IN_VALUES} values.
+              You can add at most {catalog.maxInValues} values.
             </p>
           )}
           {values.length > 0 && (
@@ -183,7 +184,7 @@ export function ConditionRow({ condition, onChange, onRemove, index }: Condition
     <div className="flex flex-wrap items-end gap-2 rounded-md border border-[var(--ju-border)] p-2">
       <Field label={`Field for condition ${rowNumber}`} id={`condition-${index}-field`}>
         <Select value={condition.field} onChange={handleFieldChange}>
-          {FILTER_FIELDS.map((f) => (
+          {fieldNames(catalog).map((f) => (
             <option key={f} value={f}>
               {f}
             </option>

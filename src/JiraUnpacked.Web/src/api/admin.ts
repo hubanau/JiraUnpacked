@@ -1,6 +1,19 @@
 import { apiFetch } from './client';
+import type { PagedResult } from './issues';
 
 export interface InviteCodeResponse { code: string; expiresAtUtc: string }
+
+export interface AdminUserListItem {
+  id: string;
+  email: string;
+  username: string;
+  role: string;
+  status: string;
+  createdAt: string;
+}
+
+export const listUsers = (page = 1, pageSize = 50) =>
+  apiFetch<PagedResult<AdminUserListItem>>(`/api/admin/users?page=${page}&pageSize=${pageSize}`);
 
 export const createInviteCode = () =>
   apiFetch<InviteCodeResponse>('/api/admin/invite-codes', { method: 'POST' });

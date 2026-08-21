@@ -3,6 +3,28 @@ import { apiFetch } from './client';
 export type FilterOperator =
   | 'Eq' | 'Neq' | 'In' | 'Lt' | 'Lte' | 'Gt' | 'Gte' | 'Contains' | 'StartsWith' | 'IsNull';
 
+export type FieldType = 'DictName' | 'Decimal' | 'DateTime' | 'Text' | 'ParentRef';
+
+export interface FilterFieldInfo {
+  name: string;
+  type: FieldType;
+  operators: FilterOperator[];
+}
+
+/**
+ * The server's closed filter-field allow-list (GET /api/filter-catalog).
+ * Static and tenant-independent, so the query that fetches it (see
+ * FilterBuilder) is given `staleTime: Infinity` — fetched once per page
+ * load and reused across every mount, never mirrored client-side, so drift
+ * between what the UI offers and what the server accepts is impossible
+ * rather than merely detected.
+ */
+export interface FilterCatalog {
+  fields: FilterFieldInfo[];
+  maxConditions: number;
+  maxInValues: number;
+}
+
 /**
  * Mirrors the API's FilterCondition. `value` and `values` are mutually
  * exclusive: single-value operators send `value`, `In` sends `values`, and
@@ -83,3 +105,5 @@ export const queryIssues = (projectId: string, request: IssueFilterRequest) =>
 
 export const getIssueDetail = (projectId: string, jiraIssueId: string) =>
   apiFetch<IssueDetail>(`/api/projects/${projectId}/issues/${encodeURIComponent(jiraIssueId)}`);
+
+export const getFilterCatalog = () => apiFetch<FilterCatalog>('/api/filter-catalog');

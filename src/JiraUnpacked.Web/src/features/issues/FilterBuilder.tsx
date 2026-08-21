@@ -1,14 +1,16 @@
+import { useQuery } from '@tanstack/react-query';
 import type { FilterCondition } from '../../api/issues';
-import { FIELD_CATALOG, MAX_CONDITIONS } from './filterCatalog';
-import { Button } from '../../ui';
+import { getFilterCatalog } from '../../api/issues';
+import { queryKeys } from '../../api/queryKeys';
+import { ApiError } from '../../api/errors';
+import { Button, ErrorState, Spinner } from '../../ui';
 import { ConditionRow } from './ConditionRow';
+import { isDictionaryField } from './filterCatalogHelpers';
 
 interface FilterBuilderProps {
   conditions: FilterCondition[];
   onChange: (next: FilterCondition[]) => void;
 }
-
-const isDictionaryField = (field: string): boolean => FIELD_CATALOG[field]?.type === 'DictName';
 
 /**
  * FR-E4 defines `Neq` on a dictionary field to also match issues where the
@@ -23,9 +25,33 @@ const NEQ_DICT_NOTE =
  * Holds no server state of its own — every change flows up through
  * `onChange` so the caller (IssueList) remains the single owner of the
  * conditions that drive its query.
+ *
+ * The field/operator/type allow-list is fetched from GET /api/filter-catalog
+ * rather than mirrored client-side (see filterCatalogHelpers.ts) — the
+ * server's FilterFields.All is the sole authority, so drift between what
+ * this UI offers and what the server accepts is impossible, not just tested.
  */
 export function FilterBuilder({ conditions, onChange }: FilterBuilderProps) {
-  const atConditionLimit = conditions.length >= MAX_CONDITIONS;
+  const { data: catalog, isPending, error } = useQuery({
+    queryKey: queryKeys.filterCatalog(),
+    queryFn: getFilterCatalog,
+    // The catalog is static and tenant-independent (see issues.ts) — without
+    // this, the default staleTime of 0 refetches it on every IssueList
+    // mount, which is pure waste for data that cannot change during a
+    // session.
+    staleTime: Infinity,
+  });
+
+  if (isPending) return <Spinner aria-label="Loading filter catalog" />;
+  if (error) {
+    return (
+      <ErrorState
+        title={error instanceof ApiError ? error.title : 'Could not load the filter catalog.'}
+      />
+    );
+  }
+
+  const atConditionLimit = conditions.length >= catalog.maxConditions;
 
   const handleAdd = () => {
     if (atConditionLimit) return;
@@ -53,7 +79,7 @@ export function FilterBuilder({ conditions, onChange }: FilterBuilderProps) {
     );
   }
 
-  const showsNeqDictNote = conditions.some((c) => c.op === 'Neq' && isDictionaryField(c.field));
+  const showsNeqDictNote = conditions.some((c) => c.op === 'Neq' && isDictionaryField(catalog, c.field));
 
   return (
     <div className="flex flex-col gap-3">
@@ -62,6 +88,7 @@ export function FilterBuilder({ conditions, onChange }: FilterBuilderProps) {
           key={index}
           index={index}
           condition={condition}
+          catalog={catalog}
           onChange={(next) => handleRowChange(index, next)}
           onRemove={() => handleRemove(index)}
         />
@@ -78,7 +105,7 @@ export function FilterBuilder({ conditions, onChange }: FilterBuilderProps) {
 
       {atConditionLimit && (
         <p className="text-xs text-[var(--ju-muted)]">
-          You can add at most {MAX_CONDITIONS} conditions.
+          You can add at most {catalog.maxConditions} conditions.
         </p>
       )}
 
