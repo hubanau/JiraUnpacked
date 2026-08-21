@@ -30,4 +30,6 @@ export const queryKeys = {
   checks: (projectId: string) => ['projects', projectId, 'checks'] as const,
   checkResult: (projectId: string, checkId: string, page: number) =>
     ['projects', projectId, 'checks', checkId, page] as const,
+  // Global — no project segment: the catalog is static and tenant-independent.
+  filterCatalog: () => ['filter-catalog'] as const,
 } as const;
