@@ -6,6 +6,7 @@ using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Reporting.Filtering;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace JiraUnpacked.Infrastructure.Reporting;
 
@@ -112,7 +113,15 @@ public sealed class SavedFilterService : ISavedFilterService
         };
 
         _db.SavedFilters.Add(row);   // EndUserId is stamped by AppDbContext.SaveChanges.
-        await _db.SaveChangesAsync(ct);
+
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (IsDuplicateName(ex))
+        {
+            return DuplicateName(name!);
+        }
 
         return SaveFilterResult.Ok(ToView(row));
     }
@@ -133,7 +142,15 @@ public sealed class SavedFilterService : ISavedFilterService
         row.Name = name!;
         row.DefinitionJson = definition!;
         row.UpdatedAt = ToStoragePrecision(_clock.UtcNow);
-        await _db.SaveChangesAsync(ct);
+
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (IsDuplicateName(ex))
+        {
+            return DuplicateName(name!);
+        }
 
         return SaveFilterResult.Ok(ToView(row));
     }
@@ -151,6 +168,19 @@ public sealed class SavedFilterService : ISavedFilterService
     private Task<SavedFilter?> FindAsync(Guid projectId, Guid filterId, CancellationToken ct) =>
         _db.SavedFilters.FirstOrDefaultAsync(
             f => f.Id == filterId && f.JiraProjectId == projectId, ct);
+
+    private static SaveFilterResult DuplicateName(string name) =>
+        SaveFilterResult.Conflict($"A saved filter named '{name}' already exists in this project.");
+
+    /// <summary>
+    /// A concurrent write claimed the same name between the pre-check and this insert. The
+    /// unique index on (JiraProjectId, Name) is the REAL guard; the pre-check only exists to
+    /// give the common case a clean answer without provoking an exception. Mapping the race to
+    /// the same 409 keeps a lost race from surfacing as a 500. Same shape as
+    /// RegistrationService, JiraProjectService and SyncOrchestrator.
+    /// </summary>
+    private static bool IsDuplicateName(DbUpdateException ex) =>
+        ex.InnerException is PostgresException { SqlState: "23505" };
 
     private Task<bool> NameTakenAsync(Guid projectId, string name, Guid? excluding, CancellationToken ct) =>
         _db.SavedFilters.AnyAsync(

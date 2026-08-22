@@ -1,4 +1,4 @@
-import { setAuthBridge } from '../api/client';
+import { ApiError, setAuthBridge, type RefreshOutcome } from '../api/client';
 import { refreshTokens, type TokenResponse } from '../api/auth';
 
 export const USERNAME_KEY = 'ju.username';
@@ -15,7 +15,7 @@ export const USERNAME_KEY = 'ju.username';
 let accessToken: string | null = null;
 
 /** The in-flight refresh, shared by every concurrent caller (single-flight). */
-let inFlight: Promise<boolean> | null = null;
+let inFlight: Promise<RefreshOutcome> | null = null;
 
 /**
  * localStorage can throw (storage disabled, private-browsing quota, a
@@ -64,16 +64,23 @@ export function clearTokens(): void {
   accessToken = null;
 }
 
-async function doRefresh(): Promise<boolean> {
+async function doRefresh(): Promise<RefreshOutcome> {
   try {
     // No stored token to check first: the cookie is unreadable, so the
     // server's answer IS the check. Rotation still happens — the response
     // carries a fresh Set-Cookie the browser swaps in.
     setTokens(await refreshTokens());
-    return true;
-  } catch {
-    clearTokens();
-    return false;
+    return 'ok';
+  } catch (error) {
+    // Only a 401 means the session is over. A 429 means the refresh endpoint
+    // declined to answer — and since boot now always refreshes, a few quick
+    // reloads can hit the shared per-IP auth limit. Treating that as a sign-out
+    // would evict a user with a perfectly valid session for reloading.
+    if (error instanceof ApiError && error.status === 401) {
+      clearTokens();
+      return 'unauthenticated';
+    }
+    return 'unavailable';
   }
 }
 
@@ -81,9 +88,10 @@ async function doRefresh(): Promise<boolean> {
  * Refreshes the session, collapsing concurrent callers onto one network
  * request. Without this, a page issuing several requests at once would fire
  * one refresh per 401 and — because refresh rotates — all but the first would
- * present an already-consumed token and fail.
+ * present an already-consumed token and fail. Collapsing also keeps a burst of
+ * 401s from spending the per-IP auth rate limit N times over.
  */
-export function refreshOnce(): Promise<boolean> {
+export function refreshOnce(): Promise<RefreshOutcome> {
   if (inFlight) return inFlight;
   inFlight = doRefresh().finally(() => {
     inFlight = null;
