@@ -4,7 +4,9 @@ public sealed record LoginResult(
     bool Succeeded,
     string? AccessToken,
     DateTime? AccessTokenExpiresAtUtc,
-    string? RefreshToken);
+    string? RefreshToken,
+    /// <summary>When the refresh token itself expires, so the cookie can expire with it.</summary>
+    DateTime? RefreshTokenExpiresAtUtc = null);
 
 public interface IAuthService
 {

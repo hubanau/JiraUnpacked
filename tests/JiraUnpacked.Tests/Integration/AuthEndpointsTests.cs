@@ -17,7 +17,7 @@ public sealed class AuthEndpointsTests : IClassFixture<JiraUnpackedApiFactory>, 
     public Task InitializeAsync() => _factory.EnsureDatabaseAsync();
     public Task DisposeAsync() => Task.CompletedTask;
 
-    private sealed record TokenResponseDto(string AccessToken, DateTime ExpiresAtUtc, string RefreshToken);
+    private sealed record TokenResponseDto(string AccessToken, DateTime ExpiresAtUtc);
 
     private async Task<(string login, string password)> SeedUserAsync(UserStatus status = UserStatus.Active)
     {
@@ -57,7 +57,7 @@ public sealed class AuthEndpointsTests : IClassFixture<JiraUnpackedApiFactory>, 
         var body = await response.Content.ReadFromJsonAsync<TokenResponseDto>();
         Assert.NotNull(body);
         Assert.False(string.IsNullOrWhiteSpace(body!.AccessToken));
-        Assert.False(string.IsNullOrWhiteSpace(body.RefreshToken));
+        Assert.False(string.IsNullOrWhiteSpace(CookieAuth.RefreshCookie(response)));
     }
 
     [Fact]
@@ -111,51 +111,61 @@ public sealed class AuthEndpointsTests : IClassFixture<JiraUnpackedApiFactory>, 
         Assert.Equal(HttpStatusCode.OK, meResponse.StatusCode);
     }
 
-    private async Task<TokenResponseDto> LoginAndGetTokensAsync()
+    /// <summary>Logs in and returns the refresh token as the cookie carries it.</summary>
+    private async Task<string> LoginAndGetRefreshCookieAsync()
     {
         var (login, password) = await SeedUserAsync();
-        var client = _factory.CreateClient();
+        var client = CookieAuth.Client(_factory);
         var response = await client.PostAsJsonAsync("/api/auth/login",
             new { emailOrUsername = login, password });
-        return (await response.Content.ReadFromJsonAsync<TokenResponseDto>())!;
+        return CookieAuth.RefreshCookie(response)!;
     }
 
     [Fact]
-    public async Task Refresh_WithValidToken_RotatesAndReturnsNewTokens()
+    public async Task Refresh_WithValidCookie_RotatesAndReturnsANewCookie()
     {
-        var tokens = await LoginAndGetTokensAsync();
-        var client = _factory.CreateClient();
+        var refresh = await LoginAndGetRefreshCookieAsync();
+        var client = CookieAuth.Client(_factory);
 
-        var response = await client.PostAsJsonAsync("/api/auth/refresh",
-            new { refreshToken = tokens.RefreshToken });
+        var response = await CookieAuth.PostAsync(client, "/api/auth/refresh", refresh);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var rotated = await response.Content.ReadFromJsonAsync<TokenResponseDto>();
-        Assert.NotNull(rotated);
-        Assert.False(string.IsNullOrWhiteSpace(rotated!.RefreshToken));
-        Assert.NotEqual(tokens.RefreshToken, rotated.RefreshToken);
+        var rotated = CookieAuth.RefreshCookie(response);
+        Assert.False(string.IsNullOrWhiteSpace(rotated));
+        Assert.NotEqual(refresh, rotated);
     }
 
     [Fact]
     public async Task Refresh_WithUnknownToken_Returns401()
     {
-        var client = _factory.CreateClient();
+        var client = CookieAuth.Client(_factory);
 
-        var response = await client.PostAsJsonAsync("/api/auth/refresh",
-            new { refreshToken = "not-a-real-token" });
+        var response = await CookieAuth.PostAsync(client, "/api/auth/refresh", "not-a-real-token");
 
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Refresh_WithNoCookieAtAll_Returns401()
+    {
+        var client = CookieAuth.Client(_factory);
+
+        var response = await CookieAuth.PostAsync(client, "/api/auth/refresh", cookie: null);
+
+        // Reported identically to an invalid token: the difference would tell a
+        // caller whether a cookie they hold is a real one.
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
     public async Task Refresh_WithRotatedToken_Returns401()
     {
-        var tokens = await LoginAndGetTokensAsync();
-        var client = _factory.CreateClient();
+        var refresh = await LoginAndGetRefreshCookieAsync();
+        var client = CookieAuth.Client(_factory);
 
-        await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = tokens.RefreshToken });
+        await CookieAuth.PostAsync(client, "/api/auth/refresh", refresh);
 
-        var reuse = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = tokens.RefreshToken });
+        var reuse = await CookieAuth.PostAsync(client, "/api/auth/refresh", refresh);
 
         Assert.Equal(HttpStatusCode.Unauthorized, reuse.StatusCode);
     }
@@ -163,27 +173,27 @@ public sealed class AuthEndpointsTests : IClassFixture<JiraUnpackedApiFactory>, 
     [Fact]
     public async Task Logout_ThenRefresh_Returns401_AndIsIdempotent()
     {
-        var tokens = await LoginAndGetTokensAsync();
-        var client = _factory.CreateClient();
+        var refresh = await LoginAndGetRefreshCookieAsync();
+        var client = CookieAuth.Client(_factory);
 
-        var logout1 = await client.PostAsJsonAsync("/api/auth/logout", new { refreshToken = tokens.RefreshToken });
+        var logout1 = await CookieAuth.PostAsync(client, "/api/auth/logout", refresh);
         Assert.Equal(HttpStatusCode.NoContent, logout1.StatusCode);
 
-        var logout2 = await client.PostAsJsonAsync("/api/auth/logout", new { refreshToken = tokens.RefreshToken });
+        var logout2 = await CookieAuth.PostAsync(client, "/api/auth/logout", refresh);
         Assert.Equal(HttpStatusCode.NoContent, logout2.StatusCode);
 
-        var refresh = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = tokens.RefreshToken });
-        Assert.Equal(HttpStatusCode.Unauthorized, refresh.StatusCode);
+        var refreshed = await CookieAuth.PostAsync(client, "/api/auth/refresh", refresh);
+        Assert.Equal(HttpStatusCode.Unauthorized, refreshed.StatusCode);
     }
 
     [Fact]
     public async Task Refresh_WhenUserBlocked_Returns401()
     {
         var (login, password) = await SeedUserAsync();
-        var client = _factory.CreateClient();
+        var client = CookieAuth.Client(_factory);
         var loginResponse = await client.PostAsJsonAsync("/api/auth/login",
             new { emailOrUsername = login, password });
-        var tokens = (await loginResponse.Content.ReadFromJsonAsync<TokenResponseDto>())!;
+        var refresh = CookieAuth.RefreshCookie(loginResponse)!;
 
         // Block the user after login (synchronous Single/SaveChanges via System.Linq).
         using (var scope = _factory.Services.CreateScope())
@@ -194,8 +204,7 @@ public sealed class AuthEndpointsTests : IClassFixture<JiraUnpackedApiFactory>, 
             db.SaveChanges();
         }
 
-        var response = await client.PostAsJsonAsync("/api/auth/refresh",
-            new { refreshToken = tokens.RefreshToken });
+        var response = await CookieAuth.PostAsync(client, "/api/auth/refresh", refresh);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }

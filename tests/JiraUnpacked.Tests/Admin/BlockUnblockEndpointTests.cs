@@ -68,8 +68,13 @@ public sealed class BlockUnblockEndpointTests : IClassFixture<JiraUnpackedApiFac
     public async Task Block_SetsBlocked_RevokesRefreshTokens_AndStopsAuth()
     {
         var (endUserId, endUserEmail) = await SeedUserAsync(UserRole.EndUser);
-        var endUserClient = _factory.CreateClient();
-        var endUserTokens = await LoginAsync(endUserClient, endUserEmail); // active session before block
+        // An active session before the block, so the assertions below prove the block
+        // actually severs it rather than that it was never established.
+        var endUserClient = Integration.CookieAuth.Client(_factory);
+        var loginResponse = await endUserClient.PostAsJsonAsync("/api/auth/login",
+            new { emailOrUsername = endUserEmail, password = Password });
+        Assert.Equal(HttpStatusCode.OK, loginResponse.StatusCode);
+        var endUserRefreshCookie = Integration.CookieAuth.RefreshCookie(loginResponse)!;
 
         var admin = await AdminClientAsync();
         var block = await admin.PostAsync($"/api/admin/users/{endUserId}/block", content: null);
@@ -87,8 +92,8 @@ public sealed class BlockUnblockEndpointTests : IClassFixture<JiraUnpackedApiFac
             new { emailOrUsername = endUserEmail, password = Password });
         Assert.Equal(HttpStatusCode.Unauthorized, reLogin.StatusCode);
 
-        var refresh = await _factory.CreateClient().PostAsJsonAsync("/api/auth/refresh",
-            new { refreshToken = endUserTokens.RefreshToken });
+        var refresh = await Integration.CookieAuth.PostAsync(
+            Integration.CookieAuth.Client(_factory), "/api/auth/refresh", endUserRefreshCookie);
         Assert.Equal(HttpStatusCode.Unauthorized, refresh.StatusCode);
     }
 
