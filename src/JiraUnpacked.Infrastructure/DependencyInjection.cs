@@ -54,7 +54,15 @@ public static class DependencyInjection
         services.AddScoped<AdminSeeder>();
         services.AddScoped<IInviteCodeService, InviteCodeService>();
         services.AddSingleton<PasswordPolicy>();
-        services.AddSingleton<IEmailSender, LoggingEmailSender>();
+        services.Configure<EmailOptions>(configuration.GetSection(EmailOptions.SectionName));
+        // SMTP when configured, the log-only development sender otherwise. Which one is in use
+        // is not left to chance outside Development: ProductionConfigGate refuses to start when
+        // the fallback would be selected.
+        var email = configuration.GetSection(EmailOptions.SectionName).Get<EmailOptions>();
+        if (email?.IsConfigured == true)
+            services.AddSingleton<IEmailSender, SmtpEmailSender>();
+        else
+            services.AddSingleton<IEmailSender, LoggingEmailSender>();
         services.AddScoped<IRegistrationService, RegistrationService>();
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
         services.AddScoped<IUserAdminService, UserAdminService>();
@@ -76,13 +84,20 @@ public static class DependencyInjection
         services.AddScoped<IIssueQueryService, IssueQueryService>();
         services.AddScoped<JiraUnpacked.Infrastructure.Reporting.Filtering.IIssueFilterTranslator,
                            JiraUnpacked.Infrastructure.Reporting.Filtering.IssueFilterTranslator>();
+        services.AddScoped<JiraUnpacked.Infrastructure.Reporting.Filtering.IIssueFilterCompiler,
+                           JiraUnpacked.Infrastructure.Reporting.Filtering.IssueFilterCompiler>();
         // Stateless projection over a static, compile-time-fixed dictionary — safe as a singleton.
         services.AddSingleton<IFilterCatalogService,
                                JiraUnpacked.Infrastructure.Reporting.Filtering.FilterCatalogService>();
+        // Singleton on purpose: the point is to share one project's fold across the separate
+        // requests a metrics page makes. Tenant scoping is inside the cache, keyed from
+        // ICurrentTenant rather than from any caller.
+        services.AddSingleton<IReportCache, ReportCache>();
         services.AddScoped<IMetricsQueryService, MetricsQueryService>();
         services.AddScoped<IGapCheck, OpenEpicAllChildrenDoneCheck>();
         services.AddScoped<IGapCheck, DoneEpicOpenChildrenCheck>();
         services.AddScoped<IGapCheckService, GapCheckRunner>();
+        services.AddScoped<ISavedFilterService, SavedFilterService>();
 
         services.AddOptions<TokenProtectionOptions>()
             .Configure(o =>

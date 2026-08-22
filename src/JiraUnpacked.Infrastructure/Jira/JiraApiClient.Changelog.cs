@@ -12,17 +12,10 @@ public sealed partial class JiraApiClient
         JiraCredentials creds, string jiraIssueId, int startAt, CancellationToken ct = default)
     {
         var path = $"/rest/api/3/issue/{Uri.EscapeDataString(jiraIssueId)}/changelog?startAt={startAt}&maxResults={ChangelogPageSize}";
-        for (var attempt = 0; ; attempt++)
-        {
-            using var req = Build(HttpMethod.Get, creds, path);
-            using var resp = await SendAsync(req, ct);
-            if (resp.StatusCode == HttpStatusCode.TooManyRequests && attempt < MaxRateLimitRetries)
-            {
-                await DelayForRetryAsync(resp, ct);
-                continue;
-            }
-            EnsureOk(resp);
+        using var resp = await SendWithRetryAsync(() => Build(HttpMethod.Get, creds, path), ct);
+        EnsureOk(resp);
 
+        {
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
             var root = doc.RootElement;
 

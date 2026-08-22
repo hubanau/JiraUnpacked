@@ -12,7 +12,8 @@ public sealed class FilterCatalogEndpointTests : IClassFixture<JiraUnpackedApiFa
     public Task DisposeAsync() => Task.CompletedTask;
 
     private sealed record FieldDto(string Name, string Type, List<string> Operators);
-    private sealed record CatalogDto(List<FieldDto> Fields, int MaxConditions, int MaxInValues);
+    private sealed record CatalogDto(
+        List<FieldDto> Fields, int MaxConditions, int MaxInValues, int MaxGroups, int MaxDepth);
 
     private static readonly string[] ExpectedFieldNames =
     {
@@ -65,8 +66,13 @@ public sealed class FilterCatalogEndpointTests : IClassFixture<JiraUnpackedApiFa
             ExpectedFieldNames.ToHashSet().SetEquals(catalog.Fields.Select(f => f.Name)),
             $"Expected exactly {string.Join(", ", ExpectedFieldNames)}, got {string.Join(", ", catalog.Fields.Select(f => f.Name))}");
 
+        // Every guard the server enforces is served, so no client has to hand-maintain one.
+        // These values are the contract, not an implementation detail: a client sizes its
+        // editor from them and a change here is a change clients must see.
         Assert.Equal(20, catalog.MaxConditions);
         Assert.Equal(100, catalog.MaxInValues);
+        Assert.Equal(10, catalog.MaxGroups);
+        Assert.Equal(3, catalog.MaxDepth);
 
         // Exact operator SETS (SetEquals, not Contains): a superset here would
         // pass a containment check while offering the client an operator the

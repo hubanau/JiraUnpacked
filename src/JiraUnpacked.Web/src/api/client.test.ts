@@ -2,7 +2,7 @@ import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../test/setup';
 import { ApiError } from './errors';
-import { apiFetch, setAuthBridge } from './client';
+import { apiFetch, setAuthBridge, type RefreshOutcome } from './client';
 
 describe('apiFetch', () => {
   beforeEach(() => setAuthBridge(null));
@@ -18,7 +18,7 @@ describe('apiFetch', () => {
       seen = request.headers.get('authorization');
       return HttpResponse.json({ ok: true });
     }));
-    setAuthBridge({ getAccessToken: () => 'tok-1', refresh: async () => false, onAuthFailure: () => {} });
+    setAuthBridge({ getAccessToken: () => 'tok-1', refresh: async () => 'unauthenticated', onAuthFailure: () => {} });
 
     await apiFetch('/api/thing');
 
@@ -60,7 +60,7 @@ describe('apiFetch', () => {
     }));
 
     let token = 'stale';
-    const refresh = vi.fn(async () => { token = 'good'; return true; });
+    const refresh = vi.fn(async (): Promise<RefreshOutcome> => { token = 'good'; return 'ok'; });
     setAuthBridge({ getAccessToken: () => token, refresh, onAuthFailure: () => {} });
 
     await expect(apiFetch('/api/thing')).resolves.toEqual({ ok: true });
@@ -71,16 +71,32 @@ describe('apiFetch', () => {
   it('gives up and signals auth failure when the refresh fails', async () => {
     server.use(http.get('/api/thing', () => new HttpResponse(null, { status: 401 })));
     const onAuthFailure = vi.fn();
-    setAuthBridge({ getAccessToken: () => 'stale', refresh: async () => false, onAuthFailure });
+    setAuthBridge({ getAccessToken: () => 'stale', refresh: async () => 'unauthenticated', onAuthFailure });
 
     await expect(apiFetch('/api/thing')).rejects.toBeInstanceOf(ApiError);
     expect(onAuthFailure).toHaveBeenCalledTimes(1);
   });
 
+  it('does NOT end the session when the refresh was merely unavailable', async () => {
+    // A 429 or an offline blip says nothing about whether the session is valid. Signing the
+    // user out here evicts a working session because they reloaded too quickly — the bug this
+    // outcome type exists to prevent.
+    server.use(http.get('/api/thing', () => new HttpResponse(null, { status: 401 })));
+    const onAuthFailure = vi.fn();
+    setAuthBridge({
+      getAccessToken: () => 'stale',
+      refresh: async () => 'unavailable',
+      onAuthFailure,
+    });
+
+    await expect(apiFetch('/api/thing')).rejects.toBeInstanceOf(ApiError);
+    expect(onAuthFailure).not.toHaveBeenCalled();
+  });
+
   it('does not loop when the retry also 401s', async () => {
     let calls = 0;
     server.use(http.get('/api/thing', () => { calls++; return new HttpResponse(null, { status: 401 }); }));
-    const refresh = vi.fn(async () => true);
+    const refresh = vi.fn(async (): Promise<RefreshOutcome> => 'ok');
     const onAuthFailure = vi.fn();
     setAuthBridge({ getAccessToken: () => 'x', refresh, onAuthFailure });
 
@@ -101,7 +117,7 @@ describe('apiFetch', () => {
     server.use(http.get('/api/thing', () =>
       HttpResponse.json({ title: 'Invalid token.' }, { status: 401 })));
     const onAuthFailure = vi.fn();
-    setAuthBridge({ getAccessToken: () => 'x', refresh: async () => true, onAuthFailure });
+    setAuthBridge({ getAccessToken: () => 'x', refresh: async () => 'ok', onAuthFailure });
 
     await expect(apiFetch('/api/thing')).rejects.toBeInstanceOf(ApiError);
 
@@ -112,7 +128,7 @@ describe('apiFetch', () => {
 
   it('still signs the user out when the retry 401 is bodiless (the real bearer-token challenge)', async () => {
     server.use(http.get('/api/thing', () => new HttpResponse(null, { status: 401 })));
-    const refresh = vi.fn(async () => true);
+    const refresh = vi.fn(async (): Promise<RefreshOutcome> => 'ok');
     const onAuthFailure = vi.fn();
     setAuthBridge({ getAccessToken: () => 'x', refresh, onAuthFailure });
 
@@ -122,7 +138,7 @@ describe('apiFetch', () => {
 
   it('never retries when skipAuthRetry is set', async () => {
     server.use(http.post('/api/auth/refresh', () => new HttpResponse(null, { status: 401 })));
-    const refresh = vi.fn(async () => true);
+    const refresh = vi.fn(async (): Promise<RefreshOutcome> => 'ok');
     setAuthBridge({ getAccessToken: () => null, refresh, onAuthFailure: () => {} });
 
     await expect(

@@ -34,6 +34,8 @@ const CATALOG: FilterCatalog = {
   ],
   maxConditions: 20,
   maxInValues: 100,
+  maxGroups: 10,
+  maxDepth: 3,
 };
 
 function mockFilterCatalog() {

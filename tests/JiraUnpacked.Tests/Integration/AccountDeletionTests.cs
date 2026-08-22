@@ -18,9 +18,9 @@ public sealed class AccountDeletionTests : IClassFixture<JiraUnpackedApiFactory>
     public Task InitializeAsync() => _factory.EnsureDatabaseAsync();
     public Task DisposeAsync() => Task.CompletedTask;
 
-    private sealed record TokenResponseDto(string AccessToken, DateTime ExpiresAtUtc, string RefreshToken);
+    private sealed record TokenResponseDto(string AccessToken, DateTime ExpiresAtUtc);
 
-    private async Task<(HttpClient client, Guid userId, string refreshToken)> AuthedEndUserAsync()
+    private async Task<(HttpClient client, Guid userId, string refreshCookie)> AuthedEndUserAsync()
     {
         var unique = Guid.NewGuid().ToString("N");
         var userId = Guid.NewGuid();
@@ -36,12 +36,12 @@ public sealed class AccountDeletionTests : IClassFixture<JiraUnpackedApiFactory>
             });
             await db.SaveChangesAsync();
         }
-        var c = _factory.CreateClient();
+        var c = CookieAuth.Client(_factory);
         var login = await c.PostAsJsonAsync("/api/auth/login",
             new { emailOrUsername = $"u-{unique}@x.com", password = "Correct-Horse-9!" });
         var tok = await login.Content.ReadFromJsonAsync<TokenResponseDto>();
         c.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tok!.AccessToken);
-        return (c, userId, tok.RefreshToken);
+        return (c, userId, CookieAuth.RefreshCookie(login)!);
     }
 
     private async Task<HttpClient> AuthedAdminAsync()
@@ -70,14 +70,14 @@ public sealed class AccountDeletionTests : IClassFixture<JiraUnpackedApiFactory>
     [Fact]
     public async Task Self_service_delete_removes_the_account_and_severs_the_refresh_chain()
     {
-        var (client, _, refreshToken) = await AuthedEndUserAsync();
+        var (client, _, refreshCookie) = await AuthedEndUserAsync();
 
         var resp = await client.DeleteAsync("/api/auth/me");
         Assert.Equal(HttpStatusCode.NoContent, resp.StatusCode);
 
         // Refresh tokens cascade away with the user, so the session cannot be extended.
-        var refreshed = await _factory.CreateClient()
-            .PostAsJsonAsync("/api/auth/refresh", new { refreshToken });
+        var refreshed = await CookieAuth.PostAsync(
+            CookieAuth.Client(_factory), "/api/auth/refresh", refreshCookie);
         Assert.Equal(HttpStatusCode.Unauthorized, refreshed.StatusCode);
     }
 

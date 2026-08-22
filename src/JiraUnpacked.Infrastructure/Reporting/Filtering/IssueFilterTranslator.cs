@@ -14,46 +14,107 @@ public delegate Task<IReadOnlyList<Guid>> DictNameResolver(
 
 public interface IIssueFilterTranslator
 {
+    /// <summary>Flat AND over a condition list — the original FR-E4 shape. Empty = unfiltered.</summary>
     Task<FilterBuildResult> BuildAsync(
         IReadOnlyList<FilterCondition> conditions, DictNameResolver resolveDict, CancellationToken ct = default);
+
+    /// <summary>Boolean tree. Every group must be non-empty; the guards are counted over the whole tree.</summary>
+    Task<FilterBuildResult> BuildAsync(
+        FilterGroup group, DictNameResolver resolveDict, CancellationToken ct = default);
 }
 
 public sealed class IssueFilterTranslator : IIssueFilterTranslator
 {
     public const int MaxConditions = 20;
     public const int MaxInValues = 100;
+    public const int MaxGroups = 10;
+    public const int MaxDepth = 3;
+
+    /// <summary>Running totals for the guards. Counted over the WHOLE tree: a per-node limit is
+    /// defeated by adding nodes, which is the shape a hostile request would take.</summary>
+    private sealed class Budget { public int Conditions; public int Groups; }
 
     public async Task<FilterBuildResult> BuildAsync(
         IReadOnlyList<FilterCondition> conditions, DictNameResolver resolveDict, CancellationToken ct = default)
     {
-        if (conditions.Count > MaxConditions)
-            return Err($"A filter may have at most {MaxConditions} conditions.");
+        // Preserved verbatim from FR-E4: an omitted or empty 'conditions' has always meant
+        // "no filter", never "an empty group". Only a group a caller actually wrote is rejected
+        // for being empty (see BuildGroupAsync).
+        if (conditions.Count == 0) return new FilterBuildResult(MatchAll, null);
 
-        var predicates = new List<Expression<Func<Issue, bool>>>();
+        return await BuildAsync(
+            new FilterGroup(FilterLogic.And, conditions.ToList(), null), resolveDict, ct);
+    }
+
+    public async Task<FilterBuildResult> BuildAsync(
+        FilterGroup group, DictNameResolver resolveDict, CancellationToken ct = default)
+    {
+        var (predicate, error) = await BuildGroupAsync(group, resolveDict, new Budget(), 1, ct);
+        return error is not null ? Err(error) : new FilterBuildResult(predicate, null);
+    }
+
+    private async Task<(Expression<Func<Issue, bool>>?, string?)> BuildGroupAsync(
+        FilterGroup group, DictNameResolver resolveDict, Budget budget, int depth, CancellationToken ct)
+    {
+        if (depth > MaxDepth)
+            return (null, $"A filter may nest at most {MaxDepth} levels deep.");
+        if (++budget.Groups > MaxGroups)
+            return (null, $"A filter may contain at most {MaxGroups} groups.");
+
+        var conditions = group.Conditions ?? new List<FilterCondition>();
+        var groups = group.Groups ?? new List<FilterGroup>();
+
+        // An empty And is vacuously true and an empty Or is vacuously false. Same client bug,
+        // opposite blast radius, and neither is what the caller meant — so refuse both.
+        if (conditions.Count == 0 && groups.Count == 0)
+            return (null, "A filter group must contain at least one condition or nested group.");
+
+        var parts = new List<Expression<Func<Issue, bool>>>();
+
         foreach (var c in conditions)
         {
-            if (!FilterFields.All.TryGetValue(c.Field, out var field))
-                return Err($"Unknown field '{c.Field}'.");
-            if (!field.Ops.Contains(c.Op))
-                return Err($"Operator '{c.Op}' is not allowed for field '{c.Field}'.");
+            if (++budget.Conditions > MaxConditions)
+                return (null, $"A filter may have at most {MaxConditions} conditions.");
 
-            var (pred, error) = field.Type switch
-            {
-                FieldType.DictName  => await BuildDictAsync(field, c, resolveDict, ct),
-                FieldType.Decimal   => BuildDecimal(field, c),
-                FieldType.DateTime  => BuildDate(field, c),
-                FieldType.Text      => BuildText(field, c),
-                FieldType.ParentRef => BuildParent(field, c),
-                _ => (null, "Unsupported field type."),
-            };
-            if (error is not null) return Err(error);
-            predicates.Add(pred!);
+            var (predicate, error) = await BuildConditionAsync(c, resolveDict, ct);
+            if (error is not null) return (null, error);
+            parts.Add(predicate!);
         }
 
-        Expression<Func<Issue, bool>> combined = predicates.Aggregate(
-            (Expression<Func<Issue, bool>>)(i => true), AndAlso);
-        return new FilterBuildResult(combined, null);
+        foreach (var g in groups)
+        {
+            var (predicate, error) = await BuildGroupAsync(g, resolveDict, budget, depth + 1, ct);
+            if (error is not null) return (null, error);
+            parts.Add(predicate!);
+        }
+
+        // Seedless Aggregate on purpose: seeding with `i => true` is harmless under AndAlso but
+        // would make every Or group match everything. parts is non-empty by the check above.
+        Func<Expression<Func<Issue, bool>>, Expression<Func<Issue, bool>>, Expression<Func<Issue, bool>>> combine =
+            group.Logic == FilterLogic.Or ? OrElse : AndAlso;
+        return (parts.Aggregate(combine), null);
     }
+
+    private static async Task<(Expression<Func<Issue, bool>>?, string?)> BuildConditionAsync(
+        FilterCondition c, DictNameResolver resolveDict, CancellationToken ct)
+    {
+        if (!FilterFields.All.TryGetValue(c.Field, out var field))
+            return (null, $"Unknown field '{c.Field}'.");
+        if (!field.Ops.Contains(c.Op))
+            return (null, $"Operator '{c.Op}' is not allowed for field '{c.Field}'.");
+
+        return field.Type switch
+        {
+            FieldType.DictName  => await BuildDictAsync(field, c, resolveDict, ct),
+            FieldType.Decimal   => BuildDecimal(field, c),
+            FieldType.DateTime  => BuildDate(field, c),
+            FieldType.Text      => BuildText(field, c),
+            FieldType.ParentRef => BuildParent(field, c),
+            _ => (null, "Unsupported field type."),
+        };
+    }
+
+    private static readonly Expression<Func<Issue, bool>> MatchAll = i => true;
 
     private static FilterBuildResult Err(string m) => new(null, m);
 
@@ -198,12 +259,20 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
     private static Expression<Func<Issue, bool>> Lambda(Expression body, ParameterExpression p) =>
         Expression.Lambda<Func<Issue, bool>>(body, p);
 
+    private static Expression<Func<Issue, bool>> OrElse(
+        Expression<Func<Issue, bool>> a, Expression<Func<Issue, bool>> b) => Combine(a, b, Expression.OrElse);
+
     private static Expression<Func<Issue, bool>> AndAlso(
-        Expression<Func<Issue, bool>> a, Expression<Func<Issue, bool>> b)
+        Expression<Func<Issue, bool>> a, Expression<Func<Issue, bool>> b) => Combine(a, b, Expression.AndAlso);
+
+    /// <summary>Rebinds b's parameter onto a's before joining, so the result is a single lambda.</summary>
+    private static Expression<Func<Issue, bool>> Combine(
+        Expression<Func<Issue, bool>> a, Expression<Func<Issue, bool>> b,
+        Func<Expression, Expression, BinaryExpression> join)
     {
         var p = a.Parameters[0];
         var right = ReplaceParameter.Replace(b.Body, b.Parameters[0], p);
-        return Expression.Lambda<Func<Issue, bool>>(Expression.AndAlso(a.Body, right), p);
+        return Expression.Lambda<Func<Issue, bool>>(join(a.Body, right), p);
     }
 
     private sealed class ReplaceParameter : ExpressionVisitor

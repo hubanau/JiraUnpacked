@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../test/setup';
-import { REFRESH_KEY, USERNAME_KEY, getAccessToken } from './session';
+import { USERNAME_KEY, getAccessToken } from './session';
 import { AuthProvider, useAuth } from './AuthContext';
 
 function Probe() {
@@ -24,16 +24,20 @@ const renderProbe = () => render(<AuthProvider><Probe /></AuthProvider>);
 beforeEach(() => localStorage.clear());
 
 describe('AuthProvider boot', () => {
-  it('lands anonymous with no stored refresh token and makes no network call', async () => {
+  it('lands anonymous when the refresh cookie is absent or rejected', async () => {
+    // There is nothing readable to check first — the cookie is httpOnly — so
+    // boot always asks the server, and a 401 is the anonymous answer.
+    server.use(http.post('/api/auth/refresh', () => new HttpResponse(null, { status: 401 })));
+
     renderProbe();
+
     expect(await screen.findByTestId('status')).toHaveTextContent('anonymous');
   });
 
-  it('hydrates the session from a stored refresh token', async () => {
-    localStorage.setItem(REFRESH_KEY, 'refresh-1');
+  it('hydrates the session from the refresh cookie', async () => {
     server.use(
       http.post('/api/auth/refresh', () => HttpResponse.json({
-        accessToken: 'access-2', expiresAtUtc: '2099-01-01T00:00:00Z', refreshToken: 'refresh-2',
+        accessToken: 'access-2', expiresAtUtc: '2099-01-01T00:00:00Z',
       })),
       http.get('/api/auth/me', () => HttpResponse.json({ sub: 'u', role: 'Admin', endUserId: 'e' })),
     );
@@ -47,11 +51,10 @@ describe('AuthProvider boot', () => {
   it('restores the persisted username on boot hydration', async () => {
     // /api/auth/me has no display name (sub is a GUID) — the username the
     // user typed at sign-in must survive a reload via USERNAME_KEY instead.
-    localStorage.setItem(REFRESH_KEY, 'refresh-1');
     localStorage.setItem(USERNAME_KEY, 'alice');
     server.use(
       http.post('/api/auth/refresh', () => HttpResponse.json({
-        accessToken: 'access-2', expiresAtUtc: '2099-01-01T00:00:00Z', refreshToken: 'refresh-2',
+        accessToken: 'access-2', expiresAtUtc: '2099-01-01T00:00:00Z',
       })),
       http.get('/api/auth/me', () => HttpResponse.json({ sub: 'u', role: 'Admin', endUserId: 'e' })),
     );
@@ -62,14 +65,22 @@ describe('AuthProvider boot', () => {
     expect(screen.getByTestId('username')).toHaveTextContent('alice');
   });
 
-  it('clears storage and goes anonymous when the stored token is rejected', async () => {
-    localStorage.setItem(REFRESH_KEY, 'expired');
-    server.use(http.post('/api/auth/refresh', () => new HttpResponse(null, { status: 401 })));
+  it('persists no credential in localStorage after a successful sign-in', async () => {
+    server.use(
+      http.post('/api/auth/refresh', () => HttpResponse.json({
+        accessToken: 'access-2', expiresAtUtc: '2099-01-01T00:00:00Z',
+      })),
+      http.get('/api/auth/me', () => HttpResponse.json({ sub: 'u', role: 'Admin', endUserId: 'e' })),
+    );
 
     renderProbe();
+    await screen.findByText('authenticated');
 
-    expect(await screen.findByText('anonymous')).toBeInTheDocument();
-    expect(localStorage.getItem(REFRESH_KEY)).toBeNull();
+    // The whole point of the cookie: nothing script can read holds a token.
+    // Asserting over the WHOLE store rather than one known key, because a
+    // regression would most likely reintroduce it under a new name.
+    expect(JSON.stringify(localStorage)).not.toContain('access-2');
+    expect(Object.keys(localStorage).every((k) => k === USERNAME_KEY || k === 'ju.theme')).toBe(true);
   });
 });
 
@@ -82,7 +93,7 @@ describe('signIn', () => {
   it('reaches authenticated even when localStorage.setItem throws', async () => {
     server.use(
       http.post('/api/auth/login', () => HttpResponse.json({
-        accessToken: 'access-1', expiresAtUtc: '2099-01-01T00:00:00Z', refreshToken: 'refresh-1',
+        accessToken: 'access-1', expiresAtUtc: '2099-01-01T00:00:00Z',
       })),
       http.get('/api/auth/me', () => HttpResponse.json({ sub: 'u', role: 'Admin', endUserId: 'e' })),
     );
@@ -106,10 +117,9 @@ describe('signIn', () => {
 
 describe('signOut', () => {
   it('clears the local session even when the logout call fails', async () => {
-    localStorage.setItem(REFRESH_KEY, 'refresh-1');
     server.use(
       http.post('/api/auth/refresh', () => HttpResponse.json({
-        accessToken: 'access-2', expiresAtUtc: '2099-01-01T00:00:00Z', refreshToken: 'refresh-2',
+        accessToken: 'access-2', expiresAtUtc: '2099-01-01T00:00:00Z',
       })),
       http.get('/api/auth/me', () => HttpResponse.json({ sub: 'u', role: null, endUserId: 'e' })),
       // The server refuses to revoke — the local session must end anyway.
@@ -121,7 +131,6 @@ describe('signOut', () => {
     await userEvent.click(screen.getByRole('button', { name: /sign out/i }));
 
     expect(await screen.findByText('anonymous')).toBeInTheDocument();
-    expect(localStorage.getItem(REFRESH_KEY)).toBeNull();
     expect(getAccessToken()).toBeNull();
   });
 });

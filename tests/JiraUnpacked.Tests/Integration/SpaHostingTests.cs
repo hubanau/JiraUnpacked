@@ -32,9 +32,18 @@ namespace JiraUnpacked.Tests.Integration;
 // - seeds the file before IWebHostEnvironment initialization ever checks
 // whether the directory exists; Dispose restores the prior state (or removes
 // what it created) after each test.
-public sealed class SpaHostingTests : IClassFixture<JiraUnpackedApiFactory>, IDisposable
+public sealed class SpaHostingTests : IClassFixture<JiraUnpackedApiFactory>, IAsyncLifetime, IDisposable
 {
     private const string ShellMarker = "spa-hosting-test-shell";
+
+    // Every other integration class migrates here, and this one must too: its assertions hit
+    // endpoints that read through the host's DbContext, which connects as jiraunpacked_app —
+    // a role the AddTenantRls migration CREATES. Parallelization is disabled assembly-wide, so
+    // classes run in some sequential order; if this one happened to run first against a fresh
+    // database the role would not exist yet and every request would fail 28P01 rather than
+    // asserting anything about routing. A developer's local database is already migrated, so
+    // that ordering only ever surfaces in CI.
+
 
     private readonly JiraUnpackedApiFactory _factory;
     private readonly string _indexPath;
@@ -73,6 +82,10 @@ public sealed class SpaHostingTests : IClassFixture<JiraUnpackedApiFactory>, IDi
 
         File.WriteAllText(_indexPath, $"<!doctype html><html><body>{ShellMarker}</body></html>");
     }
+
+    public Task InitializeAsync() => _factory.EnsureDatabaseAsync();
+
+    public Task DisposeAsync() => Task.CompletedTask;
 
     public void Dispose()
     {

@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { getMe, login as loginRequest, logoutRequest } from '../api/auth';
 import {
-  clearTokens, getRefreshToken, installAuthBridge, refreshOnce,
+  clearTokens, installAuthBridge, refreshOnce,
   safeGetItem, safeRemoveItem, safeSetItem, setTokens, USERNAME_KEY,
 } from './session';
 
@@ -34,18 +34,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     installAuthBridge(reset);
   }, [reset]);
 
-  // Boot: a stored refresh token means the session can be resumed without a
-  // second sign-in. Anything else lands on the anonymous state.
+  // Boot: always attempt a refresh. The cookie is httpOnly, so there is nothing
+  // readable to check first — the server's answer IS the check, and an anonymous
+  // visitor simply gets one 401. refreshOnce() is single-flight, which is also
+  // what makes StrictMode's double-invoked effect safe here.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!getRefreshToken()) {
-        if (!cancelled) setStatus('anonymous');
-        return;
-      }
-      const ok = await refreshOnce();
+      const outcome = await refreshOnce();
       if (cancelled) return;
-      if (!ok) { reset(); return; }
+      // Both non-ok outcomes land anonymous, because without an access token there is
+      // nothing the app can do either way. They differ mid-session, not at boot: see
+      // apiFetch, where 'unavailable' deliberately does NOT end a working session.
+      if (outcome !== 'ok') { reset(); return; }
       try {
         const me = await getMe();
         if (cancelled) return;
@@ -71,9 +72,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    const stored = getRefreshToken();
     try {
-      if (stored) await logoutRequest(stored);
+      // The server revokes the token AND clears the cookie — being httpOnly, it
+      // is the only party that can.
+      await logoutRequest();
     } catch {
       // Revoking server-side is best effort; the local session must end
       // regardless, so a failed call never leaves the user signed in.

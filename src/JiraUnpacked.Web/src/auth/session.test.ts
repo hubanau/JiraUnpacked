@@ -2,13 +2,10 @@ import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../test/setup';
 import { apiFetch, setAuthBridge } from '../api/client';
-import {
-  REFRESH_KEY, clearTokens, getAccessToken, getRefreshToken,
-  installAuthBridge, refreshOnce, setTokens,
-} from './session';
+import { clearTokens, getAccessToken, installAuthBridge, refreshOnce, setTokens } from './session';
 
 const token = (n: number) => ({
-  accessToken: `access-${n}`, expiresAtUtc: '2099-01-01T00:00:00Z', refreshToken: `refresh-${n}`,
+  accessToken: `access-${n}`, expiresAtUtc: '2099-01-01T00:00:00Z',
 });
 
 beforeEach(() => {
@@ -18,37 +15,64 @@ beforeEach(() => {
 });
 
 describe('token storage', () => {
-  it('keeps the access token in memory and the refresh token in localStorage', () => {
+  it('keeps the access token in memory and persists NO credential at all', () => {
     setTokens(token(1));
 
     expect(getAccessToken()).toBe('access-1');
-    expect(getRefreshToken()).toBe('refresh-1');
-    // The access token must never be persisted.
+    // Neither token may be persisted. The refresh token now lives in an httpOnly
+    // cookie the browser owns, so there is nothing for this module to store —
+    // scanning the whole of localStorage catches a regression under ANY key,
+    // which an assertion on one known key could not.
     expect(JSON.stringify(localStorage)).not.toContain('access-1');
+    expect(localStorage.length).toBe(0);
   });
 
-  it('clears both on clearTokens', () => {
+  it('clears the access token on clearTokens', () => {
     setTokens(token(1));
     clearTokens();
 
     expect(getAccessToken()).toBeNull();
-    expect(localStorage.getItem(REFRESH_KEY)).toBeNull();
   });
 });
 
 describe('refreshOnce', () => {
-  it('stores the rotated pair on success', async () => {
-    localStorage.setItem(REFRESH_KEY, 'refresh-1');
+  it('stores the rotated access token on success', async () => {
     server.use(http.post('/api/auth/refresh', () => HttpResponse.json(token(2))));
 
-    await expect(refreshOnce()).resolves.toBe(true);
+    await expect(refreshOnce()).resolves.toBe('ok');
 
     expect(getAccessToken()).toBe('access-2');
-    expect(getRefreshToken()).toBe('refresh-2');
+    // The rotated refresh token arrives as a Set-Cookie the browser swaps in —
+    // it must not land anywhere this module can see.
+    expect(localStorage.length).toBe(0);
+  });
+
+  it('sends no request body: the token travels in the cookie', async () => {
+    let body: string | null = null;
+    server.use(http.post('/api/auth/refresh', async ({ request }) => {
+      body = await request.text();
+      return HttpResponse.json(token(2));
+    }));
+
+    await refreshOnce();
+
+    expect(body).toBe('');
+  });
+
+  it('sends the X-Requested-With header the server requires', async () => {
+    let header: string | null = null;
+    server.use(http.post('/api/auth/refresh', ({ request }) => {
+      header = request.headers.get('x-requested-with');
+      return HttpResponse.json(token(2));
+    }));
+
+    await refreshOnce();
+
+    // Second CSRF layer behind SameSite=Strict; without it the server answers 400.
+    expect(header).toBe('XMLHttpRequest');
   });
 
   it('is single-flight: concurrent callers share ONE network refresh', async () => {
-    localStorage.setItem(REFRESH_KEY, 'refresh-1');
     let hits = 0;
     server.use(http.post('/api/auth/refresh', async () => {
       hits++;
@@ -58,12 +82,13 @@ describe('refreshOnce', () => {
 
     const results = await Promise.all([refreshOnce(), refreshOnce(), refreshOnce()]);
 
-    expect(results).toEqual([true, true, true]);
+    expect(results).toEqual(['ok', 'ok', 'ok']);
+    // Refresh rotates server-side, so N parallel calls would consume the token N
+    // times and all but the first would fail.
     expect(hits).toBe(1);
   });
 
   it('allows a fresh refresh after the previous one settles', async () => {
-    localStorage.setItem(REFRESH_KEY, 'refresh-1');
     let hits = 0;
     server.use(http.post('/api/auth/refresh', () => { hits++; return HttpResponse.json(token(2)); }));
 
@@ -73,48 +98,32 @@ describe('refreshOnce', () => {
     expect(hits).toBe(2);
   });
 
-  it('returns false and clears tokens when the refresh is rejected', async () => {
-    localStorage.setItem(REFRESH_KEY, 'expired');
+  it('reports unauthenticated and clears the token when the refresh is REJECTED', async () => {
     server.use(http.post('/api/auth/refresh', () => new HttpResponse(null, { status: 401 })));
 
-    await expect(refreshOnce()).resolves.toBe(false);
+    await expect(refreshOnce()).resolves.toBe('unauthenticated');
 
     expect(getAccessToken()).toBeNull();
-    expect(getRefreshToken()).toBeNull();
   });
 
-  it('returns false without a network call when no refresh token is stored', async () => {
-    let hits = 0;
-    server.use(http.post('/api/auth/refresh', () => { hits++; return HttpResponse.json(token(2)); }));
+  it('reports unavailable — not unauthenticated — when rate limited', async () => {
+    // Boot always refreshes now, so a few quick reloads can spend the shared per-IP auth
+    // limit. A 429 says the endpoint declined to answer, not that the session is over.
+    server.use(http.post('/api/auth/refresh', () => new HttpResponse(null, { status: 429 })));
 
-    await expect(refreshOnce()).resolves.toBe(false);
-
-    expect(hits).toBe(0);
+    await expect(refreshOnce()).resolves.toBe('unavailable');
   });
 
-  // Note: this does not specifically exercise safeGetItem's try/catch — even
-  // without it, doRefresh's own outer catch would swallow the throw and
-  // return false here too. It's kept as a smoke check that a thrown storage
-  // read never escapes refreshOnce(); AuthContext.test.tsx's "reaches
-  // authenticated even when localStorage.setItem throws" is the test that
-  // actually pins the safe-wrapper behaviour to a real call site.
-  it('resolves false without throwing when the refresh-token read fails', async () => {
-    const getItemSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-      throw new Error('storage disabled');
-    });
+  it('reports unavailable when the refresh call fails outright', async () => {
+    server.use(http.post('/api/auth/refresh', () => HttpResponse.error()));
 
-    try {
-      await expect(refreshOnce()).resolves.toBe(false);
-    } finally {
-      getItemSpy.mockRestore();
-    }
+    await expect(refreshOnce()).resolves.toBe('unavailable');
   });
 });
 
 describe('installAuthBridge', () => {
   it('makes N concurrent 401s trigger exactly ONE refresh', async () => {
-    localStorage.setItem(REFRESH_KEY, 'refresh-1');
-    setTokens({ ...token(1), refreshToken: 'refresh-1' });
+    setTokens(token(1));
 
     let refreshHits = 0;
     server.use(

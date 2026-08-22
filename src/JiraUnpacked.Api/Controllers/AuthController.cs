@@ -1,4 +1,5 @@
 using JiraUnpacked.Api.Contracts.Auth;
+using JiraUnpacked.Api.Security;
 using JiraUnpacked.Domain.Abstractions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -14,15 +15,49 @@ public sealed class AuthController : ControllerBase
     private readonly IRegistrationService _registration;
     private readonly IEmailVerificationService _verification;
     private readonly IAccountDeletionService _deletion;
+    private readonly IWebHostEnvironment _environment;
 
     public AuthController(
         IAuthService auth, IRegistrationService registration, IEmailVerificationService verification,
-        IAccountDeletionService deletion)
+        IAccountDeletionService deletion, IWebHostEnvironment environment)
     {
         _auth = auth;
         _registration = registration;
         _verification = verification;
         _deletion = deletion;
+        _environment = environment;
+    }
+
+    /// <summary>
+    /// Writes the rotated refresh token to its httpOnly cookie and returns the body WITHOUT it.
+    /// The token is deliberately absent from the response: leaving it there would let an XSS
+    /// running during sign-in read it straight out, which is the exposure this replaces.
+    /// </summary>
+    private IActionResult IssueTokens(LoginResult result)
+    {
+        Response.Cookies.Append(
+            RefreshTokenCookie.Name,
+            result.RefreshToken!,
+            RefreshTokenCookie.Options(
+                _environment.IsDevelopment(), result.RefreshTokenExpiresAtUtc!.Value));
+
+        return Ok(new TokenResponse(result.AccessToken!, result.AccessTokenExpiresAtUtc!.Value));
+    }
+
+    /// <summary>
+    /// Second CSRF layer behind SameSite=Strict. Returns the response to send when the header
+    /// is missing, or null when the request may proceed. 400 with an explanatory title so a
+    /// non-browser caller is told what to add rather than left guessing at a 401.
+    /// </summary>
+    private IActionResult? RequireXhrHeader()
+    {
+        var header = Request.Headers[RefreshTokenCookie.RequiredHeader].ToString();
+        return string.Equals(header, RefreshTokenCookie.RequiredHeaderValue, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: $"This endpoint requires the {RefreshTokenCookie.RequiredHeader}: "
+                       + $"{RefreshTokenCookie.RequiredHeaderValue} header.");
     }
 
     [HttpPost("register")]
@@ -84,31 +119,51 @@ public sealed class AuthController : ControllerBase
             return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid credentials.");
         }
 
-        return Ok(new TokenResponse(
-            result.AccessToken!, result.AccessTokenExpiresAtUtc!.Value, result.RefreshToken!));
+        return IssueTokens(result);
     }
 
+    /// <summary>
+    /// Reads the refresh token from its cookie — there is no request body. A missing cookie is
+    /// reported identically to an invalid one, so an attacker learns nothing from the difference.
+    /// </summary>
     [HttpPost("refresh")]
     [AllowAnonymous]
     [EnableRateLimiting("auth")]
-    public async Task<IActionResult> Refresh(RefreshTokenRequest request, CancellationToken ct)
+    public async Task<IActionResult> Refresh(CancellationToken ct)
     {
-        var result = await _auth.RefreshAsync(request.RefreshToken, ct);
+        if (RequireXhrHeader() is { } rejected) return rejected;
+
+        var presented = Request.Cookies[RefreshTokenCookie.Name];
+        var result = string.IsNullOrEmpty(presented)
+            ? new LoginResult(false, null, null, null)
+            : await _auth.RefreshAsync(presented, ct);
+
         if (!result.Succeeded)
         {
+            // Clear the cookie too: whatever the browser is holding is not usable, and leaving
+            // it there means every later request re-presents a token that can only fail.
+            Response.Cookies.Delete(
+                RefreshTokenCookie.Name, RefreshTokenCookie.DeleteOptions(_environment.IsDevelopment()));
             return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid or expired refresh token.");
         }
 
-        return Ok(new TokenResponse(
-            result.AccessToken!, result.AccessTokenExpiresAtUtc!.Value, result.RefreshToken!));
+        return IssueTokens(result);
     }
 
     [HttpPost("logout")]
     [AllowAnonymous]
     [EnableRateLimiting("auth")]
-    public async Task<IActionResult> Logout(RefreshTokenRequest request, CancellationToken ct)
+    public async Task<IActionResult> Logout(CancellationToken ct)
     {
-        await _auth.LogoutAsync(request.RefreshToken, ct);
+        if (RequireXhrHeader() is { } rejected) return rejected;
+
+        var presented = Request.Cookies[RefreshTokenCookie.Name];
+        if (!string.IsNullOrEmpty(presented)) await _auth.LogoutAsync(presented, ct);
+
+        // Always clear, even when no cookie was presented: 204 must mean "you are logged out",
+        // never "there was nothing to do so your cookie is still there".
+        Response.Cookies.Delete(
+            RefreshTokenCookie.Name, RefreshTokenCookie.DeleteOptions(_environment.IsDevelopment()));
         return NoContent();
     }
 
