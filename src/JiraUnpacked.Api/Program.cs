@@ -123,6 +123,21 @@ JiraUnpacked.Api.Security.ProductionConfigGate.ThrowIfInvalid(
 using (var scope = app.Services.CreateScope())
 {
     await scope.ServiceProvider.GetRequiredService<AdminSeeder>().SeedAsync();
+
+    // Rewrite any Jira token still in the pre-envelope format. Idempotent, and a no-op after
+    // the first run. Deliberately non-fatal: failing to re-wrap a token is not a reason to
+    // refuse to serve, and the old format still decrypts.
+    try
+    {
+        await scope.ServiceProvider.GetRequiredService<
+            JiraUnpacked.Infrastructure.Security.TokenEnvelopeUpgrader>().UpgradeAsync();
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(
+            "Token envelope upgrade did not complete ({ExceptionType}); existing tokens remain readable.",
+            ex.GetType().Name);
+    }
 }
 
 if (app.Environment.IsDevelopment())

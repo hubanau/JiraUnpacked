@@ -160,9 +160,23 @@ and it is done. `localStorage` now holds only `ju.username` and `ju.theme`, neit
 
 ## Branching & CI
 
-- `develop` — integration branch; CI deploys to **test** on merge.
-- `main` — production; deploys to **prod** behind manual approval.
-- Every change lands via pull request with passing checks.
+- `develop` — integration branch. Every change lands via pull request with passing checks.
+- `main` — release branch. `develop` is promoted with a **merge commit**, never a squash, so
+  the two stay comparable.
+
+**There is no deployment pipeline yet.** `.github/workflows/ci.yml` builds and tests on pull
+requests; nothing deploys, and nothing applies migrations to any environment. Tracked by
+[#80](https://github.com/hubanau/JiraUnpacked/issues/80), which is blocked on the EC2-direct vs
+Docker/ECR decision (REQUIREMENTS.md line 223).
+
+When that lands, three things are easy to get wrong and worth naming here:
+
+- The SPA must be built into the API's `wwwroot` **before** `dotnet publish`. `UseStaticFiles`
+  no-ops on a missing directory, so skipping it yields a working API with no UI and no error.
+- Migrations need a role that can manage row-level security policies and create extensions —
+  two migrations set up RLS, and one runs `CREATE EXTENSION pg_trgm`.
+- The app refuses to start without the configuration in the table above, so a first deploy
+  fails loudly rather than quietly running on the keys committed to this repository.
 
 ## Project board
 
