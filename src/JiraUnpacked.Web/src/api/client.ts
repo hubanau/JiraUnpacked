@@ -47,25 +47,6 @@ async function parseOk<T>(response: Response): Promise<T> {
   return JSON.parse(text) as T;
 }
 
-/**
- * True when `body` looks like an ASP.NET ProblemDetails payload — i.e. it
- * carries a non-empty `title`. That shape is only ever produced by our own
- * application code choosing to reject a specific request (see
- * JiraApiExceptionFilter, which maps a revoked/expired *Jira* token to 401
- * with a titled ProblemDetails body). The bearer-token challenge that
- * rejects a genuinely bad *access* token, by contrast, carries no body at
- * all — that distinction is exactly what apiFetch uses below to decide
- * whether a 401 means our own session is over.
- */
-function hasProblemDetailsTitle(body: unknown): body is { title: string } {
-  return (
-    body !== null &&
-    typeof body === 'object' &&
-    typeof (body as { title?: unknown }).title === 'string' &&
-    (body as { title: string }).title.length > 0
-  );
-}
-
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
   const response = await send(path, options);
 
@@ -77,37 +58,12 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
     }
     const retry = await send(path, options);
     if (retry.status === 401) {
-      // A 401 that survives a *successful* refresh is ambiguous on its own:
-      // it could mean our own session really is over, or it could be some
-      // other check on our API rejecting this particular request for a
-      // reason that has nothing to do with our session — e.g. the stored
-      // Jira credentials being rejected upstream (JiraApiExceptionFilter
-      // maps that to 401 too). Since refresh just succeeded, the retry
-      // above already carried a *fresh* access token, so a 401 caused by
-      // our bearer token being stale is impossible here; only the actual
-      // JWT bearer challenge (which is always bodiless) can mean that.
-      //
-      // Discriminator: read the body once, and only treat this as a real
-      // session failure when it is empty. A 401 that instead carries a
-      // JSON ProblemDetails body (a `title`) was produced deliberately by
-      // our own application code AFTER the bearer token had already been
-      // accepted, so it must not log the user out of Jira Unpacked.
-      const bodyText = await retry.text(); // Response bodies are single-use — read exactly once.
-      let parsedBody: unknown = null;
-      try {
-        parsedBody = bodyText ? JSON.parse(bodyText) : null;
-      } catch {
-        parsedBody = null; // non-JSON body — treated the same as no body.
-      }
-
-      if (!hasProblemDetailsTitle(parsedBody)) {
-        bridge.onAuthFailure();
-      }
-
-      // Rebuild a Response over the text already consumed above so
-      // toApiError can apply its normal ProblemDetails/`{error}` parsing
-      // without re-reading the original (now-drained) stream.
-      throw await toApiError(new Response(bodyText, { status: retry.status }));
+      // A 401 after a successful refresh cannot be a stale bearer token — the
+      // retry carried a fresh one. Since Jira credential failures are now 502,
+      // every remaining 401 here is a genuine session failure (an invalid `sub`
+      // claim, a revoked account), so ending the session is correct.
+      bridge.onAuthFailure();
+      throw await toApiError(retry);
     }
     if (!retry.ok) throw await toApiError(retry);
     return parseOk<T>(retry);

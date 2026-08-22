@@ -76,6 +76,9 @@ public static class DependencyInjection
         services.AddScoped<IIssueQueryService, IssueQueryService>();
         services.AddScoped<JiraUnpacked.Infrastructure.Reporting.Filtering.IIssueFilterTranslator,
                            JiraUnpacked.Infrastructure.Reporting.Filtering.IssueFilterTranslator>();
+        // Stateless projection over a static, compile-time-fixed dictionary — safe as a singleton.
+        services.AddSingleton<IFilterCatalogService,
+                               JiraUnpacked.Infrastructure.Reporting.Filtering.FilterCatalogService>();
         services.AddScoped<IMetricsQueryService, MetricsQueryService>();
         services.AddScoped<IGapCheck, OpenEpicAllChildrenDoneCheck>();
         services.AddScoped<IGapCheck, DoneEpicOpenChildrenCheck>();

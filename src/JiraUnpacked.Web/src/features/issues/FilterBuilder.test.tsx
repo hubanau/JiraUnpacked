@@ -2,14 +2,43 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { http, HttpResponse } from 'msw';
+import { delay, http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/setup';
 import IssueList from './IssueList';
 import { FilterBuilder } from './FilterBuilder';
 import { ConditionRow } from './ConditionRow';
-import type { FilterCondition } from '../../api/issues';
-import { MAX_CONDITIONS, MAX_IN_VALUES } from './filterCatalog';
+import type { FilterCatalog, FilterCondition } from '../../api/issues';
+
+/**
+ * The server's filter catalog (mirrors FilterFields.All and
+ * IssueFilterTranslator's guard consts on the .NET side) used to mock
+ * GET /api/filter-catalog. FilterBuilder now fetches this instead of
+ * importing a hand-maintained copy, so every test that mounts it must
+ * register this handler first via mockFilterCatalog().
+ */
+const CATALOG: FilterCatalog = {
+  fields: [
+    { name: 'status', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
+    { name: 'issueType', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
+    { name: 'priority', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
+    { name: 'assignee', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
+    { name: 'sprint', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
+    { name: 'team', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
+    { name: 'storyPoints', type: 'Decimal', operators: ['Eq', 'Neq', 'Lt', 'Lte', 'Gt', 'Gte', 'IsNull'] },
+    { name: 'createdAt', type: 'DateTime', operators: ['Lt', 'Lte', 'Gt', 'Gte'] },
+    { name: 'updatedAt', type: 'DateTime', operators: ['Lt', 'Lte', 'Gt', 'Gte'] },
+    { name: 'summary', type: 'Text', operators: ['Contains', 'StartsWith', 'IsNull'] },
+    { name: 'jiraKey', type: 'Text', operators: ['Eq', 'Contains', 'StartsWith'] },
+    { name: 'parent', type: 'ParentRef', operators: ['Eq', 'IsNull'] },
+  ],
+  maxConditions: 20,
+  maxInValues: 100,
+};
+
+function mockFilterCatalog() {
+  server.use(http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)));
+}
 
 function renderIssueList() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -28,9 +57,11 @@ function renderIssueList() {
  * Registers a handler that always returns an empty page, and records every
  * request body it receives (in arrival order) so a test can inspect the
  * final `conditions` array the builder produced — the whole point of
- * mounting IssueList instead of the builder in isolation.
+ * mounting IssueList instead of the builder in isolation. Also registers
+ * the filter-catalog handler, since IssueList always mounts FilterBuilder.
  */
 function mockIssuesQuery(): { bodies: Record<string, unknown>[] } {
+  mockFilterCatalog();
   const bodies: Record<string, unknown>[] = [];
   server.use(
     http.post('/api/projects/p1/issues/query', async ({ request }) => {
@@ -47,6 +78,47 @@ async function addCondition(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('FilterBuilder', () => {
+  it('shows a spinner while the filter catalog is loading', async () => {
+    // Rendered directly (no IssueList/router wrapper needed) with a request
+    // that never resolves, so the pending phase is observable rather than
+    // racing past it — the same technique the maxConditions/maxInValues
+    // tests below use to render FilterBuilder/ConditionRow standalone.
+    server.use(
+      http.get('/api/filter-catalog', async () => {
+        await delay('infinite');
+        return HttpResponse.json(CATALOG);
+      }),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <FilterBuilder conditions={[]} onChange={() => {}} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('status', { name: /loading filter catalog/i })).toBeInTheDocument();
+  });
+
+  it('shows the server error when the filter catalog fails to load', async () => {
+    server.use(
+      http.get('/api/filter-catalog', () =>
+        HttpResponse.json(
+          { title: 'Could not load the filter catalog right now.' },
+          { status: 500 },
+        )),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <FilterBuilder conditions={[]} onChange={() => {}} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /could not load the filter catalog right now/i,
+    );
+  });
+
   it('shows a collapsed summary and an Add condition control when there is no filter', async () => {
     mockIssuesQuery();
     renderIssueList();
@@ -164,37 +236,48 @@ describe('FilterBuilder', () => {
     expect(ops).toEqual(['Eq', 'Contains', 'StartsWith']);
   });
 
-  it('blocks a 21st condition', () => {
+  it('blocks a 21st condition', async () => {
     // The guard is a pure function of conditions.length, so it is asserted
-    // by rendering FilterBuilder directly with MAX_CONDITIONS rows already
-    // present — not by driving MAX_CONDITIONS sequential "Add condition"
-    // clicks (and MAX_CONDITIONS MSW round trips) through a mounted
-    // IssueList. That prior version was the slowest test in the suite by
-    // a wide margin, purely from render/network overhead unrelated to the
-    // guard itself, and a large timeout on it would have hidden a real
+    // by rendering FilterBuilder directly with CATALOG.maxConditions rows
+    // already present — not by driving that many sequential "Add condition"
+    // clicks (and that many MSW round trips) through a mounted IssueList.
+    // That prior version was the slowest test in the suite by a wide
+    // margin, purely from render/network overhead unrelated to the guard
+    // itself, and a large timeout on it would have hidden a real
     // performance regression rather than caught one.
+    mockFilterCatalog();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
-      <FilterBuilder
-        conditions={Array.from({ length: MAX_CONDITIONS }, () => ({ field: 'status', op: 'Eq' as const, value: '' }))}
-        onChange={() => {}}
-      />,
+      <QueryClientProvider client={queryClient}>
+        <FilterBuilder
+          conditions={Array.from(
+            { length: CATALOG.maxConditions },
+            () => ({ field: 'status', op: 'Eq' as const, value: '' }),
+          )}
+          onChange={() => {}}
+        />
+      </QueryClientProvider>,
     );
 
-    expect(screen.getByRole('button', { name: /add condition/i })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: /add condition/i })).toBeDisabled();
     expect(screen.getByText(/at most 20 conditions/i)).toBeInTheDocument();
   });
 
   it('blocks a 101st In value', () => {
     // Same rationale as "blocks a 21st condition" above: render ConditionRow
-    // directly with MAX_IN_VALUES values already present, rather than
-    // driving MAX_IN_VALUES sequential "Add value" interactions through a
+    // directly with CATALOG.maxInValues values already present, rather than
+    // driving that many sequential "Add value" interactions through a
     // mounted IssueList (which made this the suite's second-slowest test).
+    // ConditionRow takes the catalog as a plain prop (no fetch of its own),
+    // so this needs no QueryClientProvider or MSW handler.
     const condition: FilterCondition = {
       field: 'status',
       op: 'In',
-      values: Array.from({ length: MAX_IN_VALUES }, (_, i) => `v${i}`),
+      values: Array.from({ length: CATALOG.maxInValues }, (_, i) => `v${i}`),
     };
-    render(<ConditionRow condition={condition} onChange={() => {}} onRemove={() => {}} index={0} />);
+    render(
+      <ConditionRow condition={condition} catalog={CATALOG} onChange={() => {}} onRemove={() => {}} index={0} />,
+    );
 
     expect(screen.getByRole('button', { name: /add value/i })).toBeDisabled();
     expect(screen.getByText(/at most 100 values/i)).toBeInTheDocument();

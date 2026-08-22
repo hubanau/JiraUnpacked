@@ -8,10 +8,12 @@ import { queryKeys } from '../../api/queryKeys';
 
 // The two failure modes must read differently: a 400 means the token/email
 // is wrong, a 502 means Jira itself is unreachable. `toApiError` already
-// gives each a distinct `title` (502 by status alone, 400 from the server's
-// own message), so rendering `error.title` verbatim keeps them distinct —
-// collapsing to one generic string would send a user with a Jira outage off
-// to re-check credentials that were never the problem.
+// gives each a distinct `title` (502 prefers the server's own ProblemDetails
+// title — e.g. a rejected stored credential — and falls back to a generic
+// upstream-Jira message only when the body carries none; 400 always uses
+// the server's own message), so rendering `error.title` verbatim keeps them
+// distinct — collapsing to one generic string would send a user with a
+// Jira outage off to re-check credentials that were never the problem.
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.title;
   return 'Could not add the connection.';

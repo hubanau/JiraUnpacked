@@ -12,8 +12,10 @@ import { SyncIntervalField } from './SyncIntervalField';
 // (see the Select below) instead of a free-text field — that makes the
 // server's "Unknown Jira project key." 400 unreachable by construction. A
 // 409 means the project is already attached to this connection; every other
-// status renders the server's own wording (400s carry the server's message,
-// 502 carries the upstream-Jira message from toApiError).
+// status renders the server's own wording (400s carry the server's message;
+// 502 carries the server's own ProblemDetails title when it sent one — e.g.
+// a rejected stored credential — and toApiError's generic upstream-Jira
+// message only as a fallback).
 function addProjectError(error: unknown): string {
   if (!(error instanceof ApiError)) return 'Could not add the project.';
   if (error.status === 409) return 'That project is already added.';

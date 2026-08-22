@@ -20,8 +20,8 @@ public interface IIssueFilterTranslator
 
 public sealed class IssueFilterTranslator : IIssueFilterTranslator
 {
-    private const int MaxConditions = 20;
-    private const int MaxInValues = 100;
+    public const int MaxConditions = 20;
+    public const int MaxInValues = 100;
 
     public async Task<FilterBuildResult> BuildAsync(
         IReadOnlyList<FilterCondition> conditions, DictNameResolver resolveDict, CancellationToken ct = default)
