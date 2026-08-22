@@ -23,7 +23,19 @@ export interface FilterCatalog {
   fields: FilterFieldInfo[];
   maxConditions: number;
   maxInValues: number;
+  /**
+   * Guards on the boolean-group shape (`filter`). The builder below sends flat
+   * `conditions`, which the server still accepts unchanged, so nothing here is
+   * read yet — they are typed so a future tree editor sizes itself from the
+   * server rather than re-introducing the hand-maintained mirror this endpoint
+   * exists to have deleted.
+   */
+  maxGroups: number;
+  maxDepth: number;
 }
+
+/** How a FilterGroup joins its parts — its conditions and its nested groups alike. */
+export type FilterLogic = 'And' | 'Or';
 
 /**
  * Mirrors the API's FilterCondition. `value` and `values` are mutually
@@ -38,8 +50,22 @@ export interface FilterCondition {
   values?: (string | number)[];
 }
 
+/**
+ * A boolean group, sent as `filter` instead of `conditions` (never both — the
+ * server returns 400 rather than merging them). A group must contain at least
+ * one part: an empty And matches everything and an empty Or matches nothing,
+ * so the server refuses both rather than guessing.
+ */
+export interface FilterGroup {
+  logic: FilterLogic;
+  conditions?: FilterCondition[];
+  groups?: FilterGroup[];
+}
+
+/** `conditions` (flat AND) or `filter` (boolean tree) — never both. */
 export interface IssueFilterRequest {
   conditions?: FilterCondition[];
+  filter?: FilterGroup;
   page?: number;
   pageSize?: number;
 }

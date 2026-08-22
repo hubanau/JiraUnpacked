@@ -29,5 +29,7 @@ public sealed class FilterCatalogService : IFilterCatalogService
                 f.Ops.OrderBy(o => (int)o).Select(o => o.ToString()).ToList()))
             .ToList(),
         IssueFilterTranslator.MaxConditions,
-        IssueFilterTranslator.MaxInValues);
+        IssueFilterTranslator.MaxInValues,
+        IssueFilterTranslator.MaxGroups,
+        IssueFilterTranslator.MaxDepth);
 }
