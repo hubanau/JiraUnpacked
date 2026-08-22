@@ -58,7 +58,7 @@ public sealed class AuthService : IAuthService
         });
         await _db.SaveChangesAsync(ct);
 
-        return new LoginResult(true, access.Token, access.ExpiresAtUtc, refresh.Token);
+        return new LoginResult(true, access.Token, access.ExpiresAtUtc, refresh.Token, refresh.ExpiresAtUtc);
     }
 
     public async Task<LoginResult> RefreshAsync(string refreshToken, CancellationToken ct = default)
@@ -111,7 +111,7 @@ public sealed class AuthService : IAuthService
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
 
-        return new LoginResult(true, access.Token, access.ExpiresAtUtc, newRefresh.Token);
+        return new LoginResult(true, access.Token, access.ExpiresAtUtc, newRefresh.Token, newRefresh.ExpiresAtUtc);
     }
 
     public async Task LogoutAsync(string refreshToken, CancellationToken ct = default)

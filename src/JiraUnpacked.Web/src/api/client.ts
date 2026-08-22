@@ -27,7 +27,11 @@ export interface ApiFetchOptions {
 }
 
 async function send(path: string, options: ApiFetchOptions): Promise<Response> {
-  const headers: Record<string, string> = {};
+  // Sent on every request. /api/auth/refresh and /logout require it as the second CSRF
+  // layer behind SameSite=Strict: a cross-site form post cannot set a header at all, and a
+  // cross-site fetch that sets one triggers a CORS preflight, which fails because the app
+  // publishes no CORS policy.
+  const headers: Record<string, string> = { 'X-Requested-With': 'XMLHttpRequest' };
   const token = bridge?.getAccessToken() ?? null;
   if (token) headers.Authorization = `Bearer ${token}`;
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
@@ -35,6 +39,9 @@ async function send(path: string, options: ApiFetchOptions): Promise<Response> {
   return fetch(path, {
     method: options.method ?? 'GET',
     headers,
+    // fetch already defaults to same-origin; stated explicitly because the refresh cookie
+    // depends on it, and a default is the kind of thing a refactor changes without noticing.
+    credentials: 'same-origin',
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
     signal: options.signal,
   });

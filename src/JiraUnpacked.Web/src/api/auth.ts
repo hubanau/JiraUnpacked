@@ -1,9 +1,12 @@
 import { apiFetch } from './client';
 
+/**
+ * No refresh token: it is delivered only as an httpOnly cookie the browser stores and
+ * replays, so script never sees it — not here, and not at sign-in.
+ */
 export interface TokenResponse {
   accessToken: string;
   expiresAtUtc: string;
-  refreshToken: string;
 }
 
 export interface MeResponse {
@@ -32,15 +35,13 @@ export const resendVerification = (email: string) =>
     method: 'POST', body: { email }, skipAuthRetry: true,
   });
 
-export const refreshTokens = (refreshToken: string) =>
-  apiFetch<TokenResponse>('/api/auth/refresh', {
-    method: 'POST', body: { refreshToken }, skipAuthRetry: true,
-  });
+/** Bodyless: the token travels in the cookie, which the browser attaches. */
+export const refreshTokens = () =>
+  apiFetch<TokenResponse>('/api/auth/refresh', { method: 'POST', skipAuthRetry: true });
 
-export const logoutRequest = (refreshToken: string) =>
-  apiFetch<void>('/api/auth/logout', {
-    method: 'POST', body: { refreshToken }, skipAuthRetry: true,
-  });
+/** Bodyless, and the server clears the cookie — the only thing that can. */
+export const logoutRequest = () =>
+  apiFetch<void>('/api/auth/logout', { method: 'POST', skipAuthRetry: true });
 
 export const getMe = () => apiFetch<MeResponse>('/api/auth/me');
 

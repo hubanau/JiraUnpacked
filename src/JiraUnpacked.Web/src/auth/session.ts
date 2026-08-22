@@ -1,12 +1,16 @@
 import { setAuthBridge } from '../api/client';
 import { refreshTokens, type TokenResponse } from '../api/auth';
 
-export const REFRESH_KEY = 'ju.refreshToken';
 export const USERNAME_KEY = 'ju.username';
 
 /**
  * The access token is deliberately module state and never touches any
- * persistent store — a page reload re-obtains it from the refresh token.
+ * persistent store, and the refresh token is not here at all: it lives in an
+ * httpOnly cookie the browser attaches to /api/auth calls. Script cannot read
+ * it, so an XSS cannot exfiltrate a credential to use later or elsewhere.
+ *
+ * Nothing in this module persists a credential. localStorage holds only
+ * ju.username and ju.theme, neither of which is one.
  */
 let accessToken: string | null = null;
 
@@ -47,27 +51,25 @@ export function getAccessToken(): string | null {
   return accessToken;
 }
 
-export function getRefreshToken(): string | null {
-  return safeGetItem(REFRESH_KEY);
-}
-
 export function setTokens(tokens: TokenResponse): void {
   accessToken = tokens.accessToken;
-  safeSetItem(REFRESH_KEY, tokens.refreshToken);
 }
 
+/**
+ * Clears the in-memory access token only. The refresh cookie is httpOnly, so
+ * the server is the only party that can remove it — which /api/auth/logout
+ * does.
+ */
 export function clearTokens(): void {
   accessToken = null;
-  safeRemoveItem(REFRESH_KEY);
 }
 
 async function doRefresh(): Promise<boolean> {
   try {
-    const stored = getRefreshToken();
-    if (!stored) return false;
-    // Refresh rotates: the response carries a new refresh token that
-    // replaces the stored one.
-    setTokens(await refreshTokens(stored));
+    // No stored token to check first: the cookie is unreadable, so the
+    // server's answer IS the check. Rotation still happens — the response
+    // carries a fresh Set-Cookie the browser swaps in.
+    setTokens(await refreshTokens());
     return true;
   } catch {
     clearTokens();
