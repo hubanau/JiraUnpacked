@@ -10,26 +10,61 @@ delivery metrics.
 ## Stack
 
 - ASP.NET Core Web API · EF Core (Npgsql / **PostgreSQL**)
-- xUnit · GitHub Actions (CI) · GitHub Issues (tickets)
+- React 19 + TypeScript + Vite + Tailwind, served same-origin from the API's `wwwroot`
+- xUnit · Vitest · GitHub Actions (CI) · GitHub Issues (tickets)
 - Environments: **test** + **production** (no staging for v1)
 
 ## Solution layout
 
 | Project | Purpose |
 |---|---|
-| `src/JiraUnpacked.Api` | ASP.NET Core Web API — entry point |
+| `src/JiraUnpacked.Api` | ASP.NET Core Web API — entry point; also serves the built SPA |
 | `src/JiraUnpacked.Domain` | Entities + interfaces, no dependencies |
-| `src/JiraUnpacked.Infrastructure` | EF Core `AppDbContext`, migrations, Jira client (later) |
+| `src/JiraUnpacked.Infrastructure` | EF Core `AppDbContext`, migrations, Jira client, sync, reporting |
+| `src/JiraUnpacked.Web` | React SPA (exactly four runtime dependencies) |
 | `tests/JiraUnpacked.Tests` | xUnit unit + integration tests |
+
+## Tenant isolation
+
+Every tenant-owned table carries `EndUserId` and is guarded twice, independently:
+
+1. **EF global query filter** — applied centrally in `AppDbContext` to every `ITenantOwned` type.
+2. **Postgres row-level security** — the app connects as `jiraunpacked_app`, a `NOBYPASSRLS`
+   role, and a connection interceptor sets `app.current_tenant` on every open.
+
+A third, related guarantee: erasure. Every `ITenantOwned` type gets an `EndUserId -> Users`
+cascade, also applied centrally, so deleting a user removes their data by construction.
+
+Three gates keep this honest and must stay green:
+
+- `TenantIsolationGateTests` — proves isolation **at the database**, with no EF in the path.
+- `TenantDeletionGateTests` — proves every tenant-owned type cascades, and pins the **count**
+  of such types so a new table cannot be added without acknowledging it.
+- `IssueFilterSecurityTests` — proves the user-composable filter is injection-inert.
+
+Adding a tenant-owned table means: `ITenantOwned`, a query filter, an RLS migration, and a case
+in the isolation gate. The erasure cascade you get for free.
 
 ## Getting started
 
-Requires the .NET 8 SDK and (for later phases) a local PostgreSQL via Docker.
+Requires the .NET 8 SDK, Node 24, and Docker for the local PostgreSQL.
 
 ```bash
+docker compose up -d    # local Postgres
 dotnet build            # build the solution
-dotnet test             # run the test suite
+dotnet test             # .NET suite (needs the database above)
 ```
+
+The SPA lives in `src/JiraUnpacked.Web`:
+
+```bash
+npm ci && npm run dev       # dev server, proxying /api
+npm run typecheck && npm run lint && npm run test -- --run
+npm run build               # emits into the API's wwwroot
+```
+
+Integration tests migrate `jiraunpacked_test` themselves. They never truncate it, so a test
+that seeds fixed ids would only pass once — seed fresh ids and pin only their ordering.
 
 ## Local development database
 
@@ -94,6 +129,34 @@ lets a client's forged entry survive the unwind and become the "client" address.
 
 `GET /health/live` — the process is up. `GET /health/ready` — the database is reachable
 (**503** when not). Both anonymous, both deliberately terse.
+
+## API surface
+
+All routes are under `/api` and require a bearer token unless noted. Anything not under `/api`
+serves the SPA shell, so client-side routing survives a deep-link refresh; an unknown `/api`
+path stays a JSON 404 rather than becoming HTML with a 200.
+
+| Area | Routes |
+|---|---|
+| Auth | `POST register · verify · verify/resend · login · refresh · logout` (anonymous), `GET/DELETE me` |
+| Admin | `GET users`, `POST users/{id}/block · unblock`, `DELETE users/{id}`, `POST invite-codes` |
+| Connections | CRUD, plus live Jira reads for fields, projects and statuses |
+| Projects | CRUD, field mappings, status semantics, issue-type classes, queries |
+| Sync | `POST sync · rederive`, `GET sync-runs` |
+| Issues | `GET issues`, `GET issues/{id}`, `POST issues/query` (the filter builder) |
+| Filters | `GET filter-catalog`, and saved per-project filters (CRUD) |
+| Reports | four metrics and the gap-checks, each with a `GET` (whole project) and a `POST` that takes a filter |
+
+A rejected **Jira** credential is **502**, never 401 — 401 means only that your own session
+ended. Filter input never reaches a SQL string: it is compiled to an expression tree over a
+closed field catalog, with values as constants and `ILIKE` wildcards escaped.
+
+## Upgrading
+
+**Refresh tokens moved to an httpOnly cookie.** The token is no longer in any response body and
+no longer in `localStorage`. On deploy, **every signed-in user is signed out once** — their
+stored token is not sent anywhere and the server never issued them a cookie. They sign in again
+and it is done. `localStorage` now holds only `ju.username` and `ju.theme`, neither a credential.
 
 ## Branching & CI
 

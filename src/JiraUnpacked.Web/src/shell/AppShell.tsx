@@ -1,9 +1,11 @@
-import { Outlet } from 'react-router-dom';
-import { ThemeToggle } from '../ui';
+import { Outlet, useLocation } from 'react-router-dom';
+import { ErrorBoundary, ThemeToggle } from '../ui';
 import { SideNav } from './SideNav';
 import { UserMenu } from './UserMenu';
 
 export default function AppShell() {
+  const location = useLocation();
+
   return (
     <div className="flex min-h-screen flex-col md:grid md:grid-cols-[14rem_1fr] md:grid-rows-[auto_1fr]">
       <div className="md:col-start-1 md:row-span-2">
@@ -14,7 +16,14 @@ export default function AppShell() {
         <UserMenu />
       </header>
       <main className="flex-1 p-4 md:col-start-2 md:row-start-2 md:overflow-y-auto">
-        <Outlet />
+        {/*
+          Inside the shell, not around it: a page that throws leaves the nav and
+          the header intact, so the user can navigate away instead of reloading.
+          Keyed on the path so the error clears when they do.
+        */}
+        <ErrorBoundary resetKey={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
     </div>
   );
