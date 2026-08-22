@@ -23,7 +23,7 @@ delivery metrics.
 | Dev tooling | Visual Studio + Claude Code |
 | Environments | **test** + **production** (no separate staging for v1) |
 | Secrets | AWS Secrets Manager / Parameter Store, per-environment paths |
-| Token encryption | AWS KMS envelope encryption |
+| Token encryption | Envelope encryption; per-token data key wrapped by a master key. **Currently a local master key — KMS wrapping is [#79](https://github.com/hubanau/JiraUnpacked/issues/79).** |
 
 ---
 
@@ -81,7 +81,7 @@ Account creation order: email → username → strong password → email verific
 
 **FR-C1 — Connection model**
 Credentials are per Jira **instance**, not per project. Model is **Connection (base URL + email + API token) → one or more Projects**.
-- *Given* an End User, *when* they add a connection with valid credentials, *then* it is validated against Jira and the token is stored KMS-encrypted.
+- *Given* an End User, *when* they add a connection with valid credentials, *then* it is validated against Jira and the token is stored envelope-encrypted (per-token data key, AES-256-GCM, wrapped by the master key).
 
 **FR-C2 — Projects under a connection**
 - An End User can register several Jira Projects per connection.
@@ -142,7 +142,12 @@ Per project, the End User maps which field means team / assignee / sprint / stor
 
 **Security**
 - Tenant isolation is the highest-priority risk (FR-B2).
-- Jira tokens KMS-encrypted at rest; never logged or returned in any API response.
+- Jira tokens envelope-encrypted at rest; never logged or returned in any API response.
+  **Gap, tracked as [#79](https://github.com/hubanau/JiraUnpacked/issues/79):** the master key
+  is read from configuration, so it lives in the application process. One leaked configuration
+  value still decrypts every token, and there is no audit trail of decrypts. Those two
+  properties need an external KMS and cannot be obtained locally; the stored format is
+  versioned (`v1:`) so adding KMS is a new version tag rather than a second migration.
 - Passwords Argon2/bcrypt-hashed.
 - Rate-limiting on login and verification-code endpoints.
 - TLS everywhere.
