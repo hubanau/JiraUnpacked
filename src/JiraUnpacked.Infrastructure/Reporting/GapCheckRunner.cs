@@ -21,12 +21,15 @@ public sealed class GapCheckRunner : IGapCheckService
     private readonly AppDbContext _db;
     private readonly IReadOnlyList<IGapCheck> _checks;
     private readonly IIssueFilterCompiler _filter;
+    private readonly IReportCache _cache;
 
-    public GapCheckRunner(AppDbContext db, IEnumerable<IGapCheck> checks, IIssueFilterCompiler filter)
+    public GapCheckRunner(
+        AppDbContext db, IEnumerable<IGapCheck> checks, IIssueFilterCompiler filter, IReportCache cache)
     {
         _db = db;
         _checks = checks.ToList();
         _filter = filter;
+        _cache = cache;
     }
 
     public async Task<IReadOnlyList<GapCheckInfo>?> GetCatalogAsync(Guid projectId, CancellationToken ct = default)
@@ -52,7 +55,7 @@ public sealed class GapCheckRunner : IGapCheckService
         // are examined; it never changes the evidence used to judge them. Filtering the context
         // instead would let "assignee = Alice" hide Bob's open children and report a broken
         // epic as clean — a green result to a question nobody asked.
-        var context = await LoadContextAsync(projectId, ct);
+        var context = await LoadCachedContextAsync(projectId, ct);
         var outcome = check.Run(context);
 
         // Applied AFTER the check has run, and only to the violation SUBJECTS. Null = unfiltered.
@@ -97,6 +100,40 @@ public sealed class GapCheckRunner : IGapCheckService
     /// <summary>Tenant-scoped existence check: a cross-tenant/unknown project is filtered out => 404.</summary>
     private Task<bool> ProjectExistsAsync(Guid projectId, CancellationToken ct) =>
         _db.JiraProjects.AnyAsync(p => p.Id == projectId, ct);
+
+    /// <summary>
+    /// The context is always the WHOLE project and never depends on the filter, so every check
+    /// on a project shares one entry — clicking through the catalog stops re-loading every
+    /// issue per check. Fingerprinted on the sync watermark and the semantics map, the two
+    /// things that change what a check concludes.
+    /// </summary>
+    private async Task<GapCheckContext> LoadCachedContextAsync(Guid projectId, CancellationToken ct)
+    {
+        var watermark = await _db.SyncRuns
+            .Where(r => r.JiraProjectId == projectId && r.Status == SyncRunStatus.Succeeded)
+            .MaxAsync(r => (DateTime?)r.FinishedAt, ct);
+
+        var semanticRows = await _db.StatusSemantics
+            .Where(s => s.JiraProjectId == projectId)
+            .Select(s => new { s.StatusName, s.Class })
+            .OrderBy(s => s.StatusName)
+            .ToListAsync(ct);
+
+        // The Epic classification lives on the connection and is edited independently of both,
+        // so it belongs in the fingerprint too — otherwise classifying a type as Epic would
+        // leave a cached NotConfigured in place.
+        var epicTypes = await _db.IssueTypes
+            .Where(t => t.Class == IssueTypeClass.Epic
+                        && _db.JiraProjects.Any(p => p.Id == projectId && p.JiraConnectionId == t.JiraConnectionId))
+            .CountAsync(ct);
+
+        var fingerprint =
+            $"{watermark:O}#{string.Join("|", semanticRows.Select(r => $"{r.StatusName}={r.Class}"))}#{epicTypes}";
+
+        return await _cache.GetOrCreateAsync(
+            "gap-check-context", projectId, fingerprint,
+            token => LoadContextAsync(projectId, token), ct);
+    }
 
     private async Task<GapCheckContext> LoadContextAsync(Guid projectId, CancellationToken ct)
     {

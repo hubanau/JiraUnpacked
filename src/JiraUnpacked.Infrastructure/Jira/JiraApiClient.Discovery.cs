@@ -24,8 +24,8 @@ public sealed partial class JiraApiClient
 
     public async Task<JiraProjectSummary?> GetProjectAsync(JiraCredentials creds, string projectKey, CancellationToken ct = default)
     {
-        using var req = Build(HttpMethod.Get, creds, $"/rest/api/3/project/{Uri.EscapeDataString(projectKey)}");
-        using var resp = await SendAsync(req, ct);
+        using var resp = await SendWithRetryAsync(
+            () => Build(HttpMethod.Get, creds, $"/rest/api/3/project/{Uri.EscapeDataString(projectKey)}"), ct);
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;
         EnsureOk(resp);
         var p = (await resp.Content.ReadFromJsonAsync<ProjectDto>(Json, ct))!;
@@ -45,9 +45,12 @@ public sealed partial class JiraApiClient
 
     public async Task<JqlValidationResult> ParseJqlAsync(JiraCredentials creds, string jql, CancellationToken ct = default)
     {
-        using var req = Build(HttpMethod.Post, creds, "/rest/api/3/jql/parse");
-        req.Content = JsonContent.Create(new { queries = new[] { jql } }, options: Json);
-        using var resp = await SendAsync(req, ct);
+        using var resp = await SendWithRetryAsync(() =>
+        {
+            var req = Build(HttpMethod.Post, creds, "/rest/api/3/jql/parse");
+            req.Content = JsonContent.Create(new { queries = new[] { jql } }, options: Json);
+            return req;
+        }, ct);
         EnsureOk(resp);
         var dto = (await resp.Content.ReadFromJsonAsync<JqlParseDto>(Json, ct))!;
         var errors = dto.Queries.FirstOrDefault()?.Errors ?? new List<string>();
@@ -56,18 +59,63 @@ public sealed partial class JiraApiClient
 
     private async Task<T> GetAsync<T>(JiraCredentials creds, string path, CancellationToken ct)
     {
-        using var req = Build(HttpMethod.Get, creds, path);
-        using var resp = await SendAsync(req, ct);
+        using var resp = await SendWithRetryAsync(() => Build(HttpMethod.Get, creds, path), ct);
         EnsureOk(resp);
         return (await resp.Content.ReadFromJsonAsync<T>(Json, ct))!;
     }
 
-    private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
+    /// <summary>
+    /// Sends, retrying transient failures: a rate limit, a 5xx, or a dropped connection. One
+    /// blip should not fail a whole sync run.
+    ///
+    /// The request is REBUILT per attempt rather than reused — an HttpRequestMessage cannot be
+    /// sent twice, and a retry that quietly reused one would throw on the second attempt
+    /// instead of retrying. A caller-requested cancellation is never retried.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendWithRetryAsync(
+        Func<HttpRequestMessage> build, CancellationToken ct)
     {
-        try { return await _http.SendAsync(req, ct); }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-        { throw new JiraApiException(JiraErrorKind.Upstream, "Jira is unreachable."); }
+        for (var attempt = 0; ; attempt++)
+        {
+            HttpResponseMessage resp;
+            try
+            {
+                using var req = build();
+                resp = await _http.SendAsync(req, ct);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                if (ct.IsCancellationRequested || attempt >= MaxTransientRetries)
+                    throw new JiraApiException(JiraErrorKind.Upstream, "Jira is unreachable.");
+
+                await Task.Delay(Backoff(attempt), ct);
+                continue;
+            }
+
+            if (IsTransient(resp) && attempt < MaxTransientRetries)
+            {
+                var delay = RetryAfter(resp) ?? Backoff(attempt);
+                resp.Dispose();
+                await Task.Delay(delay, ct);
+                continue;
+            }
+
+            return resp;
+        }
     }
+
+    /// <summary>Rate limits and server-side faults are worth another attempt; a 4xx is not.</summary>
+    private static bool IsTransient(HttpResponseMessage resp) =>
+        resp.StatusCode == HttpStatusCode.TooManyRequests || (int)resp.StatusCode >= 500;
+
+    /// <summary>Jira's own guidance when it sends one, in preference to any backoff we invent.</summary>
+    private static TimeSpan? RetryAfter(HttpResponseMessage resp) =>
+        resp.Headers.TryGetValues("Retry-After", out var values)
+        && double.TryParse(values.FirstOrDefault(), out var seconds)
+            ? TimeSpan.FromSeconds(Math.Clamp(seconds, 0, 30))
+            : null;
+
+    private static TimeSpan Backoff(int attempt) => TimeSpan.FromSeconds(Math.Pow(2, attempt));
 
     private static void EnsureOk(HttpResponseMessage resp)
     {

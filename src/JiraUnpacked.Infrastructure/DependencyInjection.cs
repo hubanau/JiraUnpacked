@@ -89,6 +89,10 @@ public static class DependencyInjection
         // Stateless projection over a static, compile-time-fixed dictionary — safe as a singleton.
         services.AddSingleton<IFilterCatalogService,
                                JiraUnpacked.Infrastructure.Reporting.Filtering.FilterCatalogService>();
+        // Singleton on purpose: the point is to share one project's fold across the separate
+        // requests a metrics page makes. Tenant scoping is inside the cache, keyed from
+        // ICurrentTenant rather than from any caller.
+        services.AddSingleton<IReportCache, ReportCache>();
         services.AddScoped<IMetricsQueryService, MetricsQueryService>();
         services.AddScoped<IGapCheck, OpenEpicAllChildrenDoneCheck>();
         services.AddScoped<IGapCheck, DoneEpicOpenChildrenCheck>();

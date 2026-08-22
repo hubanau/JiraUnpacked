@@ -21,12 +21,43 @@ public sealed class MetricsQueryService : IMetricsQueryService
     private readonly AppDbContext _db;
     private readonly IClock _clock;
     private readonly IIssueFilterCompiler _filter;
+    private readonly IReportCache _cache;
 
-    public MetricsQueryService(AppDbContext db, IClock clock, IIssueFilterCompiler filter)
+    public MetricsQueryService(
+        AppDbContext db, IClock clock, IIssueFilterCompiler filter, IReportCache cache)
     {
         _db = db;
         _clock = clock;
         _filter = filter;
+        _cache = cache;
+    }
+
+    /// <summary>
+    /// The latest completed sync or rederive. Both go through SyncOrchestrator and stamp
+    /// FinishedAt, so this moves whenever the modeled data does — which is what lets the
+    /// timeline fold be cached without ever serving a stale number.
+    /// </summary>
+    private async Task<DateTime?> SyncWatermarkAsync(Guid projectId, CancellationToken ct) =>
+        await _db.SyncRuns
+            .Where(r => r.JiraProjectId == projectId && r.Status == SyncRunStatus.Succeeded)
+            .MaxAsync(r => (DateTime?)r.FinishedAt, ct);
+
+    /// <summary>
+    /// Everything a timeline answer depends on, in one string. The semantics map is in here
+    /// because it decides which status counts as Active or Done: edit it and every duration
+    /// changes, with no sync involved. Ordered so the same map always produces the same text.
+    /// </summary>
+    private static string Fingerprint(
+        DateTime? watermark, Dictionary<string, StatusClass> semantics, ReportFilter? filter)
+    {
+        var classes = string.Join(
+            "|", semantics.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}={kv.Value}"));
+
+        var conditions = filter is null
+            ? string.Empty
+            : System.Text.Json.JsonSerializer.Serialize(filter, SavedFilterService.DefinitionJson);
+
+        return $"{watermark:O}#{classes}#{conditions}";
     }
 
     /// <summary>
@@ -66,6 +97,13 @@ public sealed class MetricsQueryService : IMetricsQueryService
     private sealed record IssueRow(
         string JiraIssueId, string JiraKey, string? Summary, string? CurrentStatus,
         decimal? StoryPoints, DateTime JiraCreatedAt);
+
+    /// <summary>
+    /// One project's folded timelines. Shared between requests by the cache, so every member is
+    /// read-only by type: a caller that mutated it would corrupt the next request's answer.
+    /// </summary>
+    private sealed record TimelineSnapshot(
+        IReadOnlyList<IssueRow> Issues, IReadOnlyDictionary<string, IssueTimeline> Timelines);
 
     public async Task<ReportResult<StoryCountsReport>> GetStoryCountsAsync(
         Guid projectId, ReportFilter? filter = null, CancellationToken ct = default)
@@ -108,11 +146,27 @@ public sealed class MetricsQueryService : IMetricsQueryService
     /// projected issues, and their status transitions — then folds each issue through the engine.
     /// Story counts deliberately does NOT call this: it needs no change history.
     /// </summary>
-    private async Task<(List<IssueRow> Issues, Dictionary<string, IssueTimeline> Timelines)>
-        LoadTimelinesAsync(Guid projectId, Expression<Func<Issue, bool>> population, CancellationToken ct)
+    /// <summary>
+    /// The cached entry point. Two cheap queries (semantics + watermark) decide whether the two
+    /// expensive ones are needed at all — which is what collapses the metrics page's three
+    /// separate requests for the same fold into one load.
+    /// </summary>
+    private async Task<TimelineSnapshot> LoadTimelinesAsync(
+        Guid projectId, Expression<Func<Issue, bool>> population, ReportFilter? filter, CancellationToken ct)
     {
         var semantics = await LoadSemanticsAsync(projectId, ct);
+        var watermark = await SyncWatermarkAsync(projectId, ct);
 
+        return await _cache.GetOrCreateAsync(
+            "timelines", projectId, Fingerprint(watermark, semantics, filter),
+            token => BuildTimelinesAsync(projectId, population, semantics, token), ct);
+    }
+
+    private async Task<TimelineSnapshot>
+        BuildTimelinesAsync(
+            Guid projectId, Expression<Func<Issue, bool>> population,
+            Dictionary<string, StatusClass> semantics, CancellationToken ct)
+    {
         var issues = await _db.Issues
             .Where(i => i.JiraProjectId == projectId)
             .Where(population)
@@ -158,7 +212,7 @@ public sealed class MetricsQueryService : IMetricsQueryService
                 StatusTimelineEngine.Build(i.JiraCreatedAt, i.CurrentStatus, transitions, semantics);
         }
 
-        return (issues, timelines);
+        return new TimelineSnapshot(issues, timelines);
     }
 
     public async Task<ReportResult<TimeInProgressReport>> GetTimeInProgressAsync(
@@ -167,11 +221,11 @@ public sealed class MetricsQueryService : IMetricsQueryService
         var (population, failure) = await ResolvePopulationAsync<TimeInProgressReport>(projectId, filter, ct);
         if (failure is not null) return failure;
 
-        var (_, timelines) = await LoadTimelinesAsync(projectId, population!, ct);
+        var snapshot = await LoadTimelinesAsync(projectId, population!, filter, ct);
 
         var durations = new List<double>();
         var excluded = 0;
-        foreach (var t in timelines.Values)
+        foreach (var t in snapshot.Timelines.Values)
         {
             // Cycle time needs BOTH ends, and Done must come after Active.
             if (t.FirstActiveAt is DateTime a && t.FirstDoneAt is DateTime d && d > a)
@@ -196,7 +250,7 @@ public sealed class MetricsQueryService : IMetricsQueryService
         var (population, failure) = await ResolvePopulationAsync<ThroughputReport>(projectId, filter, ct);
         if (failure is not null) return failure;
 
-        var (_, timelines) = await LoadTimelinesAsync(projectId, population!, ct);
+        var snapshot = await LoadTimelinesAsync(projectId, population!, filter, ct);
 
         // Resolve the window: both ends snap OUTWARD to bucket boundaries; the default is the
         // last 12 buckets ending with the bucket containing "now".
@@ -204,7 +258,7 @@ public sealed class MetricsQueryService : IMetricsQueryService
         var fromStart = from is DateTime f ? FloorTo(ToUtc(f)!.Value, bucket) : StepBack(toStart, bucket, 11);
 
         var counts = new Dictionary<DateTime, int>();
-        foreach (var t in timelines.Values)
+        foreach (var t in snapshot.Timelines.Values)
         {
             if (t.FirstDoneAt is not DateTime done) continue;
             var b = FloorTo(done, bucket);
@@ -270,14 +324,14 @@ public sealed class MetricsQueryService : IMetricsQueryService
         var (population, failure) = await ResolvePopulationAsync<StatusAgingReport>(projectId, filter, ct);
         if (failure is not null) return failure;
 
-        var (issues, timelines) = await LoadTimelinesAsync(projectId, population!, ct);
+        var snapshot = await LoadTimelinesAsync(projectId, population!, filter, ct);
         var now = _clock.UtcNow;
 
         // Population: everything not currently Done.
         var open = new List<AgingItem>();
-        foreach (var i in issues)
+        foreach (var i in snapshot.Issues)
         {
-            var t = timelines[i.JiraIssueId];
+            var t = snapshot.Timelines[i.JiraIssueId];
             if (t.CurrentClass == StatusClass.Done) continue;
 
             open.Add(new AgingItem(
