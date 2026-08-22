@@ -1,7 +1,10 @@
 // src/JiraUnpacked.Infrastructure/Reporting/MetricsQueryService.cs
 using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Enums;
+using System.Linq.Expressions;
+using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Infrastructure.Persistence;
+using JiraUnpacked.Infrastructure.Reporting.Filtering;
 using Microsoft.EntityFrameworkCore;
 
 namespace JiraUnpacked.Infrastructure.Reporting;
@@ -17,11 +20,29 @@ public sealed class MetricsQueryService : IMetricsQueryService
 
     private readonly AppDbContext _db;
     private readonly IClock _clock;
+    private readonly IIssueFilterCompiler _filter;
 
-    public MetricsQueryService(AppDbContext db, IClock clock)
+    public MetricsQueryService(AppDbContext db, IClock clock, IIssueFilterCompiler filter)
     {
         _db = db;
         _clock = clock;
+        _filter = filter;
+    }
+
+    /// <summary>
+    /// Resolves a request into either a predicate over the population or a failure. The project
+    /// check runs FIRST so a bad filter aimed at another tenant's project still answers 404
+    /// rather than leaking the difference between "no such project" and "bad filter".
+    /// </summary>
+    private async Task<(Expression<Func<Issue, bool>>? Population, ReportResult<T>? Failure)>
+        ResolvePopulationAsync<T>(Guid projectId, ReportFilter? filter, CancellationToken ct) where T : class
+    {
+        if (!await ProjectExistsAsync(projectId, ct)) return (null, ReportResult<T>.NotFound());
+
+        var compiled = await _filter.CompileAsync(filter, ct);
+        return compiled.Error is not null
+            ? (null, ReportResult<T>.Invalid(compiled.Error))
+            : (compiled.Predicate, null);
     }
 
     /// <summary>Tenant-scoped existence check: a cross-tenant/unknown project is filtered out => 404.</summary>
@@ -46,14 +67,18 @@ public sealed class MetricsQueryService : IMetricsQueryService
         string JiraIssueId, string JiraKey, string? Summary, string? CurrentStatus,
         decimal? StoryPoints, DateTime JiraCreatedAt);
 
-    public async Task<StoryCountsReport?> GetStoryCountsAsync(Guid projectId, CancellationToken ct = default)
+    public async Task<ReportResult<StoryCountsReport>> GetStoryCountsAsync(
+        Guid projectId, ReportFilter? filter = null, CancellationToken ct = default)
     {
-        if (!await ProjectExistsAsync(projectId, ct)) return null;
+        var (population, failure) = await ResolvePopulationAsync<StoryCountsReport>(projectId, filter, ct);
+        if (failure is not null) return failure;
+
         var semantics = await LoadSemanticsAsync(projectId, ct);
 
         // Current status comes straight off Issue.StatusId — this metric never loads change history.
         var rows = await _db.Issues
             .Where(i => i.JiraProjectId == projectId)
+            .Where(population!)
             .Select(i => new
             {
                 Status = _db.Statuses.Where(s => s.Id == i.StatusId).Select(s => s.Name).FirstOrDefault(),
@@ -72,7 +97,10 @@ public sealed class MetricsQueryService : IMetricsQueryService
             .ThenBy(c => c.Status)
             .ToList();
 
-        return new StoryCountsReport(byStatus, rows.Count, rows.Sum(r => r.StoryPoints ?? 0m));
+        // Totals are the FILTERED totals — a reader who sees a filter applied expects the
+        // headline numbers to describe the same population as the bars.
+        return ReportResult<StoryCountsReport>.Ok(
+            new StoryCountsReport(byStatus, rows.Count, rows.Sum(r => r.StoryPoints ?? 0m)));
     }
 
     /// <summary>
@@ -81,12 +109,13 @@ public sealed class MetricsQueryService : IMetricsQueryService
     /// Story counts deliberately does NOT call this: it needs no change history.
     /// </summary>
     private async Task<(List<IssueRow> Issues, Dictionary<string, IssueTimeline> Timelines)>
-        LoadTimelinesAsync(Guid projectId, CancellationToken ct)
+        LoadTimelinesAsync(Guid projectId, Expression<Func<Issue, bool>> population, CancellationToken ct)
     {
         var semantics = await LoadSemanticsAsync(projectId, ct);
 
         var issues = await _db.Issues
             .Where(i => i.JiraProjectId == projectId)
+            .Where(population)
             .Select(i => new IssueRow(
                 i.JiraIssueId,
                 i.JiraKey,
@@ -96,6 +125,10 @@ public sealed class MetricsQueryService : IMetricsQueryService
                 i.JiraCreatedAt))
             .ToListAsync(ct);
 
+        // Change history stays scoped to the PROJECT, not to the filtered issue ids: the fold
+        // below is per-issue, so a wider load cannot change a number, whereas an IN list of
+        // issue ids would grow to the size of the project.
+        //
         // "status" is the field name Jira's changelog uses, and what the derivation stores.
         // ThenBy(JiraHistoryId) is a stable tiebreaker: Jira bulk edits can produce two
         // transitions on the same issue with an identical ChangedAt, and without a deterministic
@@ -128,10 +161,13 @@ public sealed class MetricsQueryService : IMetricsQueryService
         return (issues, timelines);
     }
 
-    public async Task<TimeInProgressReport?> GetTimeInProgressAsync(Guid projectId, CancellationToken ct = default)
+    public async Task<ReportResult<TimeInProgressReport>> GetTimeInProgressAsync(
+        Guid projectId, ReportFilter? filter = null, CancellationToken ct = default)
     {
-        if (!await ProjectExistsAsync(projectId, ct)) return null;
-        var (_, timelines) = await LoadTimelinesAsync(projectId, ct);
+        var (population, failure) = await ResolvePopulationAsync<TimeInProgressReport>(projectId, filter, ct);
+        if (failure is not null) return failure;
+
+        var (_, timelines) = await LoadTimelinesAsync(projectId, population!, ct);
 
         var durations = new List<double>();
         var excluded = 0;
@@ -144,17 +180,23 @@ public sealed class MetricsQueryService : IMetricsQueryService
                 excluded++;
         }
 
-        return new TimeInProgressReport(
+        // AverageDays stays null (never 0) when nothing qualifies — including when it is the
+        // FILTER that excluded every completed issue. "Not enough data" and "instant" are
+        // different answers and a filtered view must not convert one into the other.
+        return ReportResult<TimeInProgressReport>.Ok(new TimeInProgressReport(
             durations.Count == 0 ? null : durations.Average(),
             durations.Count,
-            excluded);
+            excluded));
     }
 
-    public async Task<ThroughputReport?> GetThroughputAsync(
-        Guid projectId, ThroughputBucketSize bucket, DateTime? from, DateTime? to, CancellationToken ct = default)
+    public async Task<ReportResult<ThroughputReport>> GetThroughputAsync(
+        Guid projectId, ThroughputBucketSize bucket, DateTime? from, DateTime? to,
+        ReportFilter? filter = null, CancellationToken ct = default)
     {
-        if (!await ProjectExistsAsync(projectId, ct)) return null;
-        var (_, timelines) = await LoadTimelinesAsync(projectId, ct);
+        var (population, failure) = await ResolvePopulationAsync<ThroughputReport>(projectId, filter, ct);
+        if (failure is not null) return failure;
+
+        var (_, timelines) = await LoadTimelinesAsync(projectId, population!, ct);
 
         // Resolve the window: both ends snap OUTWARD to bucket boundaries; the default is the
         // last 12 buckets ending with the bucket containing "now".
@@ -175,8 +217,8 @@ public sealed class MetricsQueryService : IMetricsQueryService
         for (var cursor = fromStart; cursor <= toStart; cursor = NextBucket(cursor, bucket))
             buckets.Add(new ThroughputBucket(cursor, counts.TryGetValue(cursor, out var c) ? c : 0));
 
-        return new ThroughputReport(
-            bucket.ToString().ToLowerInvariant(), fromStart, toStart, buckets);
+        return ReportResult<ThroughputReport>.Ok(new ThroughputReport(
+            bucket.ToString().ToLowerInvariant(), fromStart, toStart, buckets));
     }
 
     private static DateTime? ToUtc(DateTime? value) => value is null
@@ -221,11 +263,14 @@ public sealed class MetricsQueryService : IMetricsQueryService
         return cursor;
     }
 
-    public async Task<StatusAgingReport?> GetStatusAgingAsync(
-        Guid projectId, int page, int pageSize, CancellationToken ct = default)
+    public async Task<ReportResult<StatusAgingReport>> GetStatusAgingAsync(
+        Guid projectId, int page, int pageSize,
+        ReportFilter? filter = null, CancellationToken ct = default)
     {
-        if (!await ProjectExistsAsync(projectId, ct)) return null;
-        var (issues, timelines) = await LoadTimelinesAsync(projectId, ct);
+        var (population, failure) = await ResolvePopulationAsync<StatusAgingReport>(projectId, filter, ct);
+        if (failure is not null) return failure;
+
+        var (issues, timelines) = await LoadTimelinesAsync(projectId, population!, ct);
         var now = _clock.UtcNow;
 
         // Population: everything not currently Done.
@@ -254,8 +299,8 @@ public sealed class MetricsQueryService : IMetricsQueryService
 
         var items = ordered.Skip((page - 1) * pageSize).Take(pageSize).ToList();
 
-        return new StatusAgingReport(
-            new PagedResult<AgingItem>(items, page, pageSize, ordered.Count), histogram);
+        return ReportResult<StatusAgingReport>.Ok(new StatusAgingReport(
+            new PagedResult<AgingItem>(items, page, pageSize, ordered.Count), histogram));
     }
 
     /// <summary>Half-open day bands, so every age falls in exactly one. All five are always emitted.</summary>
