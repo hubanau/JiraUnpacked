@@ -56,11 +56,44 @@ dotnet ef database update --project src/JiraUnpacked.Infrastructure --startup-pr
 
 ## Deployment configuration
 
-The Jira API-token encryption key (`TokenProtection:Key`, a base64-encoded 32-byte key)
-ships in `appsettings.Development.json` for dev/CI only. **Non-Development environments
-(test, production) MUST inject `TokenProtection__Key` as an environment variable** — the
-app validates it at startup (`ValidateOnStart` in `DependencyInjection.cs`) and fails
-fast if it is missing or not a 32-byte base64 value.
+> `appsettings.Development.json` contains **real, published secrets** — a JWT signing key, the
+> Jira API-token encryption key, and an admin password. They are committed deliberately so a
+> clone runs with no setup. Treat any environment that uses them as public: anyone with this
+> repository can mint access tokens and decrypt every stored Jira API token.
+
+Outside Development the app **refuses to start** with those values, or with email unconfigured
+(`ProductionConfigGate`). It reports every problem at once rather than one restart at a time.
+
+| Setting | Env var | Required outside Development | Notes |
+|---|---|---|---|
+| `ConnectionStrings:Default` | `ConnectionStrings__Default` | yes | Migration/owner role. |
+| `ConnectionStrings:App` | `ConnectionStrings__App` | yes | The **RLS-enforced** role the app runs as. Never point this at the owner — it would bypass isolation layer 2. |
+| `Jwt:SigningKey` | `Jwt__SigningKey` | yes | ≥32 chars, validated at startup. |
+| `TokenProtection:Key` | `TokenProtection__Key` | yes | Base64 32-byte key; encrypts stored Jira API tokens. |
+| `Email:Host` / `Email:FromAddress` | `Email__Host` / `Email__FromAddress` | yes | Without them the log-only development sender is selected — it never sends and writes verification codes to the log. |
+| `Email:Port` / `UseStartTls` / `Username` / `Password` | | no | Default 587 with STARTTLS. |
+| `Security:HstsEnabled` | `Security__HstsEnabled` | no | Default true. Turn off when TLS terminates at a proxy that forwards plain HTTP. |
+| `Security:TrustProxyHeaders` | `Security__TrustProxyHeaders` | no | **Default false.** See below. |
+| `Security:ForwardLimit` | `Security__ForwardLimit` | no | Proxy hops to unwind. Default 1. |
+
+### Running behind a reverse proxy
+
+Set `Security__TrustProxyHeaders=true` **only when every request necessarily arrives through a
+trusted proxy**. It is a two-sided risk:
+
+- Left off behind a proxy, the app sees the proxy's address on every request. The per-IP auth
+  rate limiter collapses into one bucket shared by all users, and `UseHttpsRedirection` sees
+  plain HTTP and redirects forever.
+- Turned on while the app is directly reachable, any client can send its own `X-Forwarded-For`
+  and choose which rate-limit bucket to spend.
+
+Set `Security__ForwardLimit` to the actual number of proxies in front of the app. A larger value
+lets a client's forged entry survive the unwind and become the "client" address.
+
+### Health
+
+`GET /health/live` — the process is up. `GET /health/ready` — the database is reachable
+(**503** when not). Both anonymous, both deliberately terse.
 
 ## Branching & CI
 

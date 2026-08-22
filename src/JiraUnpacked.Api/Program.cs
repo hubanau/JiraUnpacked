@@ -2,6 +2,7 @@ using System.Text;
 using System.Threading.RateLimiting;
 using JiraUnpacked.Api.Tenancy;
 using JiraUnpacked.Infrastructure;
+using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Identity;
 using JiraUnpacked.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -107,6 +108,17 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
+// Refuse to serve outside Development with configuration that is only safe locally. Runs
+// before the seeder so a misconfigured deployment fails immediately rather than after writing
+// an Admin account with a dev-key-signed session.
+JiraUnpacked.Api.Security.ProductionConfigGate.ThrowIfInvalid(
+    app.Environment.IsDevelopment(),
+    builder.Configuration[$"{JwtOptions.SectionName}:SigningKey"],
+    builder.Configuration["TokenProtection:Key"],
+    app.Services.GetRequiredService<
+        Microsoft.Extensions.Options.IOptions<JiraUnpacked.Infrastructure.Messaging.EmailOptions>>()
+        .Value.IsConfigured);
+
 // Seed configured Admin accounts before serving requests (idempotent; FR-A3).
 using (var scope = app.Services.CreateScope())
 {
@@ -121,11 +133,33 @@ if (app.Environment.IsDevelopment())
 
 var securityOptions = app.Services.GetRequiredService<
     Microsoft.Extensions.Options.IOptions<JiraUnpacked.Infrastructure.Security.SecurityOptions>>().Value;
+
+// FIRST in the pipeline, before anything reads the scheme or the caller's address.
+// Behind a TLS-terminating proxy the app otherwise sees the proxy's address on every request,
+// which collapses the per-IP auth rate limiter into one shared bucket, and sees plain HTTP,
+// which makes UseHttpsRedirection below redirect forever. Opt-in because trusting these
+// headers when the app is directly reachable would let any client pick its own rate-limit
+// bucket - see SecurityOptions.TrustProxyHeaders.
+if (JiraUnpacked.Api.Security.ProxyHeaderGate.ShouldTrustProxyHeaders(securityOptions.TrustProxyHeaders))
+{
+    app.UseForwardedHeaders(
+        JiraUnpacked.Api.Security.ProxyHeaderGate.Build(securityOptions.ForwardLimit));
+}
+
 if (JiraUnpacked.Api.Security.HstsGate.ShouldEnableHsts(app.Environment.IsDevelopment(), securityOptions.HstsEnabled))
 {
     app.UseHsts();
 }
 app.UseHttpsRedirection();
+
+// Liveness and readiness, anonymous and deliberately terse: an orchestrator needs a status
+// code, and an unauthenticated caller must not learn anything about the deployment from the
+// body. Mapped before the SPA fallback so it is never answered with index.html.
+app.MapGet("/health/live", () => Results.Ok(new { status = "ok" }));
+app.MapGet("/health/ready", async (AppDbContext db, CancellationToken ct) =>
+    await db.Database.CanConnectAsync(ct)
+        ? Results.Ok(new { status = "ready" })
+        : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 // Serves the built SPA from wwwroot. Before authentication so the bundle and
 // its assets load without a token. No-ops when wwwroot is absent (tests, fresh
 // clones), which is why the integration suite is unaffected.

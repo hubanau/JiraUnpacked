@@ -41,9 +41,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const ok = await refreshOnce();
+      const outcome = await refreshOnce();
       if (cancelled) return;
-      if (!ok) { reset(); return; }
+      // Both non-ok outcomes land anonymous, because without an access token there is
+      // nothing the app can do either way. They differ mid-session, not at boot: see
+      // apiFetch, where 'unavailable' deliberately does NOT end a working session.
+      if (outcome !== 'ok') { reset(); return; }
       try {
         const me = await getMe();
         if (cancelled) return;

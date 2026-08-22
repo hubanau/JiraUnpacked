@@ -54,7 +54,15 @@ public static class DependencyInjection
         services.AddScoped<AdminSeeder>();
         services.AddScoped<IInviteCodeService, InviteCodeService>();
         services.AddSingleton<PasswordPolicy>();
-        services.AddSingleton<IEmailSender, LoggingEmailSender>();
+        services.Configure<EmailOptions>(configuration.GetSection(EmailOptions.SectionName));
+        // SMTP when configured, the log-only development sender otherwise. Which one is in use
+        // is not left to chance outside Development: ProductionConfigGate refuses to start when
+        // the fallback would be selected.
+        var email = configuration.GetSection(EmailOptions.SectionName).Get<EmailOptions>();
+        if (email?.IsConfigured == true)
+            services.AddSingleton<IEmailSender, SmtpEmailSender>();
+        else
+            services.AddSingleton<IEmailSender, LoggingEmailSender>();
         services.AddScoped<IRegistrationService, RegistrationService>();
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
         services.AddScoped<IUserAdminService, UserAdminService>();

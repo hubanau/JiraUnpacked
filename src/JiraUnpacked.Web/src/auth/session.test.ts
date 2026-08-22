@@ -39,7 +39,7 @@ describe('refreshOnce', () => {
   it('stores the rotated access token on success', async () => {
     server.use(http.post('/api/auth/refresh', () => HttpResponse.json(token(2))));
 
-    await expect(refreshOnce()).resolves.toBe(true);
+    await expect(refreshOnce()).resolves.toBe('ok');
 
     expect(getAccessToken()).toBe('access-2');
     // The rotated refresh token arrives as a Set-Cookie the browser swaps in —
@@ -82,7 +82,7 @@ describe('refreshOnce', () => {
 
     const results = await Promise.all([refreshOnce(), refreshOnce(), refreshOnce()]);
 
-    expect(results).toEqual([true, true, true]);
+    expect(results).toEqual(['ok', 'ok', 'ok']);
     // Refresh rotates server-side, so N parallel calls would consume the token N
     // times and all but the first would fail.
     expect(hits).toBe(1);
@@ -98,19 +98,26 @@ describe('refreshOnce', () => {
     expect(hits).toBe(2);
   });
 
-  it('returns false and clears the access token when the refresh is rejected', async () => {
+  it('reports unauthenticated and clears the token when the refresh is REJECTED', async () => {
     server.use(http.post('/api/auth/refresh', () => new HttpResponse(null, { status: 401 })));
 
-    await expect(refreshOnce()).resolves.toBe(false);
+    await expect(refreshOnce()).resolves.toBe('unauthenticated');
 
     expect(getAccessToken()).toBeNull();
   });
 
-  it('resolves false rather than throwing when the refresh call fails outright', async () => {
+  it('reports unavailable — not unauthenticated — when rate limited', async () => {
+    // Boot always refreshes now, so a few quick reloads can spend the shared per-IP auth
+    // limit. A 429 says the endpoint declined to answer, not that the session is over.
+    server.use(http.post('/api/auth/refresh', () => new HttpResponse(null, { status: 429 })));
+
+    await expect(refreshOnce()).resolves.toBe('unavailable');
+  });
+
+  it('reports unavailable when the refresh call fails outright', async () => {
     server.use(http.post('/api/auth/refresh', () => HttpResponse.error()));
 
-    await expect(refreshOnce()).resolves.toBe(false);
-    expect(getAccessToken()).toBeNull();
+    await expect(refreshOnce()).resolves.toBe('unavailable');
   });
 });
 

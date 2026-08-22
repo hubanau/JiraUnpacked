@@ -224,6 +224,48 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
     }
 
     [Fact]
+    public async Task The_unique_index_rejects_a_duplicate_name_at_the_database()
+    {
+        var (client, projectId) = await SeedAsync();
+        var created = await CreateOkAsync(client, projectId,
+            Body("Only one", Condition("status", "Eq", "Done")));
+
+        // Deterministic half of the guarantee: the pre-check in the service is a courtesy, the
+        // unique index is the real guard. Inserted through the privileged connection so no EF
+        // filter or service check is in the path.
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"INSERT INTO ""SavedFilters""(""Id"",""EndUserId"",""JiraProjectId"",""Name"",""DefinitionJson"",""CreatedAt"",""UpdatedAt"")
+                            SELECT @id,""EndUserId"",@p,'Only one','{}'::jsonb,now(),now()
+                            FROM ""SavedFilters"" WHERE ""Id"" = @existing";
+        cmd.Parameters.AddWithValue("id", Guid.NewGuid());
+        cmd.Parameters.AddWithValue("p", projectId);
+        cmd.Parameters.AddWithValue("existing", created.Id);
+
+        var ex = await Assert.ThrowsAsync<PostgresException>(() => cmd.ExecuteNonQueryAsync());
+        Assert.Equal("23505", ex.SqlState);
+    }
+
+    [Fact]
+    public async Task Concurrent_creates_of_the_same_name_yield_one_201_and_conflicts_never_a_500()
+    {
+        var (client, projectId) = await SeedAsync();
+        var body = Body("Contended", Condition("status", "Eq", "Done"));
+
+        // Opportunistic by nature — Task.WhenAll does not guarantee overlap, and if the calls
+        // serialize the service's pre-check answers every loser. That is fine: what this pins
+        // is that NO interleaving produces a 500. Before the 23505 catch, a lost race surfaced
+        // as an unhandled DbUpdateException.
+        var responses = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
+            client.PostAsJsonAsync($"/api/projects/{projectId}/filters", body)));
+
+        Assert.Equal(1, responses.Count(r => r.StatusCode == HttpStatusCode.Created));
+        Assert.Equal(7, responses.Count(r => r.StatusCode == HttpStatusCode.Conflict));
+        Assert.DoesNotContain(responses, r => (int)r.StatusCode >= 500);
+    }
+
+    [Fact]
     public async Task Renaming_a_filter_to_its_own_name_is_not_a_conflict_with_itself()
     {
         var (client, projectId) = await SeedAsync();
