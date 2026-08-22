@@ -1,5 +1,7 @@
 // src/JiraUnpacked.Infrastructure/Reporting/IssueQueryService.cs
+using System.Linq.Expressions;
 using JiraUnpacked.Domain.Abstractions;
+using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Reporting.Filtering;
 using Microsoft.EntityFrameworkCore;
@@ -19,6 +21,24 @@ public sealed class IssueQueryService : IIssueQueryService
         _filter = filter;
     }
 
+    /// <summary>
+    /// The one projection every issue read uses. It was written out three times, and the list
+    /// and the filtered query MUST return the same shape — nothing but repetition was keeping
+    /// them in step, so a field added to one would silently be missing from the other.
+    ///
+    /// Instance-level rather than static because the dictionary lookups are correlated
+    /// subqueries over _db; EF composes the expression into each query the same way as inline.
+    /// </summary>
+    private Expression<Func<Issue, IssueListItem>> ToListItem => i => new IssueListItem(
+        i.JiraIssueId, i.JiraKey, i.Summary,
+        _db.Statuses.Where(s => s.Id == i.StatusId).Select(s => s.Name).FirstOrDefault(),
+        _db.IssueTypes.Where(t => t.Id == i.IssueTypeId).Select(t => t.Name).FirstOrDefault(),
+        _db.Priorities.Where(p => p.Id == i.PriorityId).Select(p => p.Name).FirstOrDefault(),
+        _db.JiraUsers.Where(u => u.Id == i.AssigneeId).Select(u => u.DisplayName).FirstOrDefault(),
+        _db.Sprints.Where(sp => sp.Id == i.SprintId).Select(sp => sp.Name).FirstOrDefault(),
+        _db.Teams.Where(tm => tm.Id == i.TeamId).Select(tm => tm.Name).FirstOrDefault(),
+        i.StoryPoints, i.ParentJiraIssueId, i.JiraCreatedAt, i.JiraUpdatedAt);
+
     public async Task<PagedResult<IssueListItem>?> ListAsync(Guid projectId, int page, int pageSize, CancellationToken ct = default)
     {
         // Tenant-scoped existence check: a cross-tenant/unknown project is filtered out => null => 404.
@@ -33,15 +53,7 @@ public sealed class IssueQueryService : IIssueQueryService
         var items = await q
             .OrderByDescending(i => i.JiraUpdatedAt).ThenBy(i => i.JiraKey)
             .Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(i => new IssueListItem(
-                i.JiraIssueId, i.JiraKey, i.Summary,
-                _db.Statuses.Where(s => s.Id == i.StatusId).Select(s => s.Name).FirstOrDefault(),
-                _db.IssueTypes.Where(t => t.Id == i.IssueTypeId).Select(t => t.Name).FirstOrDefault(),
-                _db.Priorities.Where(p => p.Id == i.PriorityId).Select(p => p.Name).FirstOrDefault(),
-                _db.JiraUsers.Where(u => u.Id == i.AssigneeId).Select(u => u.DisplayName).FirstOrDefault(),
-                _db.Sprints.Where(sp => sp.Id == i.SprintId).Select(sp => sp.Name).FirstOrDefault(),
-                _db.Teams.Where(tm => tm.Id == i.TeamId).Select(tm => tm.Name).FirstOrDefault(),
-                i.StoryPoints, i.ParentJiraIssueId, i.JiraCreatedAt, i.JiraUpdatedAt))
+            .Select(ToListItem)
             .ToListAsync(ct);
 
         return new PagedResult<IssueListItem>(items, page, pageSize, total);
@@ -68,15 +80,7 @@ public sealed class IssueQueryService : IIssueQueryService
         var items = await q
             .OrderByDescending(i => i.JiraUpdatedAt).ThenBy(i => i.JiraKey)
             .Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(i => new IssueListItem(
-                i.JiraIssueId, i.JiraKey, i.Summary,
-                _db.Statuses.Where(s => s.Id == i.StatusId).Select(s => s.Name).FirstOrDefault(),
-                _db.IssueTypes.Where(t => t.Id == i.IssueTypeId).Select(t => t.Name).FirstOrDefault(),
-                _db.Priorities.Where(p2 => p2.Id == i.PriorityId).Select(p2 => p2.Name).FirstOrDefault(),
-                _db.JiraUsers.Where(u => u.Id == i.AssigneeId).Select(u => u.DisplayName).FirstOrDefault(),
-                _db.Sprints.Where(sp => sp.Id == i.SprintId).Select(sp => sp.Name).FirstOrDefault(),
-                _db.Teams.Where(tm => tm.Id == i.TeamId).Select(tm => tm.Name).FirstOrDefault(),
-                i.StoryPoints, i.ParentJiraIssueId, i.JiraCreatedAt, i.JiraUpdatedAt))
+            .Select(ToListItem)
             .ToListAsync(ct);
 
         return new IssueQueryResult(new PagedResult<IssueListItem>(items, page, pageSize, total), null);
@@ -86,15 +90,7 @@ public sealed class IssueQueryService : IIssueQueryService
     {
         var issue = await _db.Issues
             .Where(i => i.JiraProjectId == projectId && i.JiraIssueId == jiraIssueId)
-            .Select(i => new IssueListItem(
-                i.JiraIssueId, i.JiraKey, i.Summary,
-                _db.Statuses.Where(s => s.Id == i.StatusId).Select(s => s.Name).FirstOrDefault(),
-                _db.IssueTypes.Where(t => t.Id == i.IssueTypeId).Select(t => t.Name).FirstOrDefault(),
-                _db.Priorities.Where(p => p.Id == i.PriorityId).Select(p => p.Name).FirstOrDefault(),
-                _db.JiraUsers.Where(u => u.Id == i.AssigneeId).Select(u => u.DisplayName).FirstOrDefault(),
-                _db.Sprints.Where(sp => sp.Id == i.SprintId).Select(sp => sp.Name).FirstOrDefault(),
-                _db.Teams.Where(tm => tm.Id == i.TeamId).Select(tm => tm.Name).FirstOrDefault(),
-                i.StoryPoints, i.ParentJiraIssueId, i.JiraCreatedAt, i.JiraUpdatedAt))
+            .Select(ToListItem)
             .FirstOrDefaultAsync(ct);
         if (issue is null) return null;
 
