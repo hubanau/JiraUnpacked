@@ -9,6 +9,8 @@ using JiraUnpacked.Infrastructure.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
+using PageDto = JiraUnpacked.Tests.Integration.FilterTestData.PageDto;
+
 namespace JiraUnpacked.Tests.Integration;
 
 /// <summary>
@@ -29,96 +31,28 @@ public sealed class IssueFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
     public Task InitializeAsync() => _factory.EnsureDatabaseAsync();
     public Task DisposeAsync() => Task.CompletedTask;
 
-    private sealed record TokenResponseDto(string AccessToken, DateTime ExpiresAtUtc, string RefreshToken);
-    private sealed record ItemDto(string JiraIssueId, string JiraKey, string? Summary, string? Status, string? IssueType,
-        string? Priority, string? Assignee, string? Sprint, string? Team, decimal? StoryPoints, string? ParentJiraIssueId,
-        DateTime JiraCreatedAt, DateTime JiraUpdatedAt);
-    private sealed record PageDto(List<ItemDto> Items, int Page, int PageSize, int TotalCount);
+    // Auth, seeding and request-building live in FilterTestData so the boolean-group tests
+    // exercise the SAME fixture rather than a second copy of it that could drift.
+    private Task<(HttpClient client, Guid tenantId)> AuthedTenantAsync() =>
+        FilterTestData.AuthedTenantAsync(_factory);
 
-    // Creates an Active EndUser, returns (authed client, tenantId=userId). The tenant EndUserId == user.Id.
-    private async Task<(HttpClient client, Guid tenantId)> AuthedTenantAsync()
-    {
-        var unique = Guid.NewGuid().ToString("N");
-        var userId = Guid.NewGuid();
-        using (var scope = _factory.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
-            db.Users.Add(new User { Id = userId, Email = $"u-{unique}@x.com", Username = $"u-{unique}",
-                PasswordHash = hasher.Hash("Correct-Horse-9!"), Role = UserRole.EndUser,
-                Status = UserStatus.Active, CreatedAt = DateTime.UtcNow });
-            await db.SaveChangesAsync();
-        }
-        var c = _factory.CreateClient();
-        var login = await c.PostAsJsonAsync("/api/auth/login",
-            new { emailOrUsername = $"u-{unique}@x.com", password = "Correct-Horse-9!" });
-        var tok = await login.Content.ReadFromJsonAsync<TokenResponseDto>();
-        c.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tok!.AccessToken);
-        return (c, userId);
-    }
-
-    private static async Task Exec(NpgsqlConnection conn, string sql, params (string, object?)[] ps)
-    {
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = sql;
-        foreach (var (n, v) in ps) cmd.Parameters.AddWithValue(n, v ?? DBNull.Value);
-        await cmd.ExecuteNonQueryAsync();
-    }
-
-    private static DateTime D(int day) => new(2024, 1, day, 0, 0, 0, DateTimeKind.Utc);
-
-    // Seeds connection + project + dicts (two statuses, two assignees) + six issues (raw SQL, superuser
-    // conn bypasses RLS), scoped to a fresh JiraProjectId per call. See class doc for the exact fixture.
-    private static async Task<Guid> SeedFilterFixtureAsync(Guid tenant)
-    {
-        var connId = Guid.NewGuid(); var projId = Guid.NewGuid();
-        var inProgressId = Guid.NewGuid(); var doneId = Guid.NewGuid();
-        var aliceId = Guid.NewGuid(); var bobId = Guid.NewGuid();
-        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
-        await conn.OpenAsync();
-
-        await Exec(conn, @"INSERT INTO ""JiraConnections""(""Id"",""EndUserId"",""BaseUrl"",""Email"",""ApiTokenEncrypted"",""CreatedAt"") VALUES (@i,@t,'https://x','e','c',now())", ("i", connId), ("t", tenant));
-        await Exec(conn, @"INSERT INTO ""JiraProjects""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraProjectKey"",""JiraProjectId"",""SyncIntervalMinutes"",""CreatedAt"") VALUES (@i,@t,@c,'ACME','1',60,now())", ("i", projId), ("t", tenant), ("c", connId));
-        await Exec(conn, @"INSERT INTO ""Statuses""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraStatusId"",""Name"",""StatusCategory"") VALUES (@i,@t,@c,'10','In Progress','indeterminate')", ("i", inProgressId), ("t", tenant), ("c", connId));
-        await Exec(conn, @"INSERT INTO ""Statuses""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraStatusId"",""Name"",""StatusCategory"") VALUES (@i,@t,@c,'11','Done','done')", ("i", doneId), ("t", tenant), ("c", connId));
-        await Exec(conn, @"INSERT INTO ""JiraUsers""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraAccountId"",""DisplayName"") VALUES (@i,@t,@c,'u1','Alice')", ("i", aliceId), ("t", tenant), ("c", connId));
-        await Exec(conn, @"INSERT INTO ""JiraUsers""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraAccountId"",""DisplayName"") VALUES (@i,@t,@c,'u2','Bob')", ("i", bobId), ("t", tenant), ("c", connId));
-
-        async Task Issue(string jiraId, string key, string summary, Guid? status, Guid? assignee,
-            decimal? points, string? parent, DateTime createdAt, DateTime updatedAt) =>
-            await Exec(conn, @"INSERT INTO ""Issues""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""JiraKey"",""Summary"",""StatusId"",""AssigneeId"",""StoryPoints"",""ParentJiraIssueId"",""JiraCreatedAt"",""JiraUpdatedAt"",""LastSyncedAt"") VALUES (@i,@t,@p,@ji,@k,@s,@st,@a,@sp,@par,@ca,@ua,now())",
-                ("i", Guid.NewGuid()), ("t", tenant), ("p", projId), ("ji", jiraId), ("k", key), ("s", summary),
-                ("st", status), ("a", assignee), ("sp", points), ("par", parent), ("ca", createdAt), ("ua", updatedAt));
-
-        await Issue("10001", "ACME-1", "Fix login timeout", inProgressId, aliceId, 5m, null, D(1), D(5));
-        await Issue("10002", "ACME-2", "Update onboarding docs", doneId, aliceId, 1m, null, D(1), D(4));
-        await Issue("10003", "ACME-3", "Investigate memory leak", null, null, null, null, D(1), D(3));
-        await Issue("10004", "ACME-4", "Parent epic for children", null, bobId, null, null, D(1), D(2));
-        await Issue("10005", "ACME-5", "Child task one", null, bobId, null, "10004", D(1), D(6));
-        await Issue("10006", "ACME-6", "Child task two", null, bobId, null, "10004", D(1), D(7));
-
-        return projId;
-    }
-
-    // ---- request-building + calling helpers ----
+    private static Task<Guid> SeedFilterFixtureAsync(Guid tenant) =>
+        FilterTestData.SeedFilterFixtureAsync(tenant);
 
     private static object Cond(string field, string op, object? value = null, object? values = null) =>
-        values is not null ? new { field, op, values }
-        : value is not null ? new { field, op, value }
-        : new { field, op };
+        FilterTestData.Cond(field, op, value, values);
 
     private static object Req(List<object> conditions, int page = 1, int pageSize = 50) =>
-        new { conditions, page, pageSize };
+        FilterTestData.Req(conditions, page, pageSize);
 
     private static Task<HttpResponseMessage> PostQueryAsync(HttpClient client, Guid projectId, object request) =>
-        client.PostAsJsonAsync($"/api/projects/{projectId}/issues/query", request);
+        FilterTestData.PostQueryAsync(client, projectId, request);
 
-    private static async Task<PageDto> QueryOkAsync(HttpClient client, Guid projectId, object request)
-    {
-        var resp = await PostQueryAsync(client, projectId, request);
-        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-        return (await resp.Content.ReadFromJsonAsync<PageDto>())!;
-    }
+    private static Task<PageDto> QueryOkAsync(HttpClient client, Guid projectId, object request) =>
+        FilterTestData.QueryOkAsync(client, projectId, request);
+
+    private static Task Exec(NpgsqlConnection conn, string sql, params (string, object?)[] ps) =>
+        FilterTestData.Exec(conn, sql, ps);
 
     // ---- per-operator coverage ----
 

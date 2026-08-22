@@ -168,13 +168,18 @@ public sealed class AdminUserListTests : IClassFixture<JiraUnpackedApiFactory>, 
         var (newestId, _) = await SeedUserAsync(UserRole.EndUser, farFuture.AddDays(2));
         var (olderId, _) = await SeedUserAsync(UserRole.EndUser, farFuture.AddDays(1));
         // Same CreatedAt on both — only the Id tie-break can order these two.
-        // Postgres compares uuid byte-for-byte in the order the canonical
-        // string is written, so this literal pair is ordered the same way
-        // as the string comparison "...0001" < "...0002" suggests.
+        // Postgres compares uuid byte-for-byte in the order the canonical string
+        // is written, so a shared random stem plus a differing final byte gives a
+        // pair whose relative order is known without pinning absolute values.
+        // Fixed literals would collide with themselves on the second run against
+        // this shared, never-truncated database (duplicate PK, not a failed
+        // assertion) — so the ids must be fresh every run, and only their
+        // ORDERING may be fixed.
+        var stem = Guid.NewGuid().ToString("N")[..30];
         var (tieLowId, _) = await SeedUserAsync(
-            UserRole.EndUser, farFuture, Guid.Parse("00000000-0000-0000-0000-000000000001"));
+            UserRole.EndUser, farFuture, Guid.ParseExact(stem + "01", "N"));
         var (tieHighId, _) = await SeedUserAsync(
-            UserRole.EndUser, farFuture, Guid.Parse("00000000-0000-0000-0000-000000000002"));
+            UserRole.EndUser, farFuture, Guid.ParseExact(stem + "02", "N"));
 
         var response = await admin.GetAsync("/api/admin/users?page=1&pageSize=100");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

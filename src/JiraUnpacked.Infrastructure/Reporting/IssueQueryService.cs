@@ -56,6 +56,11 @@ public sealed class IssueQueryService : IIssueQueryService
 
         var conditions = request.Conditions ?? new List<FilterCondition>();
 
+        // Both populated is an error, not a merge: silently AND-ing them would make the request
+        // mean something the client did not write.
+        if (conditions.Count > 0 && request.Filter is not null)
+            return new IssueQueryResult(null, "Send either 'conditions' or 'filter', not both.");
+
         // Tenant-scoped dict-name resolver: name(s) -> surrogate Ids for the right dictionary.
         DictNameResolver resolve = async (field, names, token) =>
         {
@@ -72,7 +77,9 @@ public sealed class IssueQueryService : IIssueQueryService
             return ids;
         };
 
-        var build = await _filter.BuildAsync(conditions, resolve, ct);
+        var build = request.Filter is { } group
+            ? await _filter.BuildAsync(group, resolve, ct)
+            : await _filter.BuildAsync(conditions, resolve, ct);
         if (build.Error is not null) return new IssueQueryResult(null, build.Error);
 
         var page = request.Page < 1 ? 1 : request.Page;
