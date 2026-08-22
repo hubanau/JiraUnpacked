@@ -607,6 +607,43 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.ToTable("RefreshTokens", (string)null);
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.SavedFilter", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DefinitionJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<Guid>("EndUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("JiraProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraProjectId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("SavedFilters", (string)null);
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.Sprint", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1079,6 +1116,21 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.HasOne("JiraUnpacked.Domain.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.SavedFilter", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("EndUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("JiraUnpacked.Domain.Entities.JiraProject", null)
+                        .WithMany()
+                        .HasForeignKey("JiraProjectId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

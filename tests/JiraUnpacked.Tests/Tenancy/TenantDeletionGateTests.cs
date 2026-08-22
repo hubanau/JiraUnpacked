@@ -57,7 +57,9 @@ public sealed class TenantDeletionGateTests
         var count = db.Model.GetEntityTypes()
             .Count(t => typeof(ITenantOwned).IsAssignableFrom(t.ClrType));
 
-        Assert.Equal(16, count);
+        // Bump this ONLY together with a conscious decision that the new tenant-owned table
+        // has both isolation layers and an FR-B2 gate case. 17th: SavedFilter.
+        Assert.Equal(17, count);
     }
 
     [Fact]
