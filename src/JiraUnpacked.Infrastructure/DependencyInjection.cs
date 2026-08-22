@@ -85,6 +85,7 @@ public static class DependencyInjection
         services.AddScoped<IGapCheck, OpenEpicAllChildrenDoneCheck>();
         services.AddScoped<IGapCheck, DoneEpicOpenChildrenCheck>();
         services.AddScoped<IGapCheckService, GapCheckRunner>();
+        services.AddScoped<ISavedFilterService, SavedFilterService>();
 
         services.AddOptions<TokenProtectionOptions>()
             .Configure(o =>

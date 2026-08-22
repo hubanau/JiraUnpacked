@@ -287,6 +287,38 @@ public sealed class TenantIsolationGateTests : IClassFixture<JiraUnpackedApiFact
         return (tenant, rowId);
     }
 
+    [Fact]
+    public async Task Tenant_cannot_read_another_tenants_saved_filters_via_rls()
+    {
+        var (tenantA, rowA) = await SeedSavedFilterAsync();
+        var (tenantB, rowB) = await SeedSavedFilterAsync();
+
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestAppConnectionString);
+        await conn.OpenAsync();
+        await SetTenantAsync(conn, tenantB);
+
+        Assert.Equal(0L, await CountByIdAsync(conn, "SavedFilters", rowA));   // A hidden from B
+        Assert.Equal(1L, await CountByIdAsync(conn, "SavedFilters", rowB));   // B sees its own
+    }
+
+    private async Task<(Guid tenant, Guid row)> SeedSavedFilterAsync()
+    {
+        var tenant = Guid.NewGuid();
+        var connId = Guid.NewGuid();
+        var projId = Guid.NewGuid();
+        var rowId = Guid.NewGuid();
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
+        await conn.OpenAsync();
+        await SeedTenantUserAsync(conn, tenant);
+        await ExecAsync(conn, @"INSERT INTO ""JiraConnections""(""Id"",""EndUserId"",""BaseUrl"",""Email"",""ApiTokenEncrypted"",""CreatedAt"") VALUES (@id,@t,'https://x','e','c',now())",
+            ("id", connId), ("t", tenant));
+        await ExecAsync(conn, @"INSERT INTO ""JiraProjects""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraProjectKey"",""JiraProjectId"",""SyncIntervalMinutes"",""CreatedAt"") VALUES (@id,@t,@c,'ACME','1',60,now())",
+            ("id", projId), ("t", tenant), ("c", connId));
+        await ExecAsync(conn, @"INSERT INTO ""SavedFilters""(""Id"",""EndUserId"",""JiraProjectId"",""Name"",""DefinitionJson"",""CreatedAt"",""UpdatedAt"") VALUES (@id,@t,@p,@n,'{}'::jsonb,now(),now())",
+            ("id", rowId), ("t", tenant), ("p", projId), ("n", $"filter-{rowId:N}"));
+        return (tenant, rowId);
+    }
+
     private static async Task ExecAsync(NpgsqlConnection conn, string sql, params (string, object)[] ps)
     {
         await using var cmd = conn.CreateCommand();

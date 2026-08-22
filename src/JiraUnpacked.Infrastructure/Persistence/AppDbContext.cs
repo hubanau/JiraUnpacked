@@ -36,6 +36,7 @@ public class AppDbContext : DbContext
     public DbSet<SyncRun> SyncRuns => Set<SyncRun>();
     public DbSet<RawChangelog> RawChangelogs => Set<RawChangelog>();
     public DbSet<DeletedAccount> DeletedAccounts => Set<DeletedAccount>();
+    public DbSet<SavedFilter> SavedFilters => Set<SavedFilter>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -59,11 +60,13 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<IssueChangeHistory>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
         modelBuilder.Entity<SyncRun>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
         modelBuilder.Entity<RawChangelog>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
+        modelBuilder.Entity<SavedFilter>().HasQueryFilter(x => x.EndUserId == _currentTenantId);
 
         // Layer 3 (erasure): every tenant-owned row cascades from its owning User, so account
         // deletion is complete by construction. Applied centrally on purpose — a 17th
         // tenant-owned entity inherits this automatically instead of relying on memory.
         // This complements the Layer 1 filters above; it does not replace them.
+        // SavedFilter (the 17th) is the case that proved it: it needed no line here.
         foreach (var entity in modelBuilder.Model.GetEntityTypes()
                      .Where(t => typeof(ITenantOwned).IsAssignableFrom(t.ClrType)))
         {
