@@ -52,6 +52,7 @@ public static class DependencyInjection
         services.AddSingleton<ITokenService, JwtTokenService>();
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<AdminSeeder>();
+        services.AddScoped<TokenEnvelopeUpgrader>();
         services.AddScoped<IInviteCodeService, InviteCodeService>();
         services.AddSingleton<PasswordPolicy>();
         services.Configure<EmailOptions>(configuration.GetSection(EmailOptions.SectionName));
