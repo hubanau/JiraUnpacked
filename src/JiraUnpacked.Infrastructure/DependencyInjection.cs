@@ -38,6 +38,16 @@ public static class DependencyInjection
                 "Connection string 'App' (the RLS-enforced role) is not configured.");
         }
 
+        // Read-only + BYPASSRLS, for the background readers. Required rather than defaulted to
+        // 'Default': a silent fallback to the owner would make this improvement optional, and
+        // the failure it prevents is invisible.
+        var readerConnectionString = configuration.GetConnectionString("Reader");
+        if (string.IsNullOrWhiteSpace(readerConnectionString))
+        {
+            throw new InvalidOperationException(
+                "Connection string 'Reader' (the read-only cross-tenant role) is not configured.");
+        }
+
         services.AddSingleton<AmbientCurrentTenant>();
         services.AddSingleton<ICurrentTenant>(sp => sp.GetRequiredService<AmbientCurrentTenant>());
         services.AddSingleton<ITenantScope>(sp => sp.GetRequiredService<AmbientCurrentTenant>());

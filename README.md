@@ -68,7 +68,7 @@ that seeds fixed ids would only pass once — seed fresh ids and pin only their 
 
 ## Local development database
 
-Production uses AWS RDS PostgreSQL; locally we run Postgres in Docker.
+Postgres runs in Docker — the same container the deployed stack uses.
 
 ```bash
 docker compose up -d          # start Postgres 16 (named volume persists data)
@@ -103,12 +103,14 @@ Outside Development the app **refuses to start** with those values, or with emai
 |---|---|---|---|
 | `ConnectionStrings:Default` | `ConnectionStrings__Default` | yes | Migration/owner role. |
 | `ConnectionStrings:App` | `ConnectionStrings__App` | yes | The **RLS-enforced** role the app runs as. Never point this at the owner — it would bypass isolation layer 2. |
+| `ConnectionStrings:Reader` | `ConnectionStrings__Reader` | yes | Read-only, `BYPASSRLS`. Used only by the background readers (due-project discovery, retention, the stuck-run reaper, the token upgrader). Startup refuses if this equals `Default`. |
 | `Jwt:SigningKey` | `Jwt__SigningKey` | yes | ≥32 chars, validated at startup. |
 | `TokenProtection:Key` | `TokenProtection__Key` | yes | Base64 32-byte key; encrypts stored Jira API tokens. |
 | `Email:Host` / `Email:FromAddress` | `Email__Host` / `Email__FromAddress` | yes | Without them the log-only development sender is selected — it never sends and writes verification codes to the log. |
 | `Email:Port` / `UseStartTls` / `Username` / `Password` | | no | Default 587 with STARTTLS. |
 | `Security:HstsEnabled` | `Security__HstsEnabled` | no | Default true. Turn off when TLS terminates at a proxy that forwards plain HTTP. |
 | `Security:TrustProxyHeaders` | `Security__TrustProxyHeaders` | no | **Default false.** See below. |
+| `Security:SecureCookiesEnabled` | `Security__SecureCookiesEnabled` | no | Default true. Off only for plain HTTP that is not on a network — see the deployment section. |
 | `Security:ForwardLimit` | `Security__ForwardLimit` | no | Proxy hops to unwind. Default 1. |
 
 ### Running behind a reverse proxy
@@ -164,19 +166,57 @@ and it is done. `localStorage` now holds only `ju.username` and `ju.theme`, neit
 - `main` — release branch. `develop` is promoted with a **merge commit**, never a squash, so
   the two stay comparable.
 
-**There is no deployment pipeline yet.** `.github/workflows/ci.yml` builds and tests on pull
-requests; nothing deploys, and nothing applies migrations to any environment. Tracked by
-[#80](https://github.com/hubanau/JiraUnpacked/issues/80), which is blocked on the EC2-direct vs
-Docker/ECR decision (REQUIREMENTS.md line 223).
+### Deployment — local Docker
 
-When that lands, three things are easy to get wrong and worth naming here:
+Everything runs on your machine; nothing reaches a cloud.
 
-- The SPA must be built into the API's `wwwroot` **before** `dotnet publish`. `UseStaticFiles`
-  no-ops on a missing directory, so skipping it yields a working API with no UI and no error.
-- Migrations need a role that can manage row-level security policies and create extensions —
-  two migrations set up RLS, and one runs `CREATE EXTENSION pg_trgm`.
-- The app refuses to start without the configuration in the table above, so a first deploy
-  fails loudly rather than quietly running on the keys committed to this repository.
+```bash
+cp .env.example .env     # then fill in the two keys and an admin password
+docker compose up -d --build
+```
+
+| | |
+|---|---|
+| App + SPA | http://localhost:8080 |
+| Mailbox (verification codes) | http://localhost:8025 |
+| Postgres | localhost:5432 |
+
+Four services: `postgres`, a one-shot `migrate`, the `api`, and `mailpit`. The api waits on
+`migrate` **completing successfully**, so a failed migration stops the stack rather than
+starting the app against a half-built schema. Its health check hits `/health/ready`, which
+returns 503 while the database is unreachable — "healthy" therefore means genuinely serving.
+
+**Getting a first user in.** Registration needs an invite code, and only an Admin can mint one.
+Compose seeds the admin from `.env`, so: sign in as that admin, create an invite code, register
+with it, then collect the verification code from the mailbox at :8025. Codes are credentials —
+Mailpit exists so they never have to be read out of a log.
+
+**Two settings are off because this is plain HTTP**, and both must go back on behind TLS:
+
+- `Security__HstsEnabled=false` — HSTS would pin the browser to `https` for a host that does
+  not serve it.
+- `Security__SecureCookiesEnabled=false` — browsers disagree about `Secure` cookies on
+  `http://localhost`, so leaving it on makes sign-in work in Chrome and fail in Safari. Over a
+  real network, leaving it off puts the refresh token on the wire in clear text.
+
+**Secrets live in `.env`, which is gitignored.** The app refuses to start without a private
+`Jwt__SigningKey` and `TokenProtection__Key`, and refuses the values committed in
+`appsettings.Development.json` — a dev key still mints valid tokens and still decrypts stored
+Jira tokens, so the failure it prevents is invisible.
+
+**The image is built and exercised in CI on every PR.** That is not incidental: the SPA is
+built into `wwwroot` *before* `dotnet publish`, and `UseStaticFiles` no-ops on a missing
+directory, so the wrong order produces a working API with no UI and no error. The build asserts
+`index.html` exists and CI runs that assertion.
+
+**Backups are yours to arrange.** Postgres data lives in the `jiraunpacked-pgdata` volume:
+
+```bash
+docker compose exec postgres pg_dump -U jiraunpacked jiraunpacked > backup.sql
+```
+
+**Upgrading** is `git pull && docker compose up -d --build`. Migrations run automatically, as
+the owner role, before the new app starts.
 
 ## Project board
 

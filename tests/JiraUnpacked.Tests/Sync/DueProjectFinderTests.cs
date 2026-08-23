@@ -100,7 +100,12 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
     private static IConfiguration _config() =>
         new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
-            { ["ConnectionStrings:Default"] = JiraUnpackedApiFactory.TestConnectionString }).Build();
+            {
+                // The finder reads through the reader role, so the test must too — using the
+                // owner here would pass while proving nothing about the role the app uses.
+                ["ConnectionStrings:Default"] = JiraUnpackedApiFactory.TestConnectionString,
+                ["ConnectionStrings:Reader"] = JiraUnpackedApiFactory.TestReaderConnectionString,
+            }).Build();
 
     [Fact]
     public async Task Project_with_no_successful_run_is_due()

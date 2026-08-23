@@ -16,14 +16,14 @@ delivery metrics.
 |---|---|
 | Backend | ASP.NET Core (Web API) |
 | ORM / migrations | EF Core |
-| Database | AWS RDS — **PostgreSQL** (preferred; enables Row-Level Security) or SQL Server |
+| Database | **PostgreSQL** in Docker (Row-Level Security is load-bearing, so Postgres is not optional) |
 | Background sync | Quartz.NET or Hangfire (in-process scheduler) |
 | Tests | xUnit (unit + integration) |
 | Source / tickets / CI-CD | GitHub (repo + Issues + Actions) |
 | Dev tooling | Visual Studio + Claude Code |
 | Environments | **test** + **production** (no separate staging for v1) |
-| Secrets | AWS Secrets Manager / Parameter Store, per-environment paths |
-| Token encryption | Envelope encryption; per-token data key wrapped by a master key. **Currently a local master key — KMS wrapping is [#79](https://github.com/hubanau/JiraUnpacked/issues/79).** |
+| Secrets | Environment variables, supplied from a gitignored `.env` file |
+| Token encryption | Envelope encryption; per-token data key wrapped by a master key held in configuration. |
 
 ---
 
@@ -142,12 +142,12 @@ Per project, the End User maps which field means team / assignee / sprint / stor
 
 **Security**
 - Tenant isolation is the highest-priority risk (FR-B2).
-- Jira tokens envelope-encrypted at rest; never logged or returned in any API response.
-  **Gap, tracked as [#79](https://github.com/hubanau/JiraUnpacked/issues/79):** the master key
-  is read from configuration, so it lives in the application process. One leaked configuration
-  value still decrypts every token, and there is no audit trail of decrypts. Those two
-  properties need an external KMS and cannot be obtained locally; the stored format is
-  versioned (`v1:`) so adding KMS is a new version tag rather than a second migration.
+- Jira tokens envelope-encrypted at rest (per-token data key, AES-256-GCM, wrapped by a master
+  key from configuration); never logged or returned in any API response. The master key lives in
+  the application process, so one leaked configuration value decrypts every stored token — the
+  accepted trade for a self-hosted deployment with no external key service. The stored format is
+  versioned (`v1:`), so a hardware- or service-backed master key later is a new version tag
+  rather than a migration.
 - Passwords Argon2/bcrypt-hashed.
 - Rate-limiting on login and verification-code endpoints.
 - TLS everywhere.
@@ -169,10 +169,10 @@ Per project, the End User maps which field means team / assignee / sprint / stor
 - Per-project sync status: last run, next run, error state, row counts.
 
 **Cost / footprint**
-- Single small RDS; in-process scheduler; consistent with the minimal-stack goal.
+- Single Postgres container; in-process scheduler; consistent with the minimal-stack goal.
 
 **Environment separation**
-- `ASPNETCORE_ENVIRONMENT` drives config overlays; separate RDS database per environment; per-environment secret paths; CI deploys test on merge to `develop`, prod on merge to `main` behind manual approval (GitHub Environments scope prod secrets away from the test job).
+- `ASPNETCORE_ENVIRONMENT` drives config overlays. The deployment is a local Docker Compose stack: Postgres, a one-shot migration container, the API, and a mail catcher. Secrets come from a gitignored `.env`; the app refuses to start without private keys. CI builds and exercises the image on every PR.
 
 ---
 
@@ -217,7 +217,7 @@ Tenant-scoped tables carry `EndUserId`; data tables also carry `JiraProjectId`.
 4. **Connection & semantic layer** — connections, projects, queries, field/status mapping.
 5. **Sync engine** — scheduler, incremental pull, raw landing, normalization, changelog, hierarchy.
 6. **Reporting** — view data, predefined metrics, curated gap-checks.
-7. **Hardening** — KMS, GDPR delete/retention, indexing, per-project observability.
+7. **Hardening** — token encryption, GDPR delete/retention, indexing, per-project observability, local Docker deployment.
 8. *(Later)* generic filter builder; webhooks if real-time becomes a need.
 
 ---
@@ -225,6 +225,5 @@ Tenant-scoped tables carry `EndUserId`; data tables also carry `JiraProjectId`.
 ## 7. Open items to revisit
 
 - PostgreSQL vs SQL Server final call (PostgreSQL preferred for RLS).
-- EC2-direct vs Docker/ECR deployment.
 - Retention window length for ingested Jira data.
 - Scale ceiling (issues per tenant) — informs indexing and whether the in-process scheduler stays sufficient.

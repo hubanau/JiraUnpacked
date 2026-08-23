@@ -10,8 +10,12 @@ public sealed class PrivilegedDbContextFactory : IPrivilegedDbContextFactory
 
     public PrivilegedDbContextFactory(IConfiguration configuration)
     {
-        _connectionString = configuration.GetConnectionString("Default")
-            ?? throw new InvalidOperationException("Connection string 'Default' is not configured.");
+        // 'Reader': read-only and BYPASSRLS. Deliberately NOT 'Default' — that is the owner,
+        // and using it here put DDL rights in the running container for reads that never
+        // needed them.
+        _connectionString = configuration.GetConnectionString("Reader")
+            ?? throw new InvalidOperationException(
+                "Connection string 'Reader' (the read-only cross-tenant role) is not configured.");
     }
 
     public AppDbContext Create()
