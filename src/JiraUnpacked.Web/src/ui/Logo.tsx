@@ -7,44 +7,52 @@ interface LogoProps {
 }
 
 /**
- * The app mark: three stacked plates with the top one lifted clear — "unpacked".
+ * Brand colours, deliberately fixed rather than themed.
+ *
+ * A badge does not invert. If the tile followed --ju-primary it would be one
+ * colour in light mode and another in dark, which makes it read as two logos —
+ * and the favicon, which has no theme at all, could match neither. One artwork
+ * everywhere is the point of a solid tile.
+ */
+// Indigo-500 rather than the light theme's primary (#4f46e5). Because the tile
+// is fixed it has to clear 3:1 against BOTH surfaces, and #4f46e5 manages only
+// 2.77:1 on the dark one — the badge edge dissolves into the page. This sits
+// between the light and dark primaries and clears both (4.47:1 and 3.90:1).
+const TILE = '#6366f1';
+const KNOCKOUT = '#ffffff';
+
+/**
+ * The app mark: a solid tile with three bars knocked out, the top one shifted
+ * clear of the other two — "unpacked".
  *
  * Everything about the mark lives in this one file, so changing it is a single
- * edit rather than a hunt. Two properties are load-bearing and worth keeping if
- * it is ever redrawn:
+ * edit rather than a hunt. Two properties are worth keeping if it is redrawn:
  *
- * - It uses `currentColor`, so it inherits the surrounding text colour and works
- *   in both themes without a second asset.
- * - Stroke width scales with size. A mark drawn for 96px goes muddy at 20px in a
- *   sidebar, which is exactly where a logo has to stay legible.
+ * - The tile gives a constant silhouette. Whatever happens to the bars at small
+ *   sizes, the badge stays recognisable — which is why this survives the 18px
+ *   sidebar where a dot matrix or a fine outline would not.
+ * - It is fixed-colour, so the same artwork serves the UI and the favicon.
  */
 export function Logo({ size = 24, withWordmark = false, className = '' }: LogoProps) {
-  // Thicker relative stroke as the mark shrinks; below ~28px a hairline disappears.
-  const stroke = size <= 28 ? 2.4 : size <= 56 ? 2 : 1.8;
-
   const mark = (
     <svg
       viewBox="0 0 24 24"
       width={size}
       height={size}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={stroke}
-      strokeLinecap="round"
-      strokeLinejoin="round"
       aria-hidden="true"
       focusable="false"
-      style={{ flexShrink: 0 }}
+      style={{ flexShrink: 0, display: 'block' }}
     >
-      <rect x="3" y="17" width="18" height="4" rx="1.2" />
-      <rect x="3" y="11" width="18" height="4" rx="1.2" />
-      <rect x="5" y="2" width="18" height="4" rx="1.2" />
+      <rect x="1" y="1" width="22" height="22" rx="6.5" fill={TILE} />
+      <rect x="7" y="5" width="14" height="3" rx="1.5" fill={KNOCKOUT} />
+      <rect x="5" y="10.5" width="14" height="3" rx="1.5" fill={KNOCKOUT} />
+      <rect x="5" y="16" width="14" height="3" rx="1.5" fill={KNOCKOUT} />
     </svg>
   );
 
   if (!withWordmark) {
     return (
-      <span className={`inline-flex text-[var(--ju-primary)] ${className}`} role="img" aria-label="Jira Unpacked">
+      <span className={`inline-flex ${className}`} role="img" aria-label="Jira Unpacked">
         {mark}
       </span>
     );
@@ -52,7 +60,7 @@ export function Logo({ size = 24, withWordmark = false, className = '' }: LogoPr
 
   return (
     <span className={`inline-flex items-center gap-2.5 ${className}`} role="img" aria-label="Jira Unpacked">
-      <span className="inline-flex text-[var(--ju-primary)]">{mark}</span>
+      {mark}
       <span
         className="font-medium tracking-tight text-[var(--ju-text)]"
         style={{ fontSize: Math.max(13, Math.round(size * 0.58)) }}
