@@ -1,0 +1,15 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/.vs/
+**/.vscode/
+**/.idea/
+.git/
+.github/
+.claude/
+.superpowers/
+docs/
+tests/**/TestResults/
+# Never ship a developer's local bundle: the web stage builds it from source,
+# and copying a stale one in would mask a broken build.
+src/JiraUnpacked.Api/wwwroot/

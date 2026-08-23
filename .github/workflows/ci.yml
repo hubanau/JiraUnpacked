@@ -52,6 +52,26 @@ jobs:
       - name: Test
         run: dotnet test JiraUnpacked.sln --configuration Release --no-build --verbosity normal
 
+  image:
+    name: Container Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Builds the deployable image on every PR. This is not busywork: the
+      # Dockerfile builds the SPA into wwwroot BEFORE dotnet publish, and
+      # UseStaticFiles no-ops on a missing directory — so getting that ordering
+      # wrong produces an image that serves a working API with no UI and no
+      # error. The build carries a guard for it; this job is what runs the guard.
+      - name: Build image
+        run: docker build -t jiraunpacked:ci .
+
+      - name: The SPA and the migration bundle are both in the image
+        run: |
+          docker run --rm --entrypoint sh jiraunpacked:ci -c             'test -f wwwroot/index.html && test -x migrate'
+
   web:
     name: Web Build & Test
     runs-on: ubuntu-latest
