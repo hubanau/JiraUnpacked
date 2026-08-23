@@ -143,6 +143,21 @@ public sealed class CookieAuthTests : IClassFixture<JiraUnpackedApiFactory>, IAs
     }
 
     [Fact]
+    public void Secure_can_be_turned_off_for_a_plain_http_deployment_but_only_deliberately()
+    {
+        // The local Docker stack serves http://localhost. Browsers disagree about Secure
+        // cookies there — Chrome allows them, Safari historically did not — so leaving Secure
+        // on makes sign-in work in one browser and fail in another. Opting out has to be an
+        // explicit setting, never a default, because over a real network it puts the refresh
+        // token on the wire in clear text.
+        Assert.False(RefreshTokenCookie.ShouldRequireSecure(
+            isDevelopment: false, secureCookiesEnabled: false));
+
+        // Omitting the flag must keep the safe answer.
+        Assert.True(RefreshTokenCookie.ShouldRequireSecure(isDevelopment: false));
+    }
+
+    [Fact]
     public void Secure_is_required_everywhere_except_development()
     {
         // The suite and local development both run over plain HTTP, so Secure cannot be

@@ -32,4 +32,17 @@ public sealed class SecurityOptions
     /// client's forged entry survive the unwind and become the "client" address.
     /// </summary>
     public int ForwardLimit { get; set; } = 1;
+
+    /// <summary>
+    /// Mark the refresh cookie <c>Secure</c>. Default on; turn it off ONLY for a deployment
+    /// reached over plain HTTP that is not on a network — a local Docker stack on
+    /// http://localhost being the case this exists for.
+    ///
+    /// Chrome and Firefox treat localhost as a trustworthy origin and will store a Secure
+    /// cookie over http there; Safari historically would not, so leaving this on makes sign-in
+    /// silently fail in some browsers and work in others. Over a real network, turning it off
+    /// puts the refresh token on the wire in clear text — which is why the default is on and
+    /// this has to be a deliberate choice.
+    /// </summary>
+    public bool SecureCookiesEnabled { get; set; } = true;
 }

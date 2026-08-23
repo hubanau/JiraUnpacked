@@ -16,11 +16,14 @@ public sealed class AuthController : ControllerBase
     private readonly IEmailVerificationService _verification;
     private readonly IAccountDeletionService _deletion;
     private readonly IWebHostEnvironment _environment;
+    private readonly bool _secureCookies;
 
     public AuthController(
         IAuthService auth, IRegistrationService registration, IEmailVerificationService verification,
-        IAccountDeletionService deletion, IWebHostEnvironment environment)
+        IAccountDeletionService deletion, IWebHostEnvironment environment,
+        Microsoft.Extensions.Options.IOptions<JiraUnpacked.Infrastructure.Security.SecurityOptions> security)
     {
+        _secureCookies = security.Value.SecureCookiesEnabled;
         _auth = auth;
         _registration = registration;
         _verification = verification;
@@ -39,7 +42,7 @@ public sealed class AuthController : ControllerBase
             RefreshTokenCookie.Name,
             result.RefreshToken!,
             RefreshTokenCookie.Options(
-                _environment.IsDevelopment(), result.RefreshTokenExpiresAtUtc!.Value));
+                _environment.IsDevelopment(), result.RefreshTokenExpiresAtUtc!.Value, _secureCookies));
 
         return Ok(new TokenResponse(result.AccessToken!, result.AccessTokenExpiresAtUtc!.Value));
     }
@@ -143,7 +146,8 @@ public sealed class AuthController : ControllerBase
             // Clear the cookie too: whatever the browser is holding is not usable, and leaving
             // it there means every later request re-presents a token that can only fail.
             Response.Cookies.Delete(
-                RefreshTokenCookie.Name, RefreshTokenCookie.DeleteOptions(_environment.IsDevelopment()));
+                RefreshTokenCookie.Name,
+                RefreshTokenCookie.DeleteOptions(_environment.IsDevelopment(), _secureCookies));
             return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Invalid or expired refresh token.");
         }
 
@@ -163,7 +167,8 @@ public sealed class AuthController : ControllerBase
         // Always clear, even when no cookie was presented: 204 must mean "you are logged out",
         // never "there was nothing to do so your cookie is still there".
         Response.Cookies.Delete(
-            RefreshTokenCookie.Name, RefreshTokenCookie.DeleteOptions(_environment.IsDevelopment()));
+            RefreshTokenCookie.Name,
+                RefreshTokenCookie.DeleteOptions(_environment.IsDevelopment(), _secureCookies));
         return NoContent();
     }
 
