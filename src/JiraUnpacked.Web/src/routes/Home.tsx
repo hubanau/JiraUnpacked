@@ -68,7 +68,7 @@ export default function Home() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-lg font-semibold text-[var(--ju-text)]">Projects</h1>
+      <h1 className="text-xl font-medium tracking-tight text-[var(--ju-text)]">Projects</h1>
       <Card>
         <Table>
           <THead>

@@ -33,7 +33,7 @@ export default function ConnectionsList() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-[var(--ju-text)]">Connections</h1>
+        <h1 className="text-xl font-medium tracking-tight text-[var(--ju-text)]">Connections</h1>
         <Link to="/connections/new">Add connection</Link>
       </div>
       <ul className="flex flex-col gap-3">

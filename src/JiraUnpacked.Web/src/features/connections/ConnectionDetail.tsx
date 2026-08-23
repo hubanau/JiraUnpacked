@@ -40,7 +40,7 @@ export default function ConnectionDetail() {
   return (
     <div className="flex flex-col gap-6">
       <header>
-        <h1 className="text-lg font-semibold text-[var(--ju-text)]">{connection.baseUrl}</h1>
+        <h1 className="text-xl font-medium tracking-tight text-[var(--ju-text)]">{connection.baseUrl}</h1>
         <p className="text-sm text-[var(--ju-muted)]">{connection.email}</p>
       </header>
 

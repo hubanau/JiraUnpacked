@@ -1,12 +1,18 @@
 import type { HTMLAttributes } from 'react';
 
-type Tone = 'neutral' | 'success' | 'warning' | 'danger';
+type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger';
 
+/**
+ * Soft tint plus the role colour for text, rather than a 10%-opacity wash. The
+ * tint tokens are real colours in both themes, so contrast holds in dark mode —
+ * an opacity wash over a dark surface goes muddy.
+ */
 const TONES: Record<Tone, string> = {
-  neutral: 'bg-[var(--ju-surface)] text-[var(--ju-muted)] border border-[var(--ju-border)]',
-  success: 'bg-[var(--ju-success)]/10 text-[var(--ju-success)] border border-[var(--ju-success)]/30',
-  warning: 'bg-[var(--ju-warning)]/10 text-[var(--ju-warning)] border border-[var(--ju-warning)]/30',
-  danger: 'bg-[var(--ju-danger)]/10 text-[var(--ju-danger)] border border-[var(--ju-danger)]/30',
+  neutral: 'bg-[var(--ju-surface-2)] text-[var(--ju-text-secondary)] border-[var(--ju-border)]',
+  accent: 'bg-[var(--ju-primary-soft)] text-[var(--ju-primary)] border-[var(--ju-primary)]/25',
+  success: 'bg-[var(--ju-success-soft)] text-[var(--ju-success)] border-[var(--ju-success)]/25',
+  warning: 'bg-[var(--ju-warning-soft)] text-[var(--ju-warning)] border-[var(--ju-warning)]/25',
+  danger: 'bg-[var(--ju-danger-soft)] text-[var(--ju-danger)] border-[var(--ju-danger)]/25',
 };
 
 interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
@@ -17,7 +23,7 @@ export function Badge({ tone = 'neutral', className = '', ...rest }: BadgeProps)
   return (
     <span
       {...rest}
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${TONES[tone]} ${className}`}
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${TONES[tone]} ${className}`}
     />
   );
 }

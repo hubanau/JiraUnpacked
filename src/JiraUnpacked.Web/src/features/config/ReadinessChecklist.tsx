@@ -26,7 +26,7 @@ export function ReadinessChecklist({ readiness, connectionId, onSelectTab }: Rea
 
   return (
     <Card className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold text-[var(--ju-text)]">Setup checklist</h2>
+      <h2 className="text-sm font-medium text-[var(--ju-text)]">Setup checklist</h2>
       <ul className="flex flex-col gap-3">
         <li className="flex items-start gap-2">
           <Badge tone={readiness.fieldMappings.ready ? 'success' : 'warning'}>

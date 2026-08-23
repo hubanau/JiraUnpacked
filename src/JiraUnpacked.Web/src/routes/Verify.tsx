@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { Button, Card, Field } from '../ui';
+import { Button, Field } from '../ui';
+import { AuthLayout } from '../shell/AuthLayout';
 import { ApiError } from '../api/errors';
 import { resendVerification, verify } from '../api/auth';
 
@@ -77,21 +78,19 @@ export default function Verify() {
   }
 
   return (
-    <Card>
-      <form onSubmit={submit}>
-        <h1>Verify your email</h1>
-        <p>We sent a verification code to {email}.</p>
+    <AuthLayout title="Verify your email" description={`We sent a verification code to ${email}.`}>
+      <form onSubmit={submit} className="flex flex-col gap-4">
         {error && (
-          <div role="alert">
-            <p>{error}</p>
-            {detail && <p>{detail}</p>}
+          <div role="alert" className="rounded-[var(--ju-radius)] border border-[var(--ju-danger)]/25 bg-[var(--ju-danger-soft)] px-3 py-2">
+            <p className="text-sm font-medium text-[var(--ju-danger)]">{error}</p>
+            {detail && <p className="mt-0.5 text-xs text-[var(--ju-danger)]">{detail}</p>}
           </div>
         )}
         <Field label="Verification code" id="code">
           <input id="code" autoComplete="one-time-code" value={code}
                  onChange={(e) => setCode(e.target.value)} />
         </Field>
-        <Button type="submit" loading={busy}>Verify</Button>
+        <Button type="submit" loading={busy} className="w-full">Verify</Button>
       </form>
       {resendError && (
         <div role="alert">
@@ -108,6 +107,6 @@ export default function Verify() {
       >
         {secondsLeft > 0 ? `Resend in ${secondsLeft}s` : 'Resend code'}
       </Button>
-    </Card>
+    </AuthLayout>
   );
 }

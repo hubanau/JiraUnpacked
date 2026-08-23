@@ -4,35 +4,143 @@
    useTheme sets. Tailwind v4 needs this custom variant to target that class. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* The palette is a set of small ramps rather than one flat value per role.
+   Two steps of border and three of text are what let a page have hierarchy
+   without reaching for shadows on everything.
+
+   Note the surface order: the PAGE is the tinted one and cards are white, so a
+   card reads as sitting above the page. The previous scheme had it the other
+   way round, which is why every screen looked like one flat sheet. */
 :root {
-  --ju-bg: #ffffff;
-  --ju-surface: #f8fafc;
-  --ju-border: #e2e8f0;
+  --ju-bg: #f6f8fb;
+  --ju-surface: #ffffff;
+  --ju-surface-2: #f1f5f9;
+
+  --ju-border: #e4e9f0;
+  --ju-border-strong: #cbd5e1;
+
   --ju-text: #0f172a;
+  --ju-text-secondary: #475569;
   --ju-muted: #64748b;
-  --ju-primary: #4338ca;
+
+  --ju-primary: #4f46e5;
+  --ju-primary-hover: #4338ca;
   --ju-primary-text: #ffffff;
+  --ju-primary-soft: #eef2ff;
+
   --ju-danger: #b91c1c;
+  --ju-danger-soft: #fef2f2;
   --ju-success: #15803d;
+  --ju-success-soft: #f0fdf4;
   --ju-warning: #b45309;
+  --ju-warning-soft: #fffbeb;
+
+  /* Elevation is deliberately shallow. Cards get depth from the surface/page
+     contrast above; these are for things that genuinely float. */
+  --ju-shadow-sm: 0 1px 2px 0 rgb(15 23 42 / 0.04);
+  --ju-shadow: 0 4px 12px -2px rgb(15 23 42 / 0.08), 0 2px 4px -2px rgb(15 23 42 / 0.04);
+
+  --ju-radius-sm: 6px;
+  --ju-radius: 8px;
+  --ju-radius-lg: 12px;
 }
 
 .dark {
-  --ju-bg: #0b1120;
-  --ju-surface: #111827;
-  --ju-border: #1f2937;
-  --ju-text: #e5e7eb;
-  --ju-muted: #9ca3af;
-  --ju-primary: #818cf8;
-  --ju-primary-text: #0b1120;
+  --ju-bg: #0a0f1a;
+  --ju-surface: #121a2a;
+  --ju-surface-2: #1a2436;
+
+  --ju-border: #24304a;
+  --ju-border-strong: #35435f;
+
+  --ju-text: #e8edf6;
+  --ju-text-secondary: #b3c0d4;
+  --ju-muted: #8798b0;
+
+  --ju-primary: #8b93f8;
+  --ju-primary-hover: #a5abfa;
+  --ju-primary-text: #0a0f1a;
+  --ju-primary-soft: #1e2544;
+
   --ju-danger: #f87171;
+  --ju-danger-soft: #2a1618;
   --ju-success: #4ade80;
+  --ju-success-soft: #10251a;
   --ju-warning: #fbbf24;
+  --ju-warning-soft: #2a2110;
+
+  /* Shadows do almost nothing on a dark page — borders carry the separation. */
+  --ju-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --ju-shadow: 0 4px 12px -2px rgb(0 0 0 / 0.45), 0 2px 4px -2px rgb(0 0 0 / 0.3);
 }
 
 body {
   background-color: var(--ju-bg);
   color: var(--ju-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Form controls are styled here rather than at each call site: they are plain
+   <input> elements all over the app, so a base rule reaches every one of them
+   without touching a single page — and without changing any markup a test
+   asserts on. */
+:where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  width: 100%;
+  border: 1px solid var(--ju-border);
+  border-radius: var(--ju-radius);
+  background-color: var(--ju-surface);
+  color: var(--ju-text);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+:where(input, select, textarea)::placeholder {
+  color: var(--ju-muted);
+}
+
+:where(input, select, textarea):hover:not(:disabled) {
+  border-color: var(--ju-border-strong);
+}
+
+:where(input, select, textarea):focus-visible {
+  border-color: var(--ju-primary);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ju-primary) 18%, transparent);
+}
+
+/* aria-invalid is already set by Field when there is an error, so the styling
+   follows the accessibility attribute rather than needing a second flag. */
+:where(input, select, textarea)[aria-invalid="true"] {
+  border-color: var(--ju-danger);
+}
+
+:where(input, select, textarea):disabled {
+  background-color: var(--ju-surface-2);
+  color: var(--ju-muted);
+  cursor: not-allowed;
+}
+
+/* Links inside content read as links; nav links opt out with their own classes. */
+:where(a):not([class]) {
+  color: var(--ju-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Tabular figures wherever numbers are compared down a column: counts, story
+   points, ages. Proportional digits make columns of numbers jitter. */
+.ju-numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A visible focus ring on every interactive element. The default one is easy to
+   lose against a tinted surface, and keyboard users lose the whole app with it. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--ju-primary);
+  outline-offset: 2px;
+  border-radius: var(--ju-radius-sm);
 }
 
 /* Respect users who ask for reduced motion. */

@@ -42,7 +42,7 @@ export default function AddConnection() {
   return (
     <Card>
       <form onSubmit={submit}>
-        <h1>Add connection</h1>
+        <h1 className="text-xl font-medium tracking-tight text-[var(--ju-text)]">Add connection</h1>
         {mutation.error && <p role="alert">{errorMessage(mutation.error)}</p>}
         <Field label="Jira site URL" id="baseUrl">
           <input
