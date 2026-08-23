@@ -27,17 +27,23 @@ public static class RefreshTokenCookie
     public const string RequiredHeaderValue = "XMLHttpRequest";
 
     /// <summary>
-    /// Secure is required everywhere except Development. Gated exactly like HSTS
-    /// (<see cref="HstsGate"/>): local development and the integration suite both run over
-    /// plain HTTP, and a hard-coded Secure would silently stop the cookie being sent there —
-    /// a failure that looks like broken auth rather than a security setting.
+    /// Secure is required everywhere except Development, and except where a deployment
+    /// explicitly opts out. Gated like HSTS (<see cref="HstsGate"/>): local development and the
+    /// integration suite both run over plain HTTP, and a hard-coded Secure would silently stop
+    /// the cookie being sent there — a failure that looks like broken auth, not a setting.
+    ///
+    /// <paramref name="secureCookiesEnabled"/> exists for a local Docker stack served over
+    /// http://localhost. Browsers disagree about Secure cookies there, so leaving it on makes
+    /// sign-in work in Chrome and fail in Safari. Over a real network it must stay on.
     /// </summary>
-    public static bool ShouldRequireSecure(bool isDevelopment) => !isDevelopment;
+    public static bool ShouldRequireSecure(bool isDevelopment, bool secureCookiesEnabled = true) =>
+        !isDevelopment && secureCookiesEnabled;
 
-    public static CookieOptions Options(bool isDevelopment, DateTimeOffset expiresAt) => new()
+    public static CookieOptions Options(
+        bool isDevelopment, DateTimeOffset expiresAt, bool secureCookiesEnabled = true) => new()
     {
         HttpOnly = true,
-        Secure = ShouldRequireSecure(isDevelopment),
+        Secure = ShouldRequireSecure(isDevelopment, secureCookiesEnabled),
         SameSite = SameSiteMode.Strict,
         Path = Path,
         Expires = expiresAt,
@@ -48,10 +54,11 @@ public static class RefreshTokenCookie
     /// deletion by name AND path, so an expiry written at the default path leaves the real
     /// cookie in place and the user silently still holds a valid token.
     /// </summary>
-    public static CookieOptions DeleteOptions(bool isDevelopment) => new()
+    public static CookieOptions DeleteOptions(
+        bool isDevelopment, bool secureCookiesEnabled = true) => new()
     {
         HttpOnly = true,
-        Secure = ShouldRequireSecure(isDevelopment),
+        Secure = ShouldRequireSecure(isDevelopment, secureCookiesEnabled),
         SameSite = SameSiteMode.Strict,
         Path = Path,
     };

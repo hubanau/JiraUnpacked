@@ -1,5 +1,7 @@
-# Local development database only. Production uses AWS RDS (see REQUIREMENTS.md).
-# Credentials here are throwaway local-dev values, intentionally not secret.
+# The whole application, locally. `docker compose up -d` gives you Postgres, the migrated
+# schema, the API serving the SPA, and a mail catcher that receives verification codes.
+#
+# Secrets come from .env (gitignored) — see .env.example. Nothing here reaches a cloud.
 services:
   postgres:
     image: postgres:16
@@ -9,6 +11,7 @@ services:
       POSTGRES_USER: jiraunpacked
       POSTGRES_PASSWORD: localdev
     ports:
+      # Exposed so `dotnet test` and `dotnet ef` on the host can reach it.
       - "5432:5432"
     volumes:
       - jiraunpacked-pgdata:/var/lib/postgresql/data
@@ -17,6 +20,83 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Applies migrations, then exits. The api service waits for it to complete SUCCESSFULLY, so
+  # a failed migration stops the stack instead of starting an app against a half-built schema.
+  #
+  # Runs as the OWNER role: migrations create tables, manage RLS policies and install pg_trgm,
+  # none of which the app's own role can do — that is the point of the role split.
+  migrate:
+    build: .
+    container_name: jiraunpacked-migrate
+    entrypoint: ["/app/migrate"]
+    environment:
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=jiraunpacked;Username=jiraunpacked;Password=localdev"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    container_name: jiraunpacked-api
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+
+      # Three roles, narrowest rights that work. Owner is present only because the privileged
+      # factory used to need it; the background readers now use Reader. See the README.
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=jiraunpacked;Username=jiraunpacked;Password=localdev"
+      ConnectionStrings__App: "Host=postgres;Port=5432;Database=jiraunpacked;Username=jiraunpacked_app;Password=localapp"
+      ConnectionStrings__Reader: "Host=postgres;Port=5432;Database=jiraunpacked;Username=jiraunpacked_reader;Password=localreader"
+
+      # From .env. The app refuses to start outside Development without real values, which is
+      # why `docker compose up` fails fast rather than silently running on published keys.
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:?set JWT_SIGNING_KEY in .env - see .env.example}
+      TokenProtection__Key: ${TOKEN_PROTECTION_KEY:?set TOKEN_PROTECTION_KEY in .env - see .env.example}
+
+      # Mailpit below. Real values here send real mail; these do not leave the compose network.
+      Email__Host: mailpit
+      Email__Port: "1025"
+      Email__UseStartTls: "false"
+      Email__FromAddress: "no-reply@jiraunpacked.local"
+
+      # Plain HTTP on localhost, so both of these are deliberate:
+      #  - HSTS would pin the browser to https for a host that does not serve it.
+      #  - Browsers disagree about Secure cookies on http://localhost (Chrome allows, Safari
+      #    historically did not), so leaving Secure on makes sign-in work in some browsers and
+      #    fail in others. Turn BOTH back on the moment this is served over TLS.
+      Security__HstsEnabled: "false"
+      Security__SecureCookiesEnabled: "false"
+
+      # The seeded admin mints the invite code that registration requires.
+      Seed__Admins__0__Email: ${ADMIN_EMAIL:-admin@jiraunpacked.local}
+      Seed__Admins__0__Username: ${ADMIN_USERNAME:-admin}
+      Seed__Admins__0__Password: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env - see .env.example}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # /health/ready returns 503 while the database is unreachable, so "healthy" here means
+      # genuinely serving rather than merely running.
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # Catches every outgoing email. Verification codes are credentials, so this exists so they
+  # never have to be read out of a log — open http://localhost:8025 to collect one.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: jiraunpacked-mail
+    ports:
+      - "8025:8025"   # web UI
+    restart: unless-stopped
 
 volumes:
   jiraunpacked-pgdata:

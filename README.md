@@ -68,7 +68,7 @@ that seeds fixed ids would only pass once — seed fresh ids and pin only their 
 
 ## Local development database
 
-Production uses AWS RDS PostgreSQL; locally we run Postgres in Docker.
+Postgres runs in Docker — the same container the deployed stack uses.
 
 ```bash
 docker compose up -d          # start Postgres 16 (named volume persists data)
@@ -110,6 +110,7 @@ Outside Development the app **refuses to start** with those values, or with emai
 | `Email:Port` / `UseStartTls` / `Username` / `Password` | | no | Default 587 with STARTTLS. |
 | `Security:HstsEnabled` | `Security__HstsEnabled` | no | Default true. Turn off when TLS terminates at a proxy that forwards plain HTTP. |
 | `Security:TrustProxyHeaders` | `Security__TrustProxyHeaders` | no | **Default false.** See below. |
+| `Security:SecureCookiesEnabled` | `Security__SecureCookiesEnabled` | no | Default true. Off only for plain HTTP that is not on a network — see the deployment section. |
 | `Security:ForwardLimit` | `Security__ForwardLimit` | no | Proxy hops to unwind. Default 1. |
 
 ### Running behind a reverse proxy
@@ -165,71 +166,57 @@ and it is done. `localStorage` now holds only `ju.username` and `ju.theme`, neit
 - `main` — release branch. `develop` is promoted with a **merge commit**, never a squash, so
   the two stay comparable.
 
-### Deployment — Docker / ECR / ECS Fargate
+### Deployment — local Docker
 
-`Dockerfile` builds a deployable image; `.github/workflows/deploy.yml` pushes it to ECR,
-applies migrations, and rolls the ECS service. `develop` deploys to **test**, `main` to
-**production**, each through a GitHub Environment so production secrets are unreadable from the
-test job and an approval gate can be attached without touching the workflow.
+Everything runs on your machine; nothing reaches a cloud.
 
-Three things in the image are deliberate:
+```bash
+cp .env.example .env     # then fill in the two keys and an admin password
+docker compose up -d --build
+```
 
-- **The SPA is built before `dotnet publish`.** Vite writes into the API's `wwwroot`, and
-  `UseStaticFiles` no-ops on a missing directory — get the order wrong and you ship a working
-  API with no UI and no error. The build fails on a missing `index.html` rather than trusting
-  the ordering, and CI builds the image on every PR so that guard actually runs.
-- **A self-contained EF migration bundle ships alongside the app** (`/app/migrate`). Migrations
-  run as a one-off ECS task inside the VPC, so the database is never reachable from a GitHub
-  runner. It is a separate binary because it needs a different database role — see below.
-- **The container runs as the image's non-root `app` user** and listens on plain HTTP:8080. TLS
-  terminates at the load balancer, which is why `Security__TrustProxyHeaders` must be set.
-
-**Three database roles, each with the narrowest rights that work:**
-
-| Role | Rights | Used by |
-|---|---|---|
-| `jiraunpacked` (owner) | full DDL | the migration task **only** |
-| `jiraunpacked_app` | CRUD, `NOBYPASSRLS` | every request path — this is where tenant isolation is enforced |
-| `jiraunpacked_reader` | `SELECT`, `BYPASSRLS` | the four background readers, which read cross-tenant scheduling metadata and never write |
-
-Migrations need the owner because they create tables, manage RLS policies, and run
-`CREATE EXTENSION pg_trgm` — all three of which `jiraunpacked_app` is deliberately unable to do.
-So the migration task supplies `ConnectionStrings__Default` from Secrets Manager; the running
-app never holds owner credentials.
-
-The reader role exists because every tenant table is `FORCE ROW LEVEL SECURITY`, which subjects
-even the owner to its own policies. The background readers connect with no tenant set, so they
-need `BYPASSRLS` — and nothing else. `AddReaderRole` grants it explicitly and **fails the
-migration** if the grant did not take, because a reader without it silently returns zero rows
-and scheduled sync would stop with nothing in the logs.
-
-**What must exist in AWS** (the workflow reads these as repository/environment variables, and
-authenticates by OIDC — no long-lived keys):
-
-| Variable | What it is |
+| | |
 |---|---|
-| `AWS_DEPLOY_ROLE_ARN` | role the workflow assumes via OIDC |
-| `AWS_REGION`, `ECR_REPOSITORY` | registry location |
-| `ECS_CLUSTER`, `ECS_SERVICE`, `ECS_TASK_DEFINITION` | the running service |
-| `ECS_MIGRATION_TASK_DEFINITION` | runs `/app/migrate`, owner connection string from Secrets Manager |
-| `ECS_SUBNET_IDS`, `ECS_SECURITY_GROUP_IDS` | where the migration task runs |
+| App + SPA | http://localhost:8080 |
+| Mailbox (verification codes) | http://localhost:8025 |
+| Postgres | localhost:5432 |
 
-Point the service's container health check at **`/health/ready`** — it returns 503 while the
-database is unreachable, which is what makes `aws ecs wait services-stable` meaningful: a task
-that cannot reach RDS never goes healthy, so a bad deploy fails the rollout instead of quietly
-replacing a working one.
+Four services: `postgres`, a one-shot `migrate`, the `api`, and `mailpit`. The api waits on
+`migrate` **completing successfully**, so a failed migration stops the stack rather than
+starting the app against a half-built schema. Its health check hits `/health/ready`, which
+returns 503 while the database is unreachable — "healthy" therefore means genuinely serving.
 
-Images are tagged with the commit SHA and never with a moving tag, so a rollback is "point the
-service at the previous SHA" rather than hoping the registry still holds what `:latest` meant.
+**Getting a first user in.** Registration needs an invite code, and only an Admin can mint one.
+Compose seeds the admin from `.env`, so: sign in as that admin, create an invite code, register
+with it, then collect the verification code from the mailbox at :8025. Codes are credentials —
+Mailpit exists so they never have to be read out of a log.
 
-> The image and the migration bundle are verified — both are built and exercised in CI. The
-> **deploy workflow itself has not been run against a real AWS account**; it encodes the
-> decisions and the ordering, and the resource names above still need creating. Tracked in
-> [#80](https://github.com/hubanau/JiraUnpacked/issues/80).
->
-> Until then the deploy job **skips**, guarded on `AWS_DEPLOY_ROLE_ARN` being set — a merge
-> should not paint the branch red for a deploy that was never going to work. Setting that one
-> variable activates the workflow with no further edit.
+**Two settings are off because this is plain HTTP**, and both must go back on behind TLS:
+
+- `Security__HstsEnabled=false` — HSTS would pin the browser to `https` for a host that does
+  not serve it.
+- `Security__SecureCookiesEnabled=false` — browsers disagree about `Secure` cookies on
+  `http://localhost`, so leaving it on makes sign-in work in Chrome and fail in Safari. Over a
+  real network, leaving it off puts the refresh token on the wire in clear text.
+
+**Secrets live in `.env`, which is gitignored.** The app refuses to start without a private
+`Jwt__SigningKey` and `TokenProtection__Key`, and refuses the values committed in
+`appsettings.Development.json` — a dev key still mints valid tokens and still decrypts stored
+Jira tokens, so the failure it prevents is invisible.
+
+**The image is built and exercised in CI on every PR.** That is not incidental: the SPA is
+built into `wwwroot` *before* `dotnet publish`, and `UseStaticFiles` no-ops on a missing
+directory, so the wrong order produces a working API with no UI and no error. The build asserts
+`index.html` exists and CI runs that assertion.
+
+**Backups are yours to arrange.** Postgres data lives in the `jiraunpacked-pgdata` volume:
+
+```bash
+docker compose exec postgres pg_dump -U jiraunpacked jiraunpacked > backup.sql
+```
+
+**Upgrading** is `git pull && docker compose up -d --build`. Migrations run automatically, as
+the owner role, before the new app starts.
 
 ## Project board
 
