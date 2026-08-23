@@ -24,11 +24,24 @@ public static class ProductionConfigGate
     /// them one restart at a time. Empty means the configuration is acceptable.
     /// </summary>
     public static IReadOnlyList<string> Validate(
-        bool isDevelopment, string? signingKey, string? tokenProtectionKey, bool emailConfigured)
+        bool isDevelopment, string? signingKey, string? tokenProtectionKey, bool emailConfigured,
+        string? ownerConnectionString = null, string? readerConnectionString = null)
     {
         if (isDevelopment) return Array.Empty<string>();
 
         var problems = new List<string>();
+
+        // Pointing the background readers at the owner would put DDL rights back in the running
+        // container — the exact arrangement the reader role exists to end. Nothing else would
+        // look wrong: the reads succeed either way.
+        if (!string.IsNullOrWhiteSpace(ownerConnectionString)
+            && string.Equals(ownerConnectionString, readerConnectionString, StringComparison.Ordinal))
+        {
+            problems.Add(
+                "ConnectionStrings:Reader is the same as ConnectionStrings:Default. The "
+                + "background readers would run as the owner, which can create tables and drop "
+                + "RLS policies. Point Reader at the read-only jiraunpacked_reader role.");
+        }
 
         if (string.Equals(signingKey, DevSigningKey, StringComparison.Ordinal))
         {
@@ -57,9 +70,12 @@ public static class ProductionConfigGate
 
     /// <summary>Throws with every problem listed, rather than failing on the first one.</summary>
     public static void ThrowIfInvalid(
-        bool isDevelopment, string? signingKey, string? tokenProtectionKey, bool emailConfigured)
+        bool isDevelopment, string? signingKey, string? tokenProtectionKey, bool emailConfigured,
+        string? ownerConnectionString = null, string? readerConnectionString = null)
     {
-        var problems = Validate(isDevelopment, signingKey, tokenProtectionKey, emailConfigured);
+        var problems = Validate(
+            isDevelopment, signingKey, tokenProtectionKey, emailConfigured,
+            ownerConnectionString, readerConnectionString);
         if (problems.Count == 0) return;
 
         throw new InvalidOperationException(

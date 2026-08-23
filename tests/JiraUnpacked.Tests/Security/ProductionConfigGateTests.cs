@@ -66,6 +66,33 @@ public sealed class ProductionConfigGateTests
     }
 
     [Fact]
+    public void Pointing_the_reader_at_the_owner_connection_is_refused()
+    {
+        const string owner = "Host=db;Username=jiraunpacked;Password=x";
+
+        var problems = ProductionConfigGate.Validate(
+            isDevelopment: false, SafeKey, SafeProtectionKey, emailConfigured: true,
+            ownerConnectionString: owner, readerConnectionString: owner);
+
+        // Nothing would look wrong at runtime — the background reads succeed either way. What
+        // changes is that a compromised app process regains DDL rights and can drop the very
+        // policies that enforce tenant isolation.
+        var problem = Assert.Single(problems);
+        Assert.Contains("ConnectionStrings:Reader", problem);
+    }
+
+    [Fact]
+    public void A_distinct_reader_connection_is_accepted()
+    {
+        var problems = ProductionConfigGate.Validate(
+            isDevelopment: false, SafeKey, SafeProtectionKey, emailConfigured: true,
+            ownerConnectionString: "Host=db;Username=jiraunpacked;Password=x",
+            readerConnectionString: "Host=db;Username=jiraunpacked_reader;Password=y");
+
+        Assert.Empty(problems);
+    }
+
+    [Fact]
     public void Every_problem_is_reported_at_once_not_one_restart_at_a_time()
     {
         var problems = ProductionConfigGate.Validate(
