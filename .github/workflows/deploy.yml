@@ -25,6 +25,12 @@ jobs:
     timeout-minutes: 30
     environment: ${{ github.ref_name == 'main' && 'production' || 'test' }}
 
+    # Skip cleanly until the AWS side exists, rather than failing every merge at
+    # the credentials step for a deploy that was never going to work. Setting
+    # AWS_DEPLOY_ROLE_ARN activates this workflow with no further edit — a
+    # skipped job reads honestly on the branch, a red X does not.
+    if: vars.AWS_DEPLOY_ROLE_ARN != ''
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4

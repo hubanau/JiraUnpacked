@@ -211,6 +211,10 @@ service at the previous SHA" rather than hoping the registry still holds what `:
 > **deploy workflow itself has not been run against a real AWS account**; it encodes the
 > decisions and the ordering, and the resource names above still need creating. Tracked in
 > [#80](https://github.com/hubanau/JiraUnpacked/issues/80).
+>
+> Until then the deploy job **skips**, guarded on `AWS_DEPLOY_ROLE_ARN` being set — a merge
+> should not paint the branch red for a deploy that was never going to work. Setting that one
+> variable activates the workflow with no further edit.
 
 ## Project board
 
