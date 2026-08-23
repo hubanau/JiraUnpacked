@@ -164,19 +164,53 @@ and it is done. `localStorage` now holds only `ju.username` and `ju.theme`, neit
 - `main` — release branch. `develop` is promoted with a **merge commit**, never a squash, so
   the two stay comparable.
 
-**There is no deployment pipeline yet.** `.github/workflows/ci.yml` builds and tests on pull
-requests; nothing deploys, and nothing applies migrations to any environment. Tracked by
-[#80](https://github.com/hubanau/JiraUnpacked/issues/80), which is blocked on the EC2-direct vs
-Docker/ECR decision (REQUIREMENTS.md line 223).
+### Deployment — Docker / ECR / ECS Fargate
 
-When that lands, three things are easy to get wrong and worth naming here:
+`Dockerfile` builds a deployable image; `.github/workflows/deploy.yml` pushes it to ECR,
+applies migrations, and rolls the ECS service. `develop` deploys to **test**, `main` to
+**production**, each through a GitHub Environment so production secrets are unreadable from the
+test job and an approval gate can be attached without touching the workflow.
 
-- The SPA must be built into the API's `wwwroot` **before** `dotnet publish`. `UseStaticFiles`
-  no-ops on a missing directory, so skipping it yields a working API with no UI and no error.
-- Migrations need a role that can manage row-level security policies and create extensions —
-  two migrations set up RLS, and one runs `CREATE EXTENSION pg_trgm`.
-- The app refuses to start without the configuration in the table above, so a first deploy
-  fails loudly rather than quietly running on the keys committed to this repository.
+Three things in the image are deliberate:
+
+- **The SPA is built before `dotnet publish`.** Vite writes into the API's `wwwroot`, and
+  `UseStaticFiles` no-ops on a missing directory — get the order wrong and you ship a working
+  API with no UI and no error. The build fails on a missing `index.html` rather than trusting
+  the ordering, and CI builds the image on every PR so that guard actually runs.
+- **A self-contained EF migration bundle ships alongside the app** (`/app/migrate`). Migrations
+  run as a one-off ECS task inside the VPC, so the database is never reachable from a GitHub
+  runner. It is a separate binary because it needs a different database role — see below.
+- **The container runs as the image's non-root `app` user** and listens on plain HTTP:8080. TLS
+  terminates at the load balancer, which is why `Security__TrustProxyHeaders` must be set.
+
+**Two database roles, not one.** The app runs as `jiraunpacked_app`, which is `NOBYPASSRLS` and
+by design cannot create tables, manage policies, or install extensions. Migrations do all three
+— two set up row-level security and one runs `CREATE EXTENSION pg_trgm` — so the migration task
+must supply `ConnectionStrings__Default` as the **owner** role, from Secrets Manager.
+
+**What must exist in AWS** (the workflow reads these as repository/environment variables, and
+authenticates by OIDC — no long-lived keys):
+
+| Variable | What it is |
+|---|---|
+| `AWS_DEPLOY_ROLE_ARN` | role the workflow assumes via OIDC |
+| `AWS_REGION`, `ECR_REPOSITORY` | registry location |
+| `ECS_CLUSTER`, `ECS_SERVICE`, `ECS_TASK_DEFINITION` | the running service |
+| `ECS_MIGRATION_TASK_DEFINITION` | runs `/app/migrate`, owner connection string from Secrets Manager |
+| `ECS_SUBNET_IDS`, `ECS_SECURITY_GROUP_IDS` | where the migration task runs |
+
+Point the service's container health check at **`/health/ready`** — it returns 503 while the
+database is unreachable, which is what makes `aws ecs wait services-stable` meaningful: a task
+that cannot reach RDS never goes healthy, so a bad deploy fails the rollout instead of quietly
+replacing a working one.
+
+Images are tagged with the commit SHA and never with a moving tag, so a rollback is "point the
+service at the previous SHA" rather than hoping the registry still holds what `:latest` meant.
+
+> The image and the migration bundle are verified — both are built and exercised in CI. The
+> **deploy workflow itself has not been run against a real AWS account**; it encodes the
+> decisions and the ordering, and the resource names above still need creating. Tracked in
+> [#80](https://github.com/hubanau/JiraUnpacked/issues/80).
 
 ## Project board
 
