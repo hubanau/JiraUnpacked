@@ -117,7 +117,9 @@ JiraUnpacked.Api.Security.ProductionConfigGate.ThrowIfInvalid(
     builder.Configuration["TokenProtection:Key"],
     app.Services.GetRequiredService<
         Microsoft.Extensions.Options.IOptions<JiraUnpacked.Infrastructure.Messaging.EmailOptions>>()
-        .Value.IsConfigured);
+        .Value.IsConfigured,
+    builder.Configuration.GetConnectionString("Default"),
+    builder.Configuration.GetConnectionString("Reader"));
 
 // Seed configured Admin accounts before serving requests (idempotent; FR-A3).
 using (var scope = app.Services.CreateScope())

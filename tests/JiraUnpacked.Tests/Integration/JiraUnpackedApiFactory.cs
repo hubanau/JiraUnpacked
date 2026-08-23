@@ -25,6 +25,10 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
     public const string TestAppConnectionString =
         "Host=localhost;Port=5432;Database=jiraunpacked_test;Username=jiraunpacked_app;Password=localapp";
 
+    // Background-reader role: read-only and BYPASSRLS (set up by the AddReaderRole migration).
+    public const string TestReaderConnectionString =
+        "Host=localhost;Port=5432;Database=jiraunpacked_test;Username=jiraunpacked_reader;Password=localreader";
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
@@ -43,6 +47,7 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
         // any DI-resolved privileged context — e.g. SyncRunRetentionJob's cross-tenant read —
         // would connect to the unmigrated "jiraunpacked" dev database instead of the test one.
         builder.UseSetting("ConnectionStrings:Default", TestConnectionString);
+        builder.UseSetting("ConnectionStrings:Reader", TestReaderConnectionString);
 
         // Override the DbContext registration to point at the test database.
         builder.ConfigureTestServices(services =>

@@ -103,6 +103,7 @@ Outside Development the app **refuses to start** with those values, or with emai
 |---|---|---|---|
 | `ConnectionStrings:Default` | `ConnectionStrings__Default` | yes | Migration/owner role. |
 | `ConnectionStrings:App` | `ConnectionStrings__App` | yes | The **RLS-enforced** role the app runs as. Never point this at the owner — it would bypass isolation layer 2. |
+| `ConnectionStrings:Reader` | `ConnectionStrings__Reader` | yes | Read-only, `BYPASSRLS`. Used only by the background readers (due-project discovery, retention, the stuck-run reaper, the token upgrader). Startup refuses if this equals `Default`. |
 | `Jwt:SigningKey` | `Jwt__SigningKey` | yes | ≥32 chars, validated at startup. |
 | `TokenProtection:Key` | `TokenProtection__Key` | yes | Base64 32-byte key; encrypts stored Jira API tokens. |
 | `Email:Host` / `Email:FromAddress` | `Email__Host` / `Email__FromAddress` | yes | Without them the log-only development sender is selected — it never sends and writes verification codes to the log. |
@@ -183,10 +184,24 @@ Three things in the image are deliberate:
 - **The container runs as the image's non-root `app` user** and listens on plain HTTP:8080. TLS
   terminates at the load balancer, which is why `Security__TrustProxyHeaders` must be set.
 
-**Two database roles, not one.** The app runs as `jiraunpacked_app`, which is `NOBYPASSRLS` and
-by design cannot create tables, manage policies, or install extensions. Migrations do all three
-— two set up row-level security and one runs `CREATE EXTENSION pg_trgm` — so the migration task
-must supply `ConnectionStrings__Default` as the **owner** role, from Secrets Manager.
+**Three database roles, each with the narrowest rights that work:**
+
+| Role | Rights | Used by |
+|---|---|---|
+| `jiraunpacked` (owner) | full DDL | the migration task **only** |
+| `jiraunpacked_app` | CRUD, `NOBYPASSRLS` | every request path — this is where tenant isolation is enforced |
+| `jiraunpacked_reader` | `SELECT`, `BYPASSRLS` | the four background readers, which read cross-tenant scheduling metadata and never write |
+
+Migrations need the owner because they create tables, manage RLS policies, and run
+`CREATE EXTENSION pg_trgm` — all three of which `jiraunpacked_app` is deliberately unable to do.
+So the migration task supplies `ConnectionStrings__Default` from Secrets Manager; the running
+app never holds owner credentials.
+
+The reader role exists because every tenant table is `FORCE ROW LEVEL SECURITY`, which subjects
+even the owner to its own policies. The background readers connect with no tenant set, so they
+need `BYPASSRLS` — and nothing else. `AddReaderRole` grants it explicitly and **fails the
+migration** if the grant did not take, because a reader without it silently returns zero rows
+and scheduled sync would stop with nothing in the logs.
 
 **What must exist in AWS** (the workflow reads these as repository/environment variables, and
 authenticates by OIDC — no long-lived keys):
