@@ -96,7 +96,7 @@ export default function IssueDetail() {
 
       <Card className="flex flex-col gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-[var(--ju-text)]">{issue.jiraKey}</h1>
+          <h1 className="text-xl font-medium tracking-tight text-[var(--ju-text)]">{issue.jiraKey}</h1>
           <p className="text-sm text-[var(--ju-muted)]">{issue.summary ?? EMPTY}</p>
         </div>
         {badges.length > 0 && (
@@ -111,7 +111,7 @@ export default function IssueDetail() {
       </Card>
 
       <Card className="flex flex-col gap-2">
-        <h2 className="text-sm font-semibold text-[var(--ju-text)]">Hierarchy</h2>
+        <h2 className="text-sm font-medium text-[var(--ju-text)]">Hierarchy</h2>
         {!hasHierarchy && <p className="text-sm text-[var(--ju-muted)]">No parent or children</p>}
         {parent && (
           <p className="text-sm text-[var(--ju-text)]">Parent: {hierarchyLink(id, parent)}</p>
@@ -129,7 +129,7 @@ export default function IssueDetail() {
       </Card>
 
       <Card className="flex flex-col gap-2">
-        <h2 className="text-sm font-semibold text-[var(--ju-text)]">Change history</h2>
+        <h2 className="text-sm font-medium text-[var(--ju-text)]">Change history</h2>
         {changeHistory.length === 0 ? (
           // An issue that has never been edited has no history — that is
           // normal, not a failure, so this is plain text, never ErrorState.

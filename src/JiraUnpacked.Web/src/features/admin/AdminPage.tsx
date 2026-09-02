@@ -31,7 +31,7 @@ function InviteCodeSection() {
 
   return (
     <Card className="flex flex-col gap-3">
-      <h2 className="text-base font-semibold text-[var(--ju-text)]">Invite codes</h2>
+      <h2 className="text-base font-medium text-[var(--ju-text)]">Invite codes</h2>
       <p className="text-sm text-[var(--ju-muted)]">
         Generate a one-time code a new user redeems to register an account.
       </p>
@@ -251,7 +251,7 @@ function UsersSection() {
 
   return (
     <Card className="flex flex-col gap-3">
-      <h2 className="text-base font-semibold text-[var(--ju-text)]">Users</h2>
+      <h2 className="text-base font-medium text-[var(--ju-text)]">Users</h2>
       {error && <p role="alert">{errorTitle(error, 'Could not load users.')}</p>}
 
       {!error && items.length === 0 && (
@@ -354,7 +354,7 @@ export default function AdminPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-lg font-semibold text-[var(--ju-text)]">Admin</h1>
+      <h1 className="text-xl font-medium tracking-tight text-[var(--ju-text)]">Admin</h1>
       <InviteCodeSection />
       <UsersSection />
     </div>

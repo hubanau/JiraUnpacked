@@ -22,7 +22,7 @@ export function THead({ className = '', ...rest }: SectionProps) {
   return (
     <thead
       {...rest}
-      className={`border-b border-[var(--ju-border)] text-[var(--ju-muted)] ${className}`}
+      className={`border-b border-[var(--ju-border)] bg-[var(--ju-surface-2)] text-[10px] uppercase tracking-wider text-[var(--ju-muted)] ${className}`}
     />
   );
 }
@@ -35,7 +35,7 @@ export function TR({ className = '', ...rest }: RowProps) {
   return (
     <tr
       {...rest}
-      className={`border-b border-[var(--ju-border)] last:border-0 ${className}`}
+      className={`border-b border-[var(--ju-border)] transition-colors last:border-0 hover:bg-[var(--ju-surface-2)] ${className}`}
     />
   );
 }
@@ -45,11 +45,11 @@ export function TH({ className = '', ...rest }: HeaderCellProps) {
     <th
       {...rest}
       scope="col"
-      className={`px-3 py-2 font-medium ${className}`}
+      className={`px-4 py-2.5 font-medium ${className}`}
     />
   );
 }
 
 export function TD({ className = '', ...rest }: DataCellProps) {
-  return <td {...rest} className={`px-3 py-2 ${className}`} />;
+  return <td {...rest} className={`px-4 py-3 align-middle ${className}`} />;
 }

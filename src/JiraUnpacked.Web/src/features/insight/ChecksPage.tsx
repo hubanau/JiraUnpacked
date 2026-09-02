@@ -19,7 +19,7 @@ function sectionErrorTitle(error: unknown, fallback: string): string {
 }
 
 function SectionHeading({ children }: { children: string }) {
-  return <h2 className="mb-3 text-base font-semibold text-[var(--ju-text)]">{children}</h2>;
+  return <h2 className="mb-3 text-base font-medium text-[var(--ju-text)]">{children}</h2>;
 }
 
 interface CheckCatalogProps {
@@ -294,7 +294,7 @@ export default function ChecksPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-lg font-semibold text-[var(--ju-text)]">Gap checks</h1>
+      <h1 className="text-xl font-medium tracking-tight text-[var(--ju-text)]">Gap checks</h1>
 
       <Card>
         <SectionHeading>Available checks</SectionHeading>

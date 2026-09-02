@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Button, Card, Field } from '../ui';
+import { Button, Field } from '../ui';
+import { AuthLayout } from '../shell/AuthLayout';
 import { ApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
 
@@ -37,13 +38,15 @@ export default function Login() {
   }
 
   return (
-    <Card>
-      <form onSubmit={submit}>
-        <h1>Sign in</h1>
+    <AuthLayout
+      title="Sign in"
+      footer={<Link to="/register">Have an invite code? Create an account</Link>}
+    >
+      <form onSubmit={submit} className="flex flex-col gap-4">
         {error && (
-          <div role="alert">
-            <p>{error}</p>
-            {detail && <p>{detail}</p>}
+          <div role="alert" className="rounded-[var(--ju-radius)] border border-[var(--ju-danger)]/25 bg-[var(--ju-danger-soft)] px-3 py-2">
+            <p className="text-sm font-medium text-[var(--ju-danger)]">{error}</p>
+            {detail && <p className="mt-0.5 text-xs text-[var(--ju-danger)]">{detail}</p>}
           </div>
         )}
         <Field label="Email or username" id="identifier">
@@ -54,9 +57,8 @@ export default function Login() {
           <input id="password" type="password" autoComplete="current-password" value={password}
                  onChange={(e) => setPassword(e.target.value)} />
         </Field>
-        <Button type="submit" loading={busy}>Sign in</Button>
-        <Link to="/register">Have an invite code? Create an account</Link>
+        <Button type="submit" loading={busy} className="w-full">Sign in</Button>
       </form>
-    </Card>
+    </AuthLayout>
   );
 }

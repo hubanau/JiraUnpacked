@@ -89,7 +89,7 @@ export default function ProjectDetail() {
         </Link>
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-lg font-semibold text-[var(--ju-text)]">{project.jiraProjectKey}</h1>
+            <h1 className="text-xl font-medium tracking-tight text-[var(--ju-text)]">{project.jiraProjectKey}</h1>
             <p className="text-sm text-[var(--ju-muted)]">
               Syncs every {project.syncIntervalMinutes} minutes
             </p>
