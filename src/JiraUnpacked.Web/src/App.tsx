@@ -18,6 +18,8 @@ import Login from './routes/Login';
 import NotFound from './routes/NotFound';
 import Register from './routes/Register';
 import Verify from './routes/Verify';
+import ForgotPassword from './routes/ForgotPassword';
+import ResetPassword from './routes/ResetPassword';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -32,6 +34,8 @@ export default function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/verify" element={<Verify />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
             <Route element={<RequireAuth />}>
               <Route element={<AppShell />}>
                 <Route path="/" element={<Home />} />

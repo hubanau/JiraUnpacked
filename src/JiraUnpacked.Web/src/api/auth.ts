@@ -43,6 +43,21 @@ export const refreshTokens = () =>
 export const logoutRequest = () =>
   apiFetch<void>('/api/auth/logout', { method: 'POST', skipAuthRetry: true });
 
+/**
+ * Always resolves when the server is reachable, whatever the address — the endpoint answers
+ * 202 unconditionally so it cannot be used to discover which addresses are registered. The
+ * client must not add a distinction the server deliberately withheld.
+ */
+export const forgotPassword = (email: string) =>
+  apiFetch<void>('/api/auth/password/forgot', {
+    method: 'POST', body: { email }, skipAuthRetry: true,
+  });
+
+export const resetPassword = (token: string, newPassword: string) =>
+  apiFetch<void>('/api/auth/password/reset', {
+    method: 'POST', body: { token, newPassword }, skipAuthRetry: true,
+  });
+
 export const getMe = () => apiFetch<MeResponse>('/api/auth/me');
 
 export const deleteMe = () => apiFetch<void>('/api/auth/me', { method: 'DELETE' });
