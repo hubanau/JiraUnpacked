@@ -5,6 +5,7 @@ export { EmptyState } from './EmptyState';
 export { ErrorBoundary } from './ErrorBoundary';
 export { ErrorState } from './ErrorState';
 export { Field } from './Field';
+export { Logo } from './Logo';
 export { Modal } from './Modal';
 export { Select } from './Select';
 export { Spinner } from './Spinner';

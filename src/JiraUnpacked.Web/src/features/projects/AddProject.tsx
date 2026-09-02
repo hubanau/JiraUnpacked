@@ -81,7 +81,7 @@ export default function AddProject() {
   return (
     <Card>
       <form onSubmit={submit} className="flex flex-col gap-4">
-        <h1 className="text-lg font-semibold text-[var(--ju-text)]">Add project</h1>
+        <h1 className="text-xl font-medium tracking-tight text-[var(--ju-text)]">Add project</h1>
         {mutation.error && <p role="alert">{addProjectError(mutation.error)}</p>}
         <Field label="Jira project" id="projectKey">
           <Select

@@ -8,7 +8,7 @@ interface ErrorStateProps {
 
 export function ErrorState({ title, detail, onRetry }: ErrorStateProps) {
   return (
-    <div className="flex flex-col items-center gap-2 rounded-lg border border-[var(--ju-border)] p-8 text-center">
+    <div className="flex flex-col items-center gap-2 rounded-[var(--ju-radius-lg)] border border-[var(--ju-danger)]/25 bg-[var(--ju-danger-soft)] p-8 text-center">
       <p role="alert" className="text-sm font-medium text-[var(--ju-danger)]">
         {title}
       </p>
