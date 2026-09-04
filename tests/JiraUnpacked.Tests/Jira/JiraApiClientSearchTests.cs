@@ -49,21 +49,12 @@ public sealed class JiraApiClientSearchTests : IDisposable
         Assert.Null(page.NextPageToken);
     }
 
-    [Fact]
-    public async Task Posts_the_jql_and_changelog_expand()
-    {
-        _server.Given(Request.Create().WithPath("/rest/api/3/search/jql").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { issues = new object[0] }));
-
-        await Client().SearchIssuesPageAsync(Creds(), "project = ACME AND updated >= \"2024-01-01 10:00\"", null, CancellationToken.None);
-
-        var body = Assert.Single(_server.LogEntries).RequestMessage.Body!;
-        using var doc = System.Text.Json.JsonDocument.Parse(body);
-        var root = doc.RootElement;
-        Assert.Contains("updated >=", root.GetProperty("jql").GetString());
-        Assert.Contains("changelog", root.GetProperty("expand").EnumerateArray().Select(e => e.GetString()));
-        Assert.DoesNotContain("nextPageToken", body);
-    }
+    // Posts_the_jql_and_changelog_expand lived here and asserted `expand` was an ARRAY containing
+    // "changelog" — it pinned the defect rather than the contract, because it was written against
+    // our own assumption and a WireMock stub accepts any body. Real Jira answers that body with a
+    // 400. Its three assertions (the JQL passed through verbatim, the changelog expansion, and no
+    // nextPageToken on a first page) all live in JiraSearchRequestShapeTests now, checked against
+    // Atlassian's published schema, which additionally pins `fields`.
 
     [Fact]
     public async Task Retries_after_429_then_succeeds()
