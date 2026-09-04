@@ -78,6 +78,27 @@ public sealed class RederiveWatermarkTests : IClassFixture<JiraUnpackedApiFactor
         await cmd.ExecuteNonQueryAsync();
     }
 
+    // The issue the 2024-01-01 sync stored. Without it the fixture would describe a project whose
+    // "successful" sync left nothing behind — the very state the orchestrator now refuses to treat
+    // as a watermark — and the run under test would correctly do a full pull instead, proving
+    // nothing about Rederive. Seeding it keeps the premise coherent; the Sync-vs-Rederive property
+    // this test exists for is untouched.
+    private static async Task SeedSnapshotAsync(Guid tenant, Guid projId, DateTime fetchedAt)
+    {
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"INSERT INTO ""RawIssueSnapshots""
+            (""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""Payload"",""FetchedAt"")
+            VALUES (@id,@t,@proj,@issue,'{}'::jsonb,@fetched)";
+        cmd.Parameters.AddWithValue("id", Guid.NewGuid());
+        cmd.Parameters.AddWithValue("t", tenant);
+        cmd.Parameters.AddWithValue("proj", projId);
+        cmd.Parameters.AddWithValue("issue", "10001");
+        cmd.Parameters.AddWithValue("fetched", fetchedAt);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
     [Fact]
     public async Task Rederive_succeeded_run_does_not_advance_the_sync_watermark()
     {
@@ -87,13 +108,14 @@ public sealed class RederiveWatermarkTests : IClassFixture<JiraUnpackedApiFactor
         // Last real sync: 2024-01-01. Later rederive: 2024-06-01 — must NOT become the watermark.
         await SeedSyncRunAsync(tenant, projectId, "Sync", "Succeeded",
             new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), new DateTime(2024, 1, 1, 0, 5, 0, DateTimeKind.Utc));
+        await SeedSnapshotAsync(tenant, projectId, new DateTime(2024, 1, 1, 0, 5, 0, DateTimeKind.Utc));
         await SeedSyncRunAsync(tenant, projectId, "Rederive", "Succeeded",
             new DateTime(2024, 6, 1, 0, 0, 0, DateTimeKind.Utc), new DateTime(2024, 6, 1, 0, 1, 0, DateTimeKind.Utc));
 
         _jira.Given(Request.Create().WithPath("/rest/api/3/search/jql").UsingPost())
              .RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { issues = new object[0] }));
 
-        var resp = await client.PostAsJsonAsync($"/api/projects/{projectId}/sync", new { });
+        var resp = await SyncWait.SyncAsync(client, projectId);
         resp.EnsureSuccessStatusCode();
 
         var searchCalls = _jira.LogEntries.Where(e => e.RequestMessage.Path == "/rest/api/3/search/jql").ToList();

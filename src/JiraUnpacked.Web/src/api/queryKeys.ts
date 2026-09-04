@@ -15,6 +15,7 @@ export const queryKeys = {
   fieldMappings: (projectId: string) => ['projects', projectId, 'field-mappings'] as const,
   statusSemantics: (projectId: string) => ['projects', projectId, 'status-semantics'] as const,
   syncRuns: (projectId: string) => ['projects', projectId, 'sync-runs'] as const,
+  queries: (projectId: string) => ['projects', projectId, 'queries'] as const,
   // The request is part of the key so a different filter or page is a
   // different cache entry rather than silently reusing the previous results.
   issues: (projectId: string, request: unknown) =>

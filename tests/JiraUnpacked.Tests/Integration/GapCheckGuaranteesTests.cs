@@ -69,7 +69,7 @@ public sealed class GapCheckGuaranteesTests : IClassFixture<JiraUnpackedApiFacto
         // and this test would pass even if the upsert started wiping Class on existing rows.
         await GapCheckTestData.SeedRawSnapshotAsync(seed, "10001", "ACME-1", "1", "Epic");
 
-        await client.PostAsJsonAsync($"/api/projects/{seed.ProjectId}/rederive", new { });
+        await SyncWait.RederiveAsync(client, seed.ProjectId);
 
         var items = await (await client.GetAsync($"/api/connections/{seed.ConnectionId}/issue-types"))
             .Content.ReadFromJsonAsync<List<ItemDto>>();
@@ -121,7 +121,7 @@ public sealed class GapCheckGuaranteesTests : IClassFixture<JiraUnpackedApiFacto
 
         await GapCheckTestData.SeedRawSnapshotAsync(seed, "90001", "BUG-1", "99", "Bug");
 
-        await client.PostAsJsonAsync($"/api/projects/{seed.ProjectId}/rederive", new { });
+        await SyncWait.RederiveAsync(client, seed.ProjectId);
 
         var items = await (await client.GetAsync($"/api/connections/{seed.ConnectionId}/issue-types"))
             .Content.ReadFromJsonAsync<List<ItemDto>>();

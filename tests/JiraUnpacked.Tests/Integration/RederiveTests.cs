@@ -83,12 +83,17 @@ public sealed class RederiveTests : IClassFixture<JiraUnpackedApiFactory>, IAsyn
     {
         var (client, projectId) = await ConfiguredProjectAsync();
         StubSearchOneIssue();
-        await client.PostAsJsonAsync($"/api/projects/{projectId}/sync", new { }); // lands raw (+ derives once TR6 wires it)
+        await SyncWait.SyncAsync(client, projectId); // lands raw (+ derives once TR6 wires it)
 
         _jira.Reset(); // any Jira call during rederive would now 404
-        var resp = await client.PostAsJsonAsync($"/api/projects/{projectId}/rederive", new { });
-        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-        var run = (await resp.Content.ReadFromJsonAsync<SyncRunDto>())!;
+        // Accepted, then performed by the background worker — so the terminal status is read
+        // back from the runs list rather than from the response body, which shows it Running.
+        var resp = await SyncWait.RederiveAsync(client, projectId);
+        Assert.Equal(HttpStatusCode.Accepted, resp.StatusCode);
+        var accepted = (await resp.Content.ReadFromJsonAsync<SyncRunDto>())!;
+
+        var runs = await client.GetFromJsonAsync<List<SyncRunDto>>($"/api/projects/{projectId}/sync-runs");
+        var run = runs!.Single(r => r.Id == accepted.Id);
         Assert.Equal("Rederive", run.Kind);
         Assert.Equal("Succeeded", run.Status);
         Assert.Empty(_jira.LogEntries); // zero Jira calls on rederive
@@ -108,9 +113,9 @@ public sealed class RederiveTests : IClassFixture<JiraUnpackedApiFactory>, IAsyn
     {
         var (client, projectId) = await ConfiguredProjectAsync();
         StubSearchOneIssue();
-        await client.PostAsJsonAsync($"/api/projects/{projectId}/sync", new { }); // lands raw
-        await client.PostAsJsonAsync($"/api/projects/{projectId}/rederive", new { });
-        await client.PostAsJsonAsync($"/api/projects/{projectId}/rederive", new { });
+        await SyncWait.SyncAsync(client, projectId); // lands raw
+        await SyncWait.RederiveAsync(client, projectId);
+        await SyncWait.RederiveAsync(client, projectId);
         Assert.Equal(1, await IssueCountAsync(projectId)); // upsert by (EndUserId, JiraIssueId), not duplicated
     }
 
@@ -118,7 +123,7 @@ public sealed class RederiveTests : IClassFixture<JiraUnpackedApiFactory>, IAsyn
     public async Task Rederive_unknown_project_returns_404()
     {
         var client = await TestData.AuthedClientAsync(_factory);
-        var resp = await client.PostAsJsonAsync($"/api/projects/{Guid.NewGuid()}/rederive", new { });
+        var resp = await SyncWait.RederiveAsync(client, Guid.NewGuid());
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
 }

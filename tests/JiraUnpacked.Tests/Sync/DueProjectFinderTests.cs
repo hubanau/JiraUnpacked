@@ -15,9 +15,9 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
     public Task InitializeAsync() => _factory.EnsureDatabaseAsync();
     public Task DisposeAsync() => Task.CompletedTask;
 
-    // Seed JiraConnection + JiraProject + JiraQuery for a fresh tenant via the privileged
-    // superuser connection (bypasses RLS, never touches EF / StampTenant).
-    private static async Task<Guid> SeedProjectWithQueryAsync(Guid tenant, int intervalMinutes)
+    // Seed JiraConnection + JiraProject (+ optionally a JiraQuery) for a fresh tenant via the
+    // privileged superuser connection (bypasses RLS, never touches EF / StampTenant).
+    private static async Task<Guid> SeedProjectAsync(Guid tenant, int intervalMinutes, bool withQuery = true)
     {
         var connId = Guid.NewGuid();
         var projId = Guid.NewGuid();
@@ -46,8 +46,9 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
             c2.Parameters.AddWithValue("interval", intervalMinutes);
             await c2.ExecuteNonQueryAsync();
         }
-        await using (var c3 = conn.CreateCommand())
+        if (withQuery)
         {
+            await using var c3 = conn.CreateCommand();
             c3.CommandText = @"INSERT INTO ""JiraQueries""
                 (""Id"",""EndUserId"",""JiraProjectId"",""Jql"",""CreatedAt"")
                 VALUES (@id,@t,@proj,'project = ACME',now())";
@@ -57,6 +58,22 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
             await c3.ExecuteNonQueryAsync();
         }
         return projId;
+    }
+
+    /// <summary>
+    /// The scheduled half of the whole-project-default fix. The finder used to require at least
+    /// one JiraQuery, so a project added through the UI — which has no way to create one — was
+    /// skipped by every tick, forever, without a trace. The orchestrator now syncs such a project
+    /// in full, and this is what gets it there on a schedule rather than only by hand.
+    /// </summary>
+    [Fact]
+    public async Task Project_with_no_query_is_due()
+    {
+        var tenant = Guid.NewGuid();
+        var projId = await SeedProjectAsync(tenant, 60, withQuery: false);
+
+        var due = await Finder().GetDueProjectsAsync();
+        Assert.Contains(due, d => d.ProjectId == projId && d.EndUserId == tenant);
     }
 
     // Setup-only: seeds the Users row a synthetic tenant id needs to satisfy the new
@@ -111,7 +128,7 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
     public async Task Project_with_no_successful_run_is_due()
     {
         var tenant = Guid.NewGuid();
-        var projId = await SeedProjectWithQueryAsync(tenant, 60);
+        var projId = await SeedProjectAsync(tenant, 60);
 
         var due = await Finder().GetDueProjectsAsync();
         Assert.Contains(due, d => d.ProjectId == projId && d.EndUserId == tenant);
@@ -121,7 +138,7 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
     public async Task Recently_synced_project_is_not_due()
     {
         var tenant = Guid.NewGuid();
-        var projId = await SeedProjectWithQueryAsync(tenant, 60);
+        var projId = await SeedProjectAsync(tenant, 60);
         var syncedAt = DateTime.UtcNow.AddMinutes(-5);
         await SeedSyncRunAsync(tenant, projId, "Succeeded", syncedAt, syncedAt, issuesProcessed: 1);
 
@@ -133,7 +150,7 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
     public async Task Project_with_a_running_run_is_excluded()
     {
         var tenant = Guid.NewGuid();
-        var projId = await SeedProjectWithQueryAsync(tenant, 60);
+        var projId = await SeedProjectAsync(tenant, 60);
         await SeedSyncRunAsync(tenant, projId, "Running", DateTime.UtcNow);
 
         var due = await Finder().GetDueProjectsAsync();
@@ -146,7 +163,7 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
     public async Task Rederive_run_does_not_mark_a_due_project_not_due()
     {
         var tenant = Guid.NewGuid();
-        var projId = await SeedProjectWithQueryAsync(tenant, 60); // 60-minute interval
+        var projId = await SeedProjectAsync(tenant, 60); // 60-minute interval
 
         // Last real sync was 90 minutes ago -> overdue against the 60-minute interval.
         await SeedSyncRunAsync(tenant, projId, "Succeeded", DateTime.UtcNow.AddMinutes(-90),
