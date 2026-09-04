@@ -115,7 +115,7 @@ public sealed class RederiveWatermarkTests : IClassFixture<JiraUnpackedApiFactor
         _jira.Given(Request.Create().WithPath("/rest/api/3/search/jql").UsingPost())
              .RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { issues = new object[0] }));
 
-        var resp = await client.PostAsJsonAsync($"/api/projects/{projectId}/sync", new { });
+        var resp = await SyncWait.SyncAsync(client, projectId);
         resp.EnsureSuccessStatusCode();
 
         var searchCalls = _jira.LogEntries.Where(e => e.RequestMessage.Path == "/rest/api/3/search/jql").ToList();

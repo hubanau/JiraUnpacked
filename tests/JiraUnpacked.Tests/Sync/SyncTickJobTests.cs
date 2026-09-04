@@ -30,6 +30,17 @@ public class SyncTickJobTests
 
         public Task<SyncRunResult> RunRederiveAsync(Guid projectId, CancellationToken ct = default)
             => Task.FromResult(new SyncRunResult(SyncOutcome.Completed, null));
+
+        // The tick calls the both-halves entry point above; the split halves exist for the
+        // request/worker hand-off and are not this job's path.
+        public Task<SyncRunResult> StartProjectAsync(Guid projectId, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task<SyncRunResult> StartRederiveAsync(Guid projectId, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task<SyncRunResult> ExecuteProjectAsync(Guid runId, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task<SyncRunResult> ExecuteRederiveAsync(Guid runId, CancellationToken ct = default)
+            => throw new NotSupportedException();
     }
 
     [Fact]

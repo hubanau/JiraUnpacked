@@ -46,8 +46,8 @@ public sealed class SyncPipelineTests : IClassFixture<JiraUnpackedApiFactory>, I
         await client.PostAsJsonAsync($"/api/projects/{project.Id}/queries", new { jql = "project = ACME" });
         await client.PutAsJsonAsync($"/api/projects/{project.Id}/field-mappings", new { mappings = new[] { new { role = "Status", jiraFieldId = "status" } } });
 
-        var resp = await client.PostAsJsonAsync($"/api/projects/{project.Id}/sync", new { });
-        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+        var resp = await SyncWait.SyncAsync(client, project.Id);
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, resp.StatusCode);
 
         var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(JiraUnpackedApiFactory.TestConnectionString).Options;
         await using var db = new AppDbContext(options, new NullCurrentTenant());
@@ -90,8 +90,8 @@ public sealed class SyncPipelineTests : IClassFixture<JiraUnpackedApiFactory>, I
         var project = (await (await client.PostAsJsonAsync($"/api/connections/{conn.Id}/projects", new { projectKey = "ACME", syncIntervalMinutes = 60 })).Content.ReadFromJsonAsync<ProjectDto>())!;
         // NOTE: no POST to /api/projects/{id}/queries — that is the whole point.
 
-        var resp = await client.PostAsJsonAsync($"/api/projects/{project.Id}/sync", new { });
-        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+        var resp = await SyncWait.SyncAsync(client, project.Id);
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, resp.StatusCode);
 
         // Jira was asked for the whole project, by key.
         var searched = _jira.LogEntries

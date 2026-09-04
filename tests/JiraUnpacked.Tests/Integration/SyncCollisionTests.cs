@@ -54,7 +54,7 @@ public sealed class SyncCollisionTests : IClassFixture<JiraUnpackedApiFactory>, 
         var project = (await (await client.PostAsJsonAsync($"/api/connections/{conn.Id}/projects",
             new { projectKey = key, syncIntervalMinutes = 60 })).Content.ReadFromJsonAsync<ProjectDto>())!;
         await client.PostAsJsonAsync($"/api/projects/{project.Id}/queries", new { jql = $"project = {key}" });
-        await client.PostAsJsonAsync($"/api/projects/{project.Id}/sync", new { });
+        await SyncWait.SyncAsync(client, project.Id);
         return project.Id;
     }
 

@@ -26,7 +26,36 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         _ingest = ingest; _derivation = derivation; _logger = logger;
     }
 
+    /// <summary>Both halves in one call — the scheduled tick, which is already off the request path.</summary>
     public async Task<SyncRunResult> RunProjectAsync(Guid projectId, CancellationToken ct = default)
+    {
+        var started = await StartProjectAsync(projectId, ct);
+        return started.Outcome == SyncOutcome.Started
+            ? await ExecuteProjectAsync(started.Run!.Id, ct)
+            : started;
+    }
+
+    /// <summary>Both halves in one call — see <see cref="RunProjectAsync"/>.</summary>
+    public async Task<SyncRunResult> RunRederiveAsync(Guid projectId, CancellationToken ct = default)
+    {
+        var started = await StartRederiveAsync(projectId, ct);
+        return started.Outcome == SyncOutcome.Started
+            ? await ExecuteRederiveAsync(started.Run!.Id, ct)
+            : started;
+    }
+
+    public Task<SyncRunResult> StartProjectAsync(Guid projectId, CancellationToken ct = default) =>
+        StartAsync(projectId, SyncRunKind.Sync, ct);
+
+    public Task<SyncRunResult> StartRederiveAsync(Guid projectId, CancellationToken ct = default) =>
+        StartAsync(projectId, SyncRunKind.Rederive, ct);
+
+    /// <summary>
+    /// Claims the project's single Running slot. Cheap on purpose: everything here is answerable
+    /// in milliseconds, so a caller can reject a bad project or a collision synchronously and
+    /// still hand the work off.
+    /// </summary>
+    private async Task<SyncRunResult> StartAsync(Guid projectId, SyncRunKind kind, CancellationToken ct)
     {
         var project = await _db.JiraProjects.FirstOrDefaultAsync(p => p.Id == projectId, ct);
         if (project is null) return new SyncRunResult(SyncOutcome.ProjectNotFound, null);
@@ -34,15 +63,40 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         if (await _db.SyncRuns.AnyAsync(r => r.JiraProjectId == projectId && r.Status == SyncRunStatus.Running, ct))
             return new SyncRunResult(SyncOutcome.AlreadyRunning, null);
 
-        var startedAt = _clock.UtcNow;
         var run = new SyncRun
         {
-            Id = Guid.NewGuid(), JiraProjectId = projectId,
-            StartedAt = startedAt, Status = SyncRunStatus.Running, IssuesProcessed = 0
+            Id = Guid.NewGuid(), JiraProjectId = projectId, Kind = kind,
+            StartedAt = _clock.UtcNow, Status = SyncRunStatus.Running, IssuesProcessed = 0
         };
         if (!await TryStartRunAsync(run, ct))
             return new SyncRunResult(SyncOutcome.AlreadyRunning, null);
 
+        return new SyncRunResult(SyncOutcome.Started, ToView(run));
+    }
+
+    /// <summary>
+    /// Loads a run that START created and is still Running. Anything else — a missing row, a run
+    /// some other worker already finished, a project deleted in between — is not ours to execute,
+    /// and must never resurrect a finished run.
+    /// </summary>
+    private async Task<(SyncRun Run, JiraProject Project)?> ClaimAsync(Guid runId, CancellationToken ct)
+    {
+        var run = await _db.SyncRuns.FirstOrDefaultAsync(r => r.Id == runId, ct);
+        if (run is null || run.Status != SyncRunStatus.Running) return null;
+
+        var project = await _db.JiraProjects.FirstOrDefaultAsync(p => p.Id == run.JiraProjectId, ct);
+        return project is null ? null : (run, project);
+    }
+
+    public async Task<SyncRunResult> ExecuteProjectAsync(Guid runId, CancellationToken ct = default)
+    {
+        // Nothing to execute: no such run, one another worker already finished, or a project
+        // deleted in between. ProjectNotFound is the "there is no work here" answer.
+        var claim = await ClaimAsync(runId, ct);
+        if (claim is null) return new SyncRunResult(SyncOutcome.ProjectNotFound, null);
+        var (run, project) = claim.Value;
+
+        var projectId = project.Id;
         try
         {
             var watermark = await _db.SyncRuns
@@ -170,25 +224,25 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         return new SyncRunResult(SyncOutcome.Completed, ToView(run));
     }
 
-    public async Task<SyncRunResult> RunRederiveAsync(Guid projectId, CancellationToken ct = default)
+    public async Task<SyncRunResult> ExecuteRederiveAsync(Guid runId, CancellationToken ct = default)
     {
-        var project = await _db.JiraProjects.FirstOrDefaultAsync(p => p.Id == projectId, ct);
-        if (project is null) return new SyncRunResult(SyncOutcome.ProjectNotFound, null);
-        if (await _db.SyncRuns.AnyAsync(r => r.JiraProjectId == projectId && r.Status == SyncRunStatus.Running, ct))
-            return new SyncRunResult(SyncOutcome.AlreadyRunning, null);
+        // Nothing to execute: no such run, one another worker already finished, or a project
+        // deleted in between. ProjectNotFound is the "there is no work here" answer.
+        var claim = await ClaimAsync(runId, ct);
+        if (claim is null) return new SyncRunResult(SyncOutcome.ProjectNotFound, null);
+        var (run, project) = claim.Value;
 
-        var run = new SyncRun
-        {
-            Id = Guid.NewGuid(), JiraProjectId = projectId, StartedAt = _clock.UtcNow,
-            Status = SyncRunStatus.Running, Kind = SyncRunKind.Rederive, IssuesProcessed = 0
-        };
-        if (!await TryStartRunAsync(run, ct))
-            return new SyncRunResult(SyncOutcome.AlreadyRunning, null);
+        var projectId = project.Id;
         try
         {
             await _derivation.DeriveProjectAsync(projectId, ct);
             run.Status = SyncRunStatus.Succeeded; run.FinishedAt = _clock.UtcNow;
             await _db.SaveChangesAsync(ct);
+
+            var modeled = await _db.Issues.CountAsync(i => i.JiraProjectId == projectId, ct);
+            _logger.LogInformation(
+                "Rederive {ProjectKey} ({ProjectId}) finished: {Modeled} modelled issue(s).",
+                project.JiraProjectKey, projectId, modeled);
         }
         catch (Exception ex)
         {

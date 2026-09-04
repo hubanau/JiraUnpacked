@@ -30,6 +30,31 @@ const NEW_RUN: SyncRun = {
 };
 
 describe('SyncControls', () => {
+  it('disables both triggers while a run is in flight, and says the work is server-side', async () => {
+    // The server accepts the run and performs it in the background, so the mutation settles in
+    // milliseconds and its own pending flag says nothing about whether a sync is happening. The
+    // buttons follow the run table instead — otherwise the button springs back to idle instantly
+    // and the obvious second press earns a 409.
+    server.use(http.get('/api/projects/p1/sync-runs', () => HttpResponse.json([NEW_RUN])));
+
+    renderControls();
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /running/i })).toBeDisabled());
+    expect(screen.getByRole('button', { name: /re-derive/i })).toBeDisabled();
+    expect(screen.getByText(/keeps going if you close this page/i)).toBeInTheDocument();
+  });
+
+  it('leaves the triggers usable when nothing is running', async () => {
+    server.use(http.get('/api/projects/p1/sync-runs', () => HttpResponse.json([])));
+
+    renderControls();
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /sync now/i })).toBeEnabled());
+    expect(screen.queryByText(/keeps going if you close this page/i)).not.toBeInTheDocument();
+  });
+
   it('shows "already running" when Sync now hits a 409', async () => {
     server.use(http.post('/api/projects/p1/sync', () => new HttpResponse(null, { status: 409 })));
     const user = userEvent.setup();
