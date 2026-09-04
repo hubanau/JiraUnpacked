@@ -13,7 +13,7 @@ public sealed partial class JiraApiClient
     {
         var path = $"/rest/api/3/issue/{Uri.EscapeDataString(jiraIssueId)}/changelog?startAt={startAt}&maxResults={ChangelogPageSize}";
         using var resp = await SendWithRetryAsync(() => Build(HttpMethod.Get, creds, path), ct);
-        EnsureOk(resp);
+        await EnsureOkAsync(resp, ct);
 
         {
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));

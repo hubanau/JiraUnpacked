@@ -3,6 +3,7 @@ import { Button, Card } from '../../ui';
 import { ApiError } from '../../api/errors';
 import { runRederive, runSync } from '../../api/sync';
 import { queryKeys } from '../../api/queryKeys';
+import { useSyncRuns } from './useSyncRuns';
 
 // Both triggers land here: 409 means a run is already in flight for this
 // project (regardless of which kind started it), and anything else already
@@ -16,6 +17,14 @@ function syncError(error: unknown): string {
 
 export function SyncControls({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
+
+  // The server now ACCEPTS the work and performs it in the background, so the mutation settles
+  // in milliseconds and its own pending flag no longer says anything about whether a sync is
+  // happening. The run table does — and it is already polling while one is Running — so the
+  // buttons follow that instead. Without this the button would spring back to idle instantly and
+  // a second press would earn a 409.
+  const runs = useSyncRuns(projectId);
+  const inFlight = runs.data?.some((r) => r.status === 'Running') ?? false;
 
   // No optimistic updates: the table is the source of truth, so a
   // successful trigger just invalidates it. Invalidating also restarts
@@ -51,14 +60,30 @@ export function SyncControls({ projectId }: { projectId: string }) {
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <Button loading={sync.isPending} onClick={() => sync.mutate()}>
-          Sync now
+        <Button
+          loading={sync.isPending || inFlight}
+          disabled={inFlight}
+          onClick={() => sync.mutate()}
+        >
+          {inFlight ? 'Running…' : 'Sync now'}
         </Button>
 
-        <Button variant="secondary" loading={rederive.isPending} onClick={() => rederive.mutate()}>
+        <Button
+          variant="secondary"
+          loading={rederive.isPending || inFlight}
+          disabled={inFlight}
+          onClick={() => rederive.mutate()}
+        >
           Re-derive
         </Button>
       </div>
+
+      {inFlight && (
+        <p className="text-xs text-[var(--ju-muted)]">
+          This runs on the server — it keeps going if you close this page. Progress appears in the
+          runs table below.
+        </p>
+      )}
 
       <p className="text-xs text-[var(--ju-muted)]">
         Rebuild the modelled data from what was already pulled from Jira. Use this after changing
