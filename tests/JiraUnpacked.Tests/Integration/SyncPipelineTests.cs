@@ -62,4 +62,49 @@ public sealed class SyncPipelineTests : IClassFixture<JiraUnpackedApiFactory>, I
         var story = await db.Issues.IgnoreQueryFilters().FirstAsync(i => i.JiraProjectId == project.Id && i.JiraIssueId == "10002");
         Assert.Equal(issue.Id, story.ParentIssueId);
     }
+
+    /// <summary>
+    /// The reported bug, walked exactly as a user hits it: add a connection, add a project, press
+    /// Sync. No JQL query is created because the UI offers no way to create one — and the sync used
+    /// to return Succeeded with 0 issues and no error, leaving the project permanently empty.
+    ///
+    /// Deliberately the same path as the test above minus the POST to /queries, so what it proves
+    /// is that the missing query is no longer the difference between data and silence.
+    /// </summary>
+    [Fact]
+    public async Task Sync_lands_data_for_a_project_that_has_no_query_of_its_own()
+    {
+        _jira.Given(Request.Create().WithPath("/rest/api/3/myself").UsingGet()).RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { accountId = "a" }));
+        _jira.Given(Request.Create().WithPath("/rest/api/3/project/ACME").UsingGet()).RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { id = "1", key = "ACME", name = "Acme" }));
+        _jira.Given(Request.Create().WithPath("/rest/api/3/search/jql").UsingPost()).RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new
+        {
+            issues = new object[] {
+                new { id = "20001", key = "ACME-9",
+                    fields = new { summary = "Unqueried", created = "2024-01-01T00:00:00.000+0000", updated = "2024-01-02T00:00:00.000+0000", status = new { id = "10", name = "Done" } },
+                    changelog = new { startAt = 0, maxResults = 100, total = 0, histories = new object[0] } }
+            }
+        }));
+
+        var client = await TestData.AuthedClientAsync(_factory);
+        var conn = (await (await client.PostAsJsonAsync("/api/connections", new { baseUrl = _jira.Url, email = "e@x.com", apiToken = "t" })).Content.ReadFromJsonAsync<ConnectionDto>())!;
+        var project = (await (await client.PostAsJsonAsync($"/api/connections/{conn.Id}/projects", new { projectKey = "ACME", syncIntervalMinutes = 60 })).Content.ReadFromJsonAsync<ProjectDto>())!;
+        // NOTE: no POST to /api/projects/{id}/queries — that is the whole point.
+
+        var resp = await client.PostAsJsonAsync($"/api/projects/{project.Id}/sync", new { });
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+
+        // Jira was asked for the whole project, by key.
+        var searched = _jira.LogEntries
+            .Where(e => e.RequestMessage.Path == "/rest/api/3/search/jql")
+            .Select(e => System.Text.Json.JsonDocument.Parse(e.RequestMessage.Body!).RootElement.GetProperty("jql").GetString())
+            .ToList();
+        Assert.Equal(new[] { "project = \"ACME\"" }, searched);
+
+        // And the data actually landed, all the way through to the modelled table — a green run
+        // over an empty database was the entire symptom, so the run status alone proves nothing.
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(JiraUnpackedApiFactory.TestConnectionString).Options;
+        await using var db = new AppDbContext(options, new NullCurrentTenant());
+        Assert.Equal(1, await db.RawIssueSnapshots.IgnoreQueryFilters().CountAsync(r => r.JiraProjectId == project.Id));
+        Assert.Equal(1, await db.Issues.IgnoreQueryFilters().CountAsync(i => i.JiraProjectId == project.Id));
+    }
 }

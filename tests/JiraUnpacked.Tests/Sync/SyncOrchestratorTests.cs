@@ -1,6 +1,7 @@
 using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Abstractions.Jira;
 using JiraUnpacked.Domain.Entities;
+using JiraUnpacked.Domain.Enums;
 using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Sync;
 using JiraUnpacked.Infrastructure.Tenancy;
@@ -26,7 +27,14 @@ public class SyncOrchestratorTests
         private readonly Func<Task<SearchPage>> _search;
         public StubJiraClient(Func<Task<SearchPage>> search) => _search = search;
 
-        public Task<SearchPage> SearchIssuesPageAsync(JiraCredentials creds, string jql, string? nextPageToken, CancellationToken ct = default) => _search();
+        /// <summary>Every JQL the orchestrator asked for, in order. Empty means it never called Jira.</summary>
+        public List<string> SeenJql { get; } = new();
+
+        public Task<SearchPage> SearchIssuesPageAsync(JiraCredentials creds, string jql, string? nextPageToken, CancellationToken ct = default)
+        {
+            SeenJql.Add(jql);
+            return _search();
+        }
         public Task<JiraValidationResult> ValidateAsync(JiraCredentials creds, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<JiraField>> GetFieldsAsync(JiraCredentials creds, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<JiraProjectSummary>> GetProjectsAsync(JiraCredentials creds, CancellationToken ct = default) => throw new NotSupportedException();
@@ -69,7 +77,8 @@ public class SyncOrchestratorTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString(), new InMemoryDatabaseRoot())
             .Options;
 
-    private static (Guid projectId, Guid connectionId) Seed(DbContextOptions<AppDbContext> options, ICurrentTenant tenant)
+    private static (Guid projectId, Guid connectionId) Seed(
+        DbContextOptions<AppDbContext> options, ICurrentTenant tenant, bool withQuery = true)
     {
         var projectId = Guid.NewGuid();
         var connectionId = Guid.NewGuid();
@@ -83,9 +92,144 @@ public class SyncOrchestratorTests
             Id = projectId, JiraConnectionId = connectionId,
             JiraProjectKey = "ACME", JiraProjectId = "1", SyncIntervalMinutes = 60
         });
-        db.JiraQueries.Add(new JiraQuery { Id = Guid.NewGuid(), JiraProjectId = projectId, Jql = "project = ACME" });
+        if (withQuery)
+            db.JiraQueries.Add(new JiraQuery { Id = Guid.NewGuid(), JiraProjectId = projectId, Jql = "project = ACME" });
         db.SaveChanges();
         return (projectId, connectionId);
+    }
+
+    /// <summary>
+    /// The reported bug. A project added through the UI has no JiraQuery — there is no way to
+    /// create one — so the orchestrator's `foreach (var query in queries)` had nothing to iterate.
+    /// It called Jira zero times, processed zero issues, and recorded Succeeded: a green run, no
+    /// error, and no data. An empty query list means "nothing to NARROW by", not "nothing to sync".
+    /// </summary>
+    [Fact]
+    public async Task A_project_with_no_queries_syncs_the_whole_project()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: false);
+
+        var jira = new StubJiraClient(() =>
+            Task.FromResult(new SearchPage(new[] { new RawIssue("10001", "{}") }, null)));
+
+        await using var db = new AppDbContext(options, tenant);
+        var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+
+        var result = await orchestrator.RunProjectAsync(projectId);
+
+        // Jira was actually asked, and asked for THIS project — the assertion that fails before
+        // the fix, where SeenJql is empty.
+        Assert.Equal(new[] { "project = \"ACME\"" }, jira.SeenJql);
+        Assert.Equal("Succeeded", result.Run!.Status);
+        Assert.Equal(1, result.Run.IssuesProcessed);
+    }
+
+    /// <summary>
+    /// The bug leaves wreckage behind it: every silent no-op was recorded Succeeded, and the
+    /// watermark is the newest such run. Left alone, the first sync AFTER the fix would ask Jira
+    /// only for issues changed since a sync that never fetched anything, and the project would
+    /// stay empty — the fix appearing not to work. A project holding no snapshot has no baseline
+    /// to be incremental from, so the watermark is discarded and the pull starts clean.
+    /// </summary>
+    [Fact]
+    public async Task A_watermark_left_by_runs_that_stored_nothing_is_discarded()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: false);
+
+        // Exactly the state on disk after the bug: a Succeeded Sync run, and no stored issue.
+        await using (var seed = new AppDbContext(options, tenant))
+        {
+            seed.SyncRuns.Add(new SyncRun
+            {
+                Id = Guid.NewGuid(), JiraProjectId = projectId, Kind = SyncRunKind.Sync,
+                Status = SyncRunStatus.Succeeded, StartedAt = DateTime.UtcNow.AddHours(-1),
+                FinishedAt = DateTime.UtcNow.AddHours(-1), IssuesProcessed = 0
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var jira = new StubJiraClient(() =>
+            Task.FromResult(new SearchPage(new[] { new RawIssue("10001", "{}") }, null)));
+
+        await using var db = new AppDbContext(options, tenant);
+        var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+
+        await orchestrator.RunProjectAsync(projectId);
+
+        // No "AND updated >= ..." clause: the whole project, not the sliver since a phantom sync.
+        Assert.Equal(new[] { "project = \"ACME\"" }, jira.SeenJql);
+    }
+
+    /// <summary>
+    /// The converse: once a project genuinely holds issues, the watermark is honoured and the
+    /// pull stays incremental. Discarding it every time would turn each sync into a full refetch.
+    /// </summary>
+    [Fact]
+    public async Task A_watermark_is_honoured_once_the_project_holds_issues()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: false);
+
+        await using (var seed = new AppDbContext(options, tenant))
+        {
+            seed.SyncRuns.Add(new SyncRun
+            {
+                Id = Guid.NewGuid(), JiraProjectId = projectId, Kind = SyncRunKind.Sync,
+                Status = SyncRunStatus.Succeeded, StartedAt = new DateTime(2026, 3, 1, 9, 30, 0, DateTimeKind.Utc),
+                FinishedAt = new DateTime(2026, 3, 1, 9, 31, 0, DateTimeKind.Utc), IssuesProcessed = 7
+            });
+            seed.RawIssueSnapshots.Add(new RawIssueSnapshot
+            {
+                Id = Guid.NewGuid(), JiraProjectId = projectId, JiraIssueId = "10001",
+                Payload = "{}", FetchedAt = new DateTime(2026, 3, 1, 9, 31, 0, DateTimeKind.Utc)
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var jira = new StubJiraClient(() =>
+            Task.FromResult(new SearchPage(Array.Empty<RawIssue>(), null)));
+
+        await using var db = new AppDbContext(options, tenant);
+        var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+
+        await orchestrator.RunProjectAsync(projectId);
+
+        Assert.Equal(new[] { "(project = \"ACME\") AND updated >= \"2026-03-01 09:30\"" }, jira.SeenJql);
+    }
+
+    /// <summary>
+    /// A query, once defined, still narrows: the fallback is a default, not an addition. Otherwise
+    /// every explicitly-scoped project would quietly start pulling its whole backlog too.
+    /// </summary>
+    [Fact]
+    public async Task An_explicit_query_replaces_the_whole_project_default()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: true);
+
+        var jira = new StubJiraClient(() =>
+            Task.FromResult(new SearchPage(new[] { new RawIssue("10001", "{}") }, null)));
+
+        await using var db = new AppDbContext(options, tenant);
+        var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+
+        await orchestrator.RunProjectAsync(projectId);
+
+        Assert.Equal(new[] { "project = ACME" }, jira.SeenJql);
     }
 
     [Fact]
