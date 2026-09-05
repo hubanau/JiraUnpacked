@@ -99,25 +99,6 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         var projectId = project.Id;
         try
         {
-            var watermark = await _db.SyncRuns
-                .Where(r => r.JiraProjectId == projectId && r.Status == SyncRunStatus.Succeeded && r.Kind == SyncRunKind.Sync)
-                .MaxAsync(r => (DateTime?)r.StartedAt, ct);
-
-            // An incremental pull is only meaningful when there is a baseline to be incremental
-            // FROM. If the project holds no snapshot at all, every "successful" run behind that
-            // watermark stored nothing — the state this whole-project default exists to escape —
-            // and honouring it would ask Jira only for issues changed since a sync that never
-            // happened, leaving the project permanently empty. Start over instead.
-            if (watermark is not null &&
-                !await _db.RawIssueSnapshots.AnyAsync(r => r.JiraProjectId == projectId, ct))
-            {
-                _logger.LogWarning(
-                    "Sync {ProjectKey} ({ProjectId}): ignoring watermark {Watermark} because the project holds no "
-                    + "stored issues — there is nothing to be incremental from. Falling back to a full pull.",
-                    project.JiraProjectKey, projectId, watermark.Value.ToString("o"));
-                watermark = null;
-            }
-
             var conn = await _db.JiraConnections.FirstOrDefaultAsync(c => c.Id == project.JiraConnectionId, ct)
                        ?? throw new InvalidOperationException("Connection not found for project.");
             var creds = new JiraCredentials(conn.BaseUrl, conn.Email, _protector.Unprotect(conn.ApiTokenEncrypted));
@@ -133,10 +114,42 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             var wholeProject = queries.Count == 0;
             if (wholeProject) queries.Add(WholeProjectJql(project.JiraProjectKey));
 
+            // The scope must be known BEFORE the watermark is chosen, because the watermark is
+            // only valid for the scope that produced it.
+            var fingerprint = ScopeFingerprint(queries);
+
+            // Only a run over THIS scope may seed the incremental clause. A run says "everything in
+            // the scope I fetched is current as of then" — it says nothing about a scope that has
+            // never been fetched, so after the queries change the pull must start clean. Runs
+            // predating the column carry a null fingerprint and match nothing, which is intended:
+            // among them are the silent no-ops that fetched nothing at all.
+            var watermark = await _db.SyncRuns
+                .Where(r => r.JiraProjectId == projectId
+                            && r.Status == SyncRunStatus.Succeeded
+                            && r.Kind == SyncRunKind.Sync
+                            && r.ScopeFingerprint == fingerprint)
+                .MaxAsync(r => (DateTime?)r.StartedAt, ct);
+
+            // Belt and braces for a scope whose data went away underneath it — retention, an
+            // erasure, a manual delete. There is then no baseline to be incremental from, whatever
+            // the run history claims.
+            if (watermark is not null &&
+                !await _db.RawIssueSnapshots.AnyAsync(r => r.JiraProjectId == projectId, ct))
+            {
+                _logger.LogWarning(
+                    "Sync {ProjectKey} ({ProjectId}): ignoring watermark {Watermark} because the project holds no "
+                    + "stored issues — there is nothing to be incremental from. Falling back to a full pull.",
+                    project.JiraProjectKey, projectId, watermark.Value.ToString("o"));
+                watermark = null;
+            }
+
+            run.ScopeFingerprint = fingerprint;
+
             _logger.LogInformation(
-                "Sync starting for {ProjectKey} ({ProjectId}): {QueryCount} query(ies), wholeProjectDefault={WholeProject}, watermark={Watermark}.",
-                project.JiraProjectKey, projectId, queries.Count, wholeProject,
-                watermark?.ToString("o") ?? "none (full pull)");
+                "Sync starting for {ProjectKey} ({ProjectId}): {QueryCount} query(ies), wholeProjectDefault={WholeProject}, "
+                + "scope={Fingerprint}, watermark={Watermark}.",
+                project.JiraProjectKey, projectId, queries.Count, wholeProject, fingerprint,
+                watermark?.ToString("o") ?? "none (full pull of this scope)");
 
             var processed = 0;
             foreach (var query in queries)
@@ -250,6 +263,21 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             await _db.SaveChangesAsync(ct);
         }
         return new SyncRunResult(SyncOutcome.Completed, ToView(run));
+    }
+
+    /// <summary>
+    /// Identifies the set of JQL a run extracted, so a later run can tell whether its own scope
+    /// has ever been fetched before.
+    ///
+    /// Sorted, so merely reordering the queries is not a change of scope and does not force a
+    /// refetch. Truncated to 32 hex characters: this only ever decides "same scope or not", and
+    /// collisions between two JQL sets a user actually wrote are not a realistic concern.
+    /// </summary>
+    private static string ScopeFingerprint(IEnumerable<string> effectiveJql)
+    {
+        var canonical = string.Join("\n", effectiveJql.OrderBy(j => j, StringComparer.Ordinal));
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(canonical));
+        return Convert.ToHexString(hash)[..32];
     }
 
     /// <summary>

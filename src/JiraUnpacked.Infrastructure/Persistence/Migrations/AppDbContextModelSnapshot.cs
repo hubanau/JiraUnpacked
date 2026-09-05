@@ -792,6 +792,10 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("NextRunAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("ScopeFingerprint")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<DateTime>("StartedAt")
                         .HasColumnType("timestamp with time zone");
 
