@@ -169,43 +169,186 @@ public class SyncOrchestratorTests
     }
 
     /// <summary>
-    /// The converse: once a project genuinely holds issues, the watermark is honoured and the
-    /// pull stays incremental. Discarding it every time would turn each sync into a full refetch.
+    /// The converse, on the whole-project default: once a scope has genuinely been fetched, the
+    /// watermark is honoured and the pull stays incremental. Discarding it every time would turn
+    /// each sync into a full refetch of the backlog.
+    ///
+    /// The first watermark is established by RUNNING a sync rather than by hand-seeding a row —
+    /// a seeded run cannot say which scope it covered, and a fixture that claims a successful
+    /// sync while leaving no trace of one is the same incoherence this rule exists to reject.
     /// </summary>
     [Fact]
-    public async Task A_watermark_is_honoured_once_the_project_holds_issues()
+    public async Task A_watermark_is_honoured_once_the_scope_has_been_fetched()
     {
         var tenant = new AmbientCurrentTenant();
         using var _ = tenant.BeginScope(Guid.NewGuid());
         var options = InMemoryOptions();
         var (projectId, _unused) = Seed(options, tenant, withQuery: false);
 
+        var jira = new StubJiraClient(() =>
+            Task.FromResult(new SearchPage(new[] { new RawIssue("10001", "{}") }, null)));
+
+        await using (var db1 = new AppDbContext(options, tenant))
+        {
+            var o1 = new SyncOrchestrator(db1, jira, new PassthroughProtector(),
+                new FakeClock(new DateTime(2026, 3, 1, 9, 30, 0, DateTimeKind.Utc)),
+                new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+            await o1.RunProjectAsync(projectId);
+        }
+
+        jira.SeenJql.Clear();
+        await using (var db2 = new AppDbContext(options, tenant))
+        {
+            var o2 = new SyncOrchestrator(db2, jira, new PassthroughProtector(),
+                new FakeClock(new DateTime(2026, 3, 2, 9, 0, 0, DateTimeKind.Utc)),
+                new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+            await o2.RunProjectAsync(projectId);
+        }
+
+        Assert.Equal(new[] { "(project = \"ACME\") AND updated >= \"2026-03-01 09:30\"" }, jira.SeenJql);
+    }
+
+    /// <summary>
+    /// Adding a query CHANGES THE SCOPE, so the incremental watermark from the old scope must not
+    /// carry over. Reported from production: a project synced in full, then had a query added, and
+    /// the next sync asked Jira for "(that query) AND updated >= yesterday" — returning 57 issues
+    /// where the query itself matched 474. Everything older than the previous run was silently
+    /// skipped, and would have stayed missing forever, because each sync advanced the watermark
+    /// again. A scope that has never been fetched has no baseline to be incremental from.
+    /// </summary>
+    [Fact]
+    public async Task Changing_the_queries_discards_the_previous_scopes_watermark()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: false);
+
+        var jira = new StubJiraClient(() =>
+            Task.FromResult(new SearchPage(new[] { new RawIssue("10001", "{}") }, null)));
+
+        // First sync: no query, so the whole project — and it stores an issue, so the watermark
+        // that follows is genuine rather than the no-op kind.
+        await using (var db1 = new AppDbContext(options, tenant))
+        {
+            var o1 = new SyncOrchestrator(db1, jira, new PassthroughProtector(),
+                new FakeClock(new DateTime(2026, 3, 1, 9, 0, 0, DateTimeKind.Utc)),
+                new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+            await o1.RunProjectAsync(projectId);
+        }
+        Assert.Equal(new[] { "project = \"ACME\"" }, jira.SeenJql);
+
+        // The user then narrows the project with a query of their own.
         await using (var seed = new AppDbContext(options, tenant))
         {
-            seed.SyncRuns.Add(new SyncRun
+            seed.JiraQueries.Add(new JiraQuery
             {
-                Id = Guid.NewGuid(), JiraProjectId = projectId, Kind = SyncRunKind.Sync,
-                Status = SyncRunStatus.Succeeded, StartedAt = new DateTime(2026, 3, 1, 9, 30, 0, DateTimeKind.Utc),
-                FinishedAt = new DateTime(2026, 3, 1, 9, 31, 0, DateTimeKind.Utc), IssuesProcessed = 7
-            });
-            seed.RawIssueSnapshots.Add(new RawIssueSnapshot
-            {
-                Id = Guid.NewGuid(), JiraProjectId = projectId, JiraIssueId = "10001",
-                Payload = "{}", FetchedAt = new DateTime(2026, 3, 1, 9, 31, 0, DateTimeKind.Utc)
+                Id = Guid.NewGuid(), JiraProjectId = projectId, Jql = "project = ACME AND created >= -30d"
             });
             await seed.SaveChangesAsync();
         }
 
+        jira.SeenJql.Clear();
+        await using (var db2 = new AppDbContext(options, tenant))
+        {
+            var o2 = new SyncOrchestrator(db2, jira, new PassthroughProtector(),
+                new FakeClock(new DateTime(2026, 3, 2, 9, 0, 0, DateTimeKind.Utc)),
+                new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+            await o2.RunProjectAsync(projectId);
+        }
+
+        // The new query in full — no "AND updated >= ..." bolted on from the old scope.
+        Assert.Equal(new[] { "project = ACME AND created >= -30d" }, jira.SeenJql);
+    }
+
+    /// <summary>
+    /// The other half: an UNCHANGED scope still syncs incrementally. Discarding the watermark
+    /// whenever it was convenient would turn every sync into a full refetch of the backlog.
+    /// </summary>
+    [Fact]
+    public async Task An_unchanged_scope_keeps_syncing_incrementally()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: true);
+
         var jira = new StubJiraClient(() =>
-            Task.FromResult(new SearchPage(Array.Empty<RawIssue>(), null)));
+            Task.FromResult(new SearchPage(new[] { new RawIssue("10001", "{}") }, null)));
 
-        await using var db = new AppDbContext(options, tenant);
-        var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+        await using (var db1 = new AppDbContext(options, tenant))
+        {
+            var o1 = new SyncOrchestrator(db1, jira, new PassthroughProtector(),
+                new FakeClock(new DateTime(2026, 3, 1, 9, 30, 0, DateTimeKind.Utc)),
+                new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+            await o1.RunProjectAsync(projectId);
+        }
 
-        await orchestrator.RunProjectAsync(projectId);
+        jira.SeenJql.Clear();
+        await using (var db2 = new AppDbContext(options, tenant))
+        {
+            var o2 = new SyncOrchestrator(db2, jira, new PassthroughProtector(),
+                new FakeClock(new DateTime(2026, 3, 2, 9, 0, 0, DateTimeKind.Utc)),
+                new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+            await o2.RunProjectAsync(projectId);
+        }
 
-        Assert.Equal(new[] { "(project = \"ACME\") AND updated >= \"2026-03-01 09:30\"" }, jira.SeenJql);
+        Assert.Equal(new[] { "(project = ACME) AND updated >= \"2026-03-01 09:30\"" }, jira.SeenJql);
+    }
+
+    /// <summary>
+    /// Reordering the same queries is not a change of scope. Without sorting, dragging a query up
+    /// the list would silently trigger a full refetch of the whole backlog.
+    /// </summary>
+    [Fact]
+    public async Task Reordering_the_same_queries_is_not_a_scope_change()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: false);
+
+        var a = new JiraQuery { Id = Guid.NewGuid(), JiraProjectId = projectId, Jql = "project = ACME AND type = Bug" };
+        var b = new JiraQuery { Id = Guid.NewGuid(), JiraProjectId = projectId, Jql = "project = ACME AND type = Story" };
+        await using (var seed = new AppDbContext(options, tenant))
+        {
+            seed.JiraQueries.AddRange(a, b);
+            await seed.SaveChangesAsync();
+        }
+
+        var jira = new StubJiraClient(() =>
+            Task.FromResult(new SearchPage(new[] { new RawIssue("10001", "{}") }, null)));
+
+        await using (var db1 = new AppDbContext(options, tenant))
+        {
+            var o1 = new SyncOrchestrator(db1, jira, new PassthroughProtector(),
+                new FakeClock(new DateTime(2026, 3, 1, 9, 30, 0, DateTimeKind.Utc)),
+                new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+            await o1.RunProjectAsync(projectId);
+        }
+
+        // Swap the creation order, which is the order the orchestrator reads them in.
+        await using (var reorder = new AppDbContext(options, tenant))
+        {
+            var rows = await reorder.JiraQueries.Where(q => q.JiraProjectId == projectId).ToListAsync();
+            reorder.JiraQueries.RemoveRange(rows);
+            await reorder.SaveChangesAsync();
+            reorder.JiraQueries.AddRange(
+                new JiraQuery { Id = Guid.NewGuid(), JiraProjectId = projectId, Jql = b.Jql },
+                new JiraQuery { Id = Guid.NewGuid(), JiraProjectId = projectId, Jql = a.Jql });
+            await reorder.SaveChangesAsync();
+        }
+
+        jira.SeenJql.Clear();
+        await using (var db2 = new AppDbContext(options, tenant))
+        {
+            var o2 = new SyncOrchestrator(db2, jira, new PassthroughProtector(),
+                new FakeClock(new DateTime(2026, 3, 2, 9, 0, 0, DateTimeKind.Utc)),
+                new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+            await o2.RunProjectAsync(projectId);
+        }
+
+        Assert.All(jira.SeenJql, j => Assert.Contains("updated >= \"2026-03-01 09:30\"", j));
     }
 
     /// <summary>
