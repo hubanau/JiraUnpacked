@@ -16,7 +16,7 @@ public sealed partial class JiraApiClient
         await EnsureOkAsync(resp, ct);
 
         {
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct), JiraJson.Document);
             var root = doc.RootElement;
 
             var values = new List<string>();

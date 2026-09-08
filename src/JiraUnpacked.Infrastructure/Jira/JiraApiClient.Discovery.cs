@@ -8,7 +8,7 @@ namespace JiraUnpacked.Infrastructure.Jira;
 
 public sealed partial class JiraApiClient
 {
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions Json = JiraJson.Web;
 
     public async Task<IReadOnlyList<JiraField>> GetFieldsAsync(JiraCredentials creds, CancellationToken ct = default)
     {
@@ -158,7 +158,7 @@ public sealed partial class JiraApiClient
             var messages = new List<string>();
             try
             {
-                using var doc = JsonDocument.Parse(body);
+                using var doc = JsonDocument.Parse(body, JiraJson.Document);
                 if (doc.RootElement.ValueKind == JsonValueKind.Object)
                 {
                     // Jira uses errorMessages[] for request-level problems and errors{} for
