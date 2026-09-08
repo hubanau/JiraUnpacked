@@ -108,6 +108,7 @@ Outside Development the app **refuses to start** with those values, or with emai
 | `TokenProtection:Key` | `TokenProtection__Key` | yes | Base64 32-byte key; encrypts stored Jira API tokens. |
 | `Email:Host` / `Email:FromAddress` | `Email__Host` / `Email__FromAddress` | yes | Without them the log-only development sender is selected — it never sends and writes verification codes to the log. |
 | `Email:Port` / `UseStartTls` / `Username` / `Password` | | no | Default 587 with STARTTLS. |
+| `App:BaseUrl` | `App__BaseUrl` | no | Public address used in password-reset links. Defaults to `http://localhost:8080`; must match where users actually browse. Taken from configuration and **never** from the request's `Host` header — deriving it from the request is host-header injection, which turns a legitimate reset email into a token handover. |
 | `Security:HstsEnabled` | `Security__HstsEnabled` | no | Default true. Turn off when TLS terminates at a proxy that forwards plain HTTP. |
 | `Security:TrustProxyHeaders` | `Security__TrustProxyHeaders` | no | **Default false.** See below. |
 | `Security:SecureCookiesEnabled` | `Security__SecureCookiesEnabled` | no | Default true. Off only for plain HTTP that is not on a network — see the deployment section. |
@@ -140,7 +141,7 @@ path stays a JSON 404 rather than becoming HTML with a 200.
 
 | Area | Routes |
 |---|---|
-| Auth | `POST register · verify · verify/resend · login · refresh · logout` (anonymous), `GET/DELETE me` |
+| Auth | `POST register · verify · verify/resend · login · refresh · logout · password/forgot · password/reset` (anonymous), `GET/DELETE me` |
 | Admin | `GET users`, `POST users/{id}/block · unblock`, `DELETE users/{id}`, `POST invite-codes` |
 | Connections | CRUD, plus live Jira reads for fields, projects and statuses |
 | Projects | CRUD, field mappings, status semantics, issue-type classes, queries |
@@ -148,6 +149,8 @@ path stays a JSON 404 rather than becoming HTML with a 200.
 | Issues | `GET issues`, `GET issues/{id}`, `POST issues/query` (the filter builder) |
 | Filters | `GET filter-catalog`, and saved per-project filters (CRUD) |
 | Reports | four metrics and the gap-checks, each with a `GET` (whole project) and a `POST` that takes a filter |
+
+`password/forgot` answers **202 for every address**, so it cannot be used to discover which addresses are registered; a completed reset revokes every refresh token for that account.
 
 A rejected **Jira** credential is **502**, never 401 — 401 means only that your own session
 ended. Filter input never reaches a SQL string: it is compiled to an expression tree over a
