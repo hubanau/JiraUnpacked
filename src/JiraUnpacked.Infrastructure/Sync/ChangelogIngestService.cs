@@ -4,6 +4,7 @@ using JiraUnpacked.Domain.Abstractions.Jira;
 using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using JiraUnpacked.Infrastructure.Jira;
 
 namespace JiraUnpacked.Infrastructure.Sync;
 
@@ -84,7 +85,7 @@ public sealed class ChangelogIngestService : IChangelogIngestService
     private async Task<List<string>> AssembleHistoriesJsonAsync(RawIssueSnapshot snap, JiraCredentials creds, CancellationToken ct)
     {
         var result = new List<string>();
-        using var doc = JsonDocument.Parse(snap.Payload);
+        using var doc = JsonDocument.Parse(snap.Payload, JiraJson.Document);
         var root = doc.RootElement;
 
         int total = 0;

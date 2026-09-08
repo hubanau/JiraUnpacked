@@ -5,6 +5,7 @@ using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Domain.Enums;
 using JiraUnpacked.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using JiraUnpacked.Infrastructure.Jira;
 
 namespace JiraUnpacked.Infrastructure.Sync;
 
@@ -43,7 +44,7 @@ public sealed partial class DerivationService : IDerivationService
 
         foreach (var snap in snapshots)
         {
-            using var doc = JsonDocument.Parse(snap.Payload);
+            using var doc = JsonDocument.Parse(snap.Payload, JiraJson.Document);
             var root = doc.RootElement;
             if (!root.TryGetProperty("fields", out var f) || f.ValueKind != JsonValueKind.Object) continue;
 

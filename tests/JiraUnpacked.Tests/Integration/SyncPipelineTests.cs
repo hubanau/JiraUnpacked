@@ -64,6 +64,71 @@ public sealed class SyncPipelineTests : IClassFixture<JiraUnpackedApiFactory>, I
     }
 
     /// <summary>
+    /// Builds an Atlassian-Document-Format-shaped body nested `depth` levels deep: a bulletList
+    /// whose listItem contains another bulletList, and so on. Real ADF nests this way through
+    /// lists inside table cells inside panels.
+    /// </summary>
+    private static object DeeplyNested(int depth) =>
+        depth <= 0
+            ? new { type = "text", text = "bottom" }
+            : new { type = "bulletList", content = new[] { DeeplyNested(depth - 1) } };
+
+    /// <summary>
+    /// One issue with a very deep description must not kill the sync.
+    ///
+    /// System.Text.Json defaults to a maximum nesting depth of 64, and a real project hit it: a
+    /// single issue's ADF body went deeper, JsonDocument.Parse threw, and a 42,897-issue sync died
+    /// 31,800 issues in — three separate runs, all at the same point, because it is a property of
+    /// one document rather than a resource limit.
+    ///
+    /// The assertion is deliberately end-to-end. The payload is parsed three times by three
+    /// different components — the search response, then the stored snapshot by ingest, then again
+    /// by derivation — so raising the limit at the point that threw would only move the failure
+    /// to the next reader.
+    /// </summary>
+    [Fact]
+    public async Task An_issue_nested_deeper_than_the_default_json_limit_still_syncs()
+    {
+        _jira.Given(Request.Create().WithPath("/rest/api/3/myself").UsingGet()).RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { accountId = "a" }));
+        _jira.Given(Request.Create().WithPath("/rest/api/3/project/ACME").UsingGet()).RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { id = "1", key = "ACME", name = "Acme" }));
+        _jira.Given(Request.Create().WithPath("/rest/api/3/search/jql").UsingPost()).RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new
+        {
+            issues = new object[] {
+                new { id = "30001", key = "ACME-DEEP",
+                    fields = new {
+                        summary = "deep", created = "2024-01-01T00:00:00.000+0000", updated = "2024-01-02T00:00:00.000+0000",
+                        status = new { id = "10", name = "Done" },
+                        // 120 levels: comfortably past the 64 default, comfortably under the raised bound.
+                        description = new { type = "doc", version = 1, content = new[] { DeeplyNested(120) } },
+                    },
+                    changelog = new { startAt = 0, maxResults = 100, total = 0, histories = new object[0] } }
+            }
+        }));
+
+        var client = await TestData.AuthedClientAsync(_factory);
+        var conn = (await (await client.PostAsJsonAsync("/api/connections", new { baseUrl = _jira.Url, email = "e@x.com", apiToken = "t" })).Content.ReadFromJsonAsync<ConnectionDto>())!;
+        var project = (await (await client.PostAsJsonAsync($"/api/connections/{conn.Id}/projects", new { projectKey = "ACME", syncIntervalMinutes = 60 })).Content.ReadFromJsonAsync<ProjectDto>())!;
+
+        var resp = await SyncWait.SyncAsync(client, project.Id);
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, resp.StatusCode);
+
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(JiraUnpackedApiFactory.TestConnectionString).Options;
+        await using var db = new AppDbContext(options, new NullCurrentTenant());
+
+        // The run itself succeeded — before the fix this is where the JsonReaderException landed.
+        var run = await db.SyncRuns.IgnoreQueryFilters().FirstAsync(r => r.JiraProjectId == project.Id);
+        Assert.Equal(JiraUnpacked.Domain.Enums.SyncRunStatus.Succeeded, run.Status);
+        Assert.Null(run.Error);
+
+        // Stored by extract, read by ingest, and modelled by derivation — all three.
+        Assert.Equal(1, await db.RawIssueSnapshots.IgnoreQueryFilters().CountAsync(r => r.JiraProjectId == project.Id));
+        Assert.Equal(1, await db.RawChangelogs.IgnoreQueryFilters().CountAsync(r => r.JiraProjectId == project.Id));
+        var issue = await db.Issues.IgnoreQueryFilters().FirstAsync(i => i.JiraProjectId == project.Id);
+        Assert.Equal("ACME-DEEP", issue.JiraKey);
+        Assert.Equal("deep", issue.Summary);
+    }
+
+    /// <summary>
     /// The reported bug, walked exactly as a user hits it: add a connection, add a project, press
     /// Sync. No JQL query is created because the UI offers no way to create one — and the sync used
     /// to return Succeeded with 0 issues and no error, leaving the project permanently empty.

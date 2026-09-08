@@ -53,7 +53,7 @@ public sealed partial class JiraApiClient
 
             if (!resp.IsSuccessStatusCode) return null;
 
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct), JiraJson.Document);
             return doc.RootElement.TryGetProperty("count", out var c) && c.ValueKind == JsonValueKind.Number
                 && c.TryGetInt32(out var count) ? count : null;
         }
@@ -88,7 +88,7 @@ public sealed partial class JiraApiClient
         await EnsureOkAsync(resp, ct);
 
         {
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct), JiraJson.Document);
             var root = doc.RootElement;
 
             var issues = new List<RawIssue>();
