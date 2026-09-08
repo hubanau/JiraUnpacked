@@ -25,8 +25,10 @@ public sealed class DueProjectFinder : IDueProjectFinder
         var now = _clock.UtcNow;
         await using var db = _factory.Create();
 
+        // Every project is a candidate. This used to require at least one JiraQuery, which was the
+        // scheduled half of the same bug: a project with no query of its own is now synced in full
+        // by the orchestrator, so excluding it here would leave it silently never syncing at all.
         var candidates = await db.JiraProjects.IgnoreQueryFilters()
-            .Where(p => db.JiraQueries.IgnoreQueryFilters().Any(q => q.JiraProjectId == p.Id))
             .Select(p => new
             {
                 p.Id,

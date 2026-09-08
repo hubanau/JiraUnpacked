@@ -55,6 +55,11 @@ if (builder.Configuration.GetValue("Sync:SchedulerEnabled", true))
     builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
 }
 
+// Deliberately OUTSIDE the scheduler gate above. That switch turns off the periodic tick; this
+// worker performs runs a user explicitly asked for, and without it "Sync now" would accept work
+// that nothing ever picks up.
+builder.Services.AddHostedService<JiraUnpacked.Api.Sync.SyncQueueWorker>();
+
 var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()!;
 
 // JWT bearer authentication — validates tokens minted by JwtTokenService.

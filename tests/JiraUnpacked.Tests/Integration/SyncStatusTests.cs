@@ -34,7 +34,7 @@ public sealed class SyncStatusTests : IClassFixture<JiraUnpackedApiFactory>, IAs
         var conn = (await (await client.PostAsJsonAsync("/api/connections", new { baseUrl = _jira.Url, email = "e@x.com", apiToken = "t" })).Content.ReadFromJsonAsync<ConnectionDto>())!;
         var project = (await (await client.PostAsJsonAsync($"/api/connections/{conn.Id}/projects", new { projectKey = "ACME", syncIntervalMinutes = 60 })).Content.ReadFromJsonAsync<ProjectDto>())!;
         await client.PostAsJsonAsync($"/api/projects/{project.Id}/queries", new { jql = "project = ACME" });
-        await client.PostAsJsonAsync($"/api/projects/{project.Id}/sync", new { });
+        await SyncWait.SyncAsync(client, project.Id);
 
         var runs = await (await client.GetAsync($"/api/projects/{project.Id}/sync-runs")).Content.ReadFromJsonAsync<List<SyncRunDto>>();
         Assert.NotEmpty(runs!);

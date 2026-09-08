@@ -55,7 +55,7 @@ public sealed class RederiveErrorTests : IClassFixture<JiraUnpackedApiFactory>, 
                 ("i", Guid.NewGuid()), ("t", tenant), ("p", project.Id), ("pay", "123"));
         }
 
-        await client.PostAsJsonAsync($"/api/projects/{project.Id}/rederive", new { });
+        await SyncWait.RederiveAsync(client, project.Id);
 
         var runs = await (await client.GetAsync($"/api/projects/{project.Id}/sync-runs")).Content.ReadFromJsonAsync<List<RunDto>>();
         var rederive = Assert.Single(runs!, r => r.Kind == "Rederive");

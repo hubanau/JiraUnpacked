@@ -12,6 +12,11 @@ export interface SyncRun {
   error: string | null;
   nextRunAt: string | null;
   kind: string;
+  /** Issues the run expects to fetch. Null means unknown — NOT zero: the count call can fail,
+   *  and a rederive fetches nothing at all. A bar must render the two differently. */
+  totalToSync: number | null;
+  /** What a Running run is doing: Counting, Fetching, Changelog, Deriving. Null once it ends. */
+  phase: string | null;
 }
 
 export const listSyncRuns = (projectId: string) =>

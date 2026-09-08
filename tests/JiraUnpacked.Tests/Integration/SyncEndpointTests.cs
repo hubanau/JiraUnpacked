@@ -22,6 +22,13 @@ public sealed class SyncEndpointTests : IClassFixture<JiraUnpackedApiFactory>, I
     private sealed record ProjectDto(Guid Id, Guid JiraConnectionId, string JiraProjectKey, string JiraProjectId, int SyncIntervalMinutes, DateTime CreatedAtUtc);
     private sealed record SyncRunDto(Guid Id, Guid JiraProjectId, string Status, DateTime StartedAt, DateTime? FinishedAt, int IssuesProcessed, string? Error, DateTime? NextRunAt);
 
+    /// <summary>The run as it ended up, read back after SyncWait saw it leave Running.</summary>
+    private static async Task<SyncRunDto> FinishedRunAsync(HttpClient client, Guid projectId, Guid runId)
+    {
+        var runs = await client.GetFromJsonAsync<List<SyncRunDto>>($"/api/projects/{projectId}/sync-runs");
+        return runs!.Single(r => r.Id == runId);
+    }
+
     private void StubValidAndProject()
     {
         _jira.Given(Request.Create().WithPath("/rest/api/3/myself").UsingGet())
@@ -68,9 +75,17 @@ public sealed class SyncEndpointTests : IClassFixture<JiraUnpackedApiFactory>, I
         var (client, projectId) = await ConfiguredProjectAsync();
         StubSearchTwoPages();
 
-        var resp = await client.PostAsJsonAsync($"/api/projects/{projectId}/sync", new { });
-        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-        var run = (await resp.Content.ReadFromJsonAsync<SyncRunDto>())!;
+        var resp = await SyncWait.SyncAsync(client, projectId);
+
+        // The request is ACCEPTED, not completed: it hands the work to the background worker and
+        // returns the Running row to poll. Asserting the eventual result therefore has to read
+        // the run back rather than trust the response body — and asserting both halves is the
+        // point, since "202 with a run that never finishes" would otherwise look like success.
+        Assert.Equal(HttpStatusCode.Accepted, resp.StatusCode);
+        var accepted = (await resp.Content.ReadFromJsonAsync<SyncRunDto>())!;
+        Assert.Equal("Running", accepted.Status);
+
+        var run = await FinishedRunAsync(client, projectId, accepted.Id);
         Assert.Equal("Succeeded", run.Status);
         Assert.Equal(3, run.IssuesProcessed);
         Assert.NotNull(run.NextRunAt);
@@ -82,8 +97,8 @@ public sealed class SyncEndpointTests : IClassFixture<JiraUnpackedApiFactory>, I
     {
         var (client, projectId) = await ConfiguredProjectAsync();
         StubSearchTwoPages();
-        await client.PostAsJsonAsync($"/api/projects/{projectId}/sync", new { });
-        await client.PostAsJsonAsync($"/api/projects/{projectId}/sync", new { });
+        await SyncWait.SyncAsync(client, projectId);
+        await SyncWait.SyncAsync(client, projectId);
         Assert.Equal(3, await RawCountForTenantAsync(projectId)); // upsert, not duplicate
     }
 
@@ -92,13 +107,13 @@ public sealed class SyncEndpointTests : IClassFixture<JiraUnpackedApiFactory>, I
     {
         var (client, projectId) = await ConfiguredProjectAsync();
         StubSearchTwoPages();
-        await client.PostAsJsonAsync($"/api/projects/{projectId}/sync", new { });
+        await SyncWait.SyncAsync(client, projectId);
         _jira.Reset();
         StubValidAndProject();
         _jira.Given(Request.Create().WithPath("/rest/api/3/search/jql").UsingPost())
              .RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { issues = new object[0] }));
 
-        await client.PostAsJsonAsync($"/api/projects/{projectId}/sync", new { });
+        await SyncWait.SyncAsync(client, projectId);
 
         // The request body is JSON-escaped by System.Text.Json's default (HTML-safe) encoder,
         // so ">" is serialized as ">" on the wire; assert on the decoded "jql" field
@@ -118,8 +133,10 @@ public sealed class SyncEndpointTests : IClassFixture<JiraUnpackedApiFactory>, I
         _jira.Given(Request.Create().WithPath("/rest/api/3/search/jql").UsingPost())
              .RespondWith(Response.Create().WithStatusCode(500));
 
-        var resp = await client.PostAsJsonAsync($"/api/projects/{projectId}/sync", new { });
-        var run = (await resp.Content.ReadFromJsonAsync<SyncRunDto>())!;
+        var resp = await SyncWait.SyncAsync(client, projectId);
+        var accepted = (await resp.Content.ReadFromJsonAsync<SyncRunDto>())!;
+
+        var run = await FinishedRunAsync(client, projectId, accepted.Id);
         Assert.Equal("Failed", run.Status);
         Assert.Equal(0, await RawCountForTenantAsync(projectId));
     }
@@ -128,7 +145,7 @@ public sealed class SyncEndpointTests : IClassFixture<JiraUnpackedApiFactory>, I
     public async Task Sync_unknown_project_returns_404()
     {
         var client = await TestData.AuthedClientAsync(_factory);
-        var resp = await client.PostAsJsonAsync($"/api/projects/{Guid.NewGuid()}/sync", new { });
+        var resp = await SyncWait.SyncAsync(client, Guid.NewGuid());
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
 }

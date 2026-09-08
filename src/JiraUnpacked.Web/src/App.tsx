@@ -12,6 +12,7 @@ import IssueDetail from './features/issues/IssueDetail';
 import { IssueListRoute } from './features/issues/IssueList';
 import MetricsPage from './features/insight/MetricsPage';
 import ChecksPage from './features/insight/ChecksPage';
+import ChurnPage from './features/insight/ChurnPage';
 import AdminPage from './features/admin/AdminPage';
 import Home from './routes/Home';
 import Login from './routes/Login';
@@ -48,6 +49,7 @@ export default function App() {
                 <Route path="/projects/:id/issues/:jiraIssueId" element={<IssueDetail />} />
                 <Route path="/projects/:id/metrics" element={<MetricsPage />} />
                 <Route path="/projects/:id/checks" element={<ChecksPage />} />
+                <Route path="/projects/:id/churn" element={<ChurnPage />} />
                 <Route path="/admin" element={<AdminPage />} />
               </Route>
             </Route>

@@ -9,18 +9,20 @@ import { queryKeys } from '../../api/queryKeys';
 import { FieldMappingsEditor } from '../config/FieldMappingsEditor';
 import { ReadinessChecklist } from '../config/ReadinessChecklist';
 import { deriveReadiness } from '../config/readiness';
+import { QueriesEditor } from '../config/QueriesEditor';
 import { StatusSemanticsEditor } from '../config/StatusSemanticsEditor';
 import { SyncControls } from '../sync/SyncControls';
 import { SyncRunTable } from '../sync/SyncRunTable';
 import { SyncIntervalField } from './SyncIntervalField';
 
-type TabKey = 'overview' | 'fields' | 'statuses';
+type TabKey = 'overview' | 'queries' | 'fields' | 'statuses';
 
 // CF4 fills Fields and Statuses with the mapping editors; CF5 fills
 // Overview with sync controls and run history. The tab strip itself is
 // local state (no router nesting needed).
 const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
   { key: 'overview', label: 'Overview' },
+  { key: 'queries', label: 'Queries' },
   { key: 'fields', label: 'Fields' },
   { key: 'statuses', label: 'Statuses' },
 ];
@@ -113,6 +115,12 @@ export default function ProjectDetail() {
             >
               Checks
             </Link>
+            <Link
+              to={`/projects/${id}/churn`}
+              className="text-sm font-medium text-[var(--ju-primary)] hover:underline"
+            >
+              Churn
+            </Link>
           </div>
         </div>
 
@@ -177,6 +185,9 @@ export default function ProjectDetail() {
               <SyncControls projectId={id} />
               <SyncRunTable projectId={id} />
             </div>
+          )}
+          {activeTab === 'queries' && (
+            <QueriesEditor projectId={id} projectKey={project.jiraProjectKey} />
           )}
           {activeTab === 'fields' && (
             <FieldMappingsEditor projectId={id} connectionId={project.jiraConnectionId} />

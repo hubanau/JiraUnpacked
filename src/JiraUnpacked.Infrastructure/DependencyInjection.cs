@@ -91,6 +91,11 @@ public static class DependencyInjection
         services.AddSingleton<IPrivilegedDbContextFactory, PrivilegedDbContextFactory>();
         services.AddScoped<IDueProjectFinder, DueProjectFinder>();
         services.AddScoped<ISyncOrchestrator, SyncOrchestrator>();
+
+        // The request enqueues; SyncQueueWorker (registered by the host, which is where hosted
+        // services belong) performs the run under the process lifetime so a closed browser
+        // cannot cancel it.
+        services.AddSingleton<ISyncQueue, SyncQueue>();
         services.AddScoped<ISyncRunQuery, SyncRunQuery>();
         services.AddScoped<IChangelogIngestService, ChangelogIngestService>();
         services.AddScoped<IDerivationService, DerivationService>();
@@ -107,6 +112,7 @@ public static class DependencyInjection
         // ICurrentTenant rather than from any caller.
         services.AddSingleton<IReportCache, ReportCache>();
         services.AddScoped<IMetricsQueryService, MetricsQueryService>();
+        services.AddScoped<IFieldChurnQueryService, FieldChurnQueryService>();
         services.AddScoped<IGapCheck, OpenEpicAllChildrenDoneCheck>();
         services.AddScoped<IGapCheck, DoneEpicOpenChildrenCheck>();
         services.AddScoped<IGapCheckService, GapCheckRunner>();

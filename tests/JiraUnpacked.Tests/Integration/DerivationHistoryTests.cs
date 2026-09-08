@@ -75,8 +75,8 @@ public sealed class DerivationHistoryTests : IClassFixture<JiraUnpackedApiFactor
             await Exec(conn2, @"INSERT INTO ""RawChangelog""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""Payload"",""FetchedAt"") VALUES (@i,@t,@p,'10002',@j::jsonb,now())", ("i", Guid.NewGuid()), ("t", tenant), ("p", project.Id), ("j", cl));
         }
 
-        await client.PostAsJsonAsync($"/api/projects/{project.Id}/rederive", new { });
-        await client.PostAsJsonAsync($"/api/projects/{project.Id}/rederive", new { }); // append-only history must stay idempotent
+        await SyncWait.RederiveAsync(client, project.Id);
+        await SyncWait.RederiveAsync(client, project.Id); // append-only history must stay idempotent
 
         await using var vdb = Privileged();
         var history = await vdb.IssueChangeHistory.IgnoreQueryFilters().Where(h => h.JiraProjectId == project.Id).ToListAsync();

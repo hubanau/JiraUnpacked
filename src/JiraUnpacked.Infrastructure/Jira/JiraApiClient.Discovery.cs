@@ -27,7 +27,7 @@ public sealed partial class JiraApiClient
         using var resp = await SendWithRetryAsync(
             () => Build(HttpMethod.Get, creds, $"/rest/api/3/project/{Uri.EscapeDataString(projectKey)}"), ct);
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;
-        EnsureOk(resp);
+        await EnsureOkAsync(resp, ct);
         var p = (await resp.Content.ReadFromJsonAsync<ProjectDto>(Json, ct))!;
         return new JiraProjectSummary(p.Id, p.Key, p.Name);
     }
@@ -51,7 +51,7 @@ public sealed partial class JiraApiClient
             req.Content = JsonContent.Create(new { queries = new[] { jql } }, options: Json);
             return req;
         }, ct);
-        EnsureOk(resp);
+        await EnsureOkAsync(resp, ct);
         var dto = (await resp.Content.ReadFromJsonAsync<JqlParseDto>(Json, ct))!;
         var errors = dto.Queries.FirstOrDefault()?.Errors ?? new List<string>();
         return new JqlValidationResult(errors.Count == 0, errors);
@@ -60,7 +60,7 @@ public sealed partial class JiraApiClient
     private async Task<T> GetAsync<T>(JiraCredentials creds, string path, CancellationToken ct)
     {
         using var resp = await SendWithRetryAsync(() => Build(HttpMethod.Get, creds, path), ct);
-        EnsureOk(resp);
+        await EnsureOkAsync(resp, ct);
         return (await resp.Content.ReadFromJsonAsync<T>(Json, ct))!;
     }
 
@@ -117,17 +117,80 @@ public sealed partial class JiraApiClient
 
     private static TimeSpan Backoff(int attempt) => TimeSpan.FromSeconds(Math.Pow(2, attempt));
 
-    private static void EnsureOk(HttpResponseMessage resp)
+    private static async Task EnsureOkAsync(HttpResponseMessage resp, CancellationToken ct)
     {
         if (resp.IsSuccessStatusCode) return;
+
+        // "Jira returned 400." is unactionable, and a 400 is the one status where Jira always
+        // explains itself — a malformed request body or a rejected JQL both arrive this way, and
+        // the two are indistinguishable without the body. Only the credential status stays
+        // deliberately terse: nothing Jira says about an auth failure helps, and this message is
+        // persisted to a tenant-readable SyncRun.Error.
+        var detail = await ReadErrorDetailAsync(resp, ct);
+
         throw resp.StatusCode switch
         {
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden =>
                 new JiraApiException(JiraErrorKind.Unauthorized, "Jira rejected the credentials."),
             HttpStatusCode.NotFound => new JiraApiException(JiraErrorKind.NotFound, "Jira resource not found."),
             HttpStatusCode.TooManyRequests => new JiraApiException(JiraErrorKind.RateLimited, "Jira rate limit hit."),
-            _ => new JiraApiException(JiraErrorKind.Upstream, $"Jira returned {(int)resp.StatusCode}.")
+            _ => new JiraApiException(JiraErrorKind.Upstream,
+                detail is null
+                    ? $"Jira returned {(int)resp.StatusCode}."
+                    : $"Jira returned {(int)resp.StatusCode}: {detail}")
         };
+    }
+
+    /// <summary>
+    /// Jira's own words for a failure, as one bounded single-line string, or null if it said
+    /// nothing usable. Never the request: the body we send carries the JQL, and the credentials
+    /// live in the Authorization header, so nothing secret can arrive here — but the result is
+    /// still capped, because it lands in a database column a user reads.
+    /// </summary>
+    private static async Task<string?> ReadErrorDetailAsync(HttpResponseMessage resp, CancellationToken ct)
+    {
+        const int MaxDetailChars = 400;
+        try
+        {
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            if (string.IsNullOrWhiteSpace(body)) return null;
+
+            var messages = new List<string>();
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    // Jira uses errorMessages[] for request-level problems and errors{} for
+                    // field-level ones; a malformed body can produce either.
+                    if (doc.RootElement.TryGetProperty("errorMessages", out var arr)
+                        && arr.ValueKind == JsonValueKind.Array)
+                        foreach (var m in arr.EnumerateArray())
+                            if (m.ValueKind == JsonValueKind.String) messages.Add(m.GetString()!);
+
+                    if (doc.RootElement.TryGetProperty("errors", out var errs)
+                        && errs.ValueKind == JsonValueKind.Object)
+                        foreach (var p in errs.EnumerateObject())
+                            if (p.Value.ValueKind == JsonValueKind.String)
+                                messages.Add($"{p.Name}: {p.Value.GetString()}");
+                }
+            }
+            catch (JsonException)
+            {
+                // Not JSON — a proxy or gateway in front of Jira. The raw text is still the
+                // best clue available, so fall through to it rather than dropping it.
+            }
+
+            var detail = messages.Count > 0 ? string.Join("; ", messages) : body;
+            detail = string.Join(" ", detail.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            if (detail.Length == 0) return null;
+            return detail.Length <= MaxDetailChars ? detail : detail[..MaxDetailChars] + "…";
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or OperationCanceledException)
+        {
+            // The failure being reported matters more than a failure to read its explanation.
+            return null;
+        }
     }
 
     private sealed record FieldDto([property: JsonPropertyName("id")] string Id,
