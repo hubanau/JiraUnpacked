@@ -201,6 +201,16 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                     // rather than only true once it ends.
                     run.IssuesProcessed = processed;
                     await _db.SaveChangesAsync(ct);
+
+                    // Let the page go. Without this the context accumulates every snapshot for
+                    // the whole run — EF keeps each entity AND an original-values copy for change
+                    // detection — so a large project drags hundreds of megabytes of issue JSON
+                    // through to the end and change detection re-scans all of it on every page.
+                    // Two whole-project syncs died at ~31.7k issues before this was bounded.
+                    // Only the snapshots are detached: the run itself must stay tracked, or the
+                    // progress and completion writes below would silently do nothing.
+                    DetachAll<RawIssueSnapshot>();
+
                     token = page.NextPageToken;
                 } while (token is not null);
 
@@ -302,6 +312,16 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     }
 
     /// <summary>
+    /// Drops tracked entities of one type, leaving everything else — notably the SyncRun — tracked.
+    /// ChangeTracker.Clear() would be simpler and wrong: it would detach the run too.
+    /// </summary>
+    private void DetachAll<T>() where T : class
+    {
+        foreach (var entry in _db.ChangeTracker.Entries<T>().ToList())
+            entry.State = EntityState.Detached;
+    }
+
+    /// <summary>
     /// Publishes the phase immediately, so a poll during a long step sees what is happening
     /// rather than the previous step's label.
     /// </summary>
@@ -355,7 +375,13 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         else
         {
             _logger.LogError(ex, "Unexpected failure syncing project {ProjectId}", projectId);
-            run.Error = "Sync failed unexpectedly.";
+
+            // The TYPE, not the message. A type name carries no tenant data, no SQL and no
+            // connection detail, so it is safe in a column a user reads — and it is the
+            // difference between "something went wrong" and a diagnosis. The message stays
+            // server-side. This exists because the only record of one such failure was a
+            // container log that was gone by the time anyone asked why.
+            run.Error = $"Sync failed unexpectedly ({ex.GetType().Name}).";
         }
     }
 
