@@ -15,7 +15,13 @@ namespace JiraUnpacked.Api.Controllers;
 public sealed class MetricsController : ControllerBase
 {
     private readonly IMetricsQueryService _metrics;
-    public MetricsController(IMetricsQueryService metrics) => _metrics = metrics;
+    private readonly IFieldChurnQueryService _churn;
+
+    public MetricsController(IMetricsQueryService metrics, IFieldChurnQueryService churn)
+    {
+        _metrics = metrics;
+        _churn = churn;
+    }
 
     /// <summary>Null Report + null Error => 404; non-null Error => 400; otherwise 200.</summary>
     private IActionResult Respond<T>(ReportResult<T> result) where T : class =>
@@ -101,4 +107,31 @@ public sealed class MetricsController : ControllerBase
         Guid projectId, PagedFilterRequest request, CancellationToken ct = default) =>
         Respond(await _metrics.GetStatusAgingAsync(
             projectId, request.Page, request.PageSize, request.ToFilter(), ct));
+
+    /// <summary>
+    /// Issues whose chosen changelog field kept changing, worst first — "which stories keep
+    /// getting pushed to the next sprint". JQL cannot express this: it has a CHANGED predicate
+    /// but no way to count changes, so the answer only exists in the ingested changelog.
+    ///
+    /// statusClasses repeats (?statusClasses=Active&amp;statusClasses=Other) and defaults to
+    /// Active alone.
+    /// </summary>
+    [HttpGet("api/projects/{projectId:guid}/metrics/field-churn")]
+    public async Task<IActionResult> FieldChurn(
+        Guid projectId,
+        [FromQuery] string? field = null,
+        [FromQuery] int minChanges = 2,
+        [FromQuery] string[]? statusClasses = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        CancellationToken ct = default) =>
+        Respond(await _churn.GetFieldChurnAsync(
+            projectId, field, minChanges, statusClasses, page, pageSize, null, ct));
+
+    [HttpPost("api/projects/{projectId:guid}/metrics/field-churn")]
+    public async Task<IActionResult> FieldChurnFiltered(
+        Guid projectId, FieldChurnFilterRequest request, CancellationToken ct = default) =>
+        Respond(await _churn.GetFieldChurnAsync(
+            projectId, request.Field, request.MinChanges, request.StatusClasses,
+            request.Page, request.PageSize, request.ToFilter(), ct));
 }

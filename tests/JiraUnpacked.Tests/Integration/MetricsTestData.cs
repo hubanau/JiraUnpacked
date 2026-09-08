@@ -120,6 +120,22 @@ internal static class MetricsTestData
             ("k", jiraKey), ("s", summary), ("st", statusId), ("sp", storyPoints), ("c", createdAt));
     }
 
+    /// <summary>
+    /// Seeds one changelog entry for an arbitrary field. The derivation stores every field Jira
+    /// reports under its own name — "Sprint", "assignee", "Story Points" — so field-churn
+    /// fixtures need the field to be a parameter rather than hardcoded to status.
+    /// </summary>
+    internal static async Task SeedFieldChangeAsync(
+        SeedContext ctx, string jiraIssueId, string historyId, string field,
+        string? from, string? to, DateTime changedAt)
+    {
+        await using var conn = Conn();
+        await conn.OpenAsync();
+        await Exec(conn, @"INSERT INTO ""IssueChangeHistory""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""JiraHistoryId"",""Field"",""FromValue"",""ToValue"",""Author"",""ChangedAt"") VALUES (@i,@t,@p,@jid,@h,@fld,@f,@to,'Alice',@at)",
+            ("i", Guid.NewGuid()), ("t", ctx.Tenant), ("p", ctx.ProjectId), ("jid", jiraIssueId),
+            ("h", historyId), ("fld", field), ("f", from), ("to", to), ("at", changedAt));
+    }
+
     /// <summary>Seeds one status transition (Field = "status", as the derivation stores it).</summary>
     internal static async Task SeedStatusChangeAsync(
         SeedContext ctx, string jiraIssueId, string historyId, string? from, string? to, DateTime changedAt)

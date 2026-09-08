@@ -39,3 +39,15 @@ public sealed record PagedFilterRequest(
 {
     public ReportFilter ToFilter() => new(Conditions, Filter);
 }
+
+/// <summary>
+/// Body of the filtered field-churn POST. The field, threshold and status classes are the
+/// report's own knobs; Conditions/Filter narrow the population the way they do everywhere else.
+/// </summary>
+public sealed record FieldChurnFilterRequest(
+    List<FilterCondition>? Conditions, FilterGroup? Filter,
+    string? Field = null, int MinChanges = 2, List<string>? StatusClasses = null,
+    int Page = 1, int PageSize = 50)
+{
+    public ReportFilter ToFilter() => new(Conditions, Filter);
+}
