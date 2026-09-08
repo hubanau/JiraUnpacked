@@ -30,6 +30,18 @@ public class SyncOrchestratorTests
         /// <summary>Every JQL the orchestrator asked for, in order. Empty means it never called Jira.</summary>
         public List<string> SeenJql { get; } = new();
 
+        /// <summary>What the count endpoint returns. Null models Jira declining to say.</summary>
+        public int? ApproximateCount { get; set; }
+
+        /// <summary>Every JQL the orchestrator asked for a count of.</summary>
+        public List<string> CountedJql { get; } = new();
+
+        public Task<int?> ApproximateCountAsync(JiraCredentials creds, string jql, CancellationToken ct = default)
+        {
+            CountedJql.Add(jql);
+            return Task.FromResult(ApproximateCount);
+        }
+
         public Task<SearchPage> SearchIssuesPageAsync(JiraCredentials creds, string jql, string? nextPageToken, CancellationToken ct = default)
         {
             SeenJql.Add(jql);
@@ -349,6 +361,125 @@ public class SyncOrchestratorTests
         }
 
         Assert.All(jira.SeenJql, j => Assert.Contains("updated >= \"2026-03-01 09:30\"", j));
+    }
+
+    /// <summary>
+    /// Progress has to be readable WHILE the run is going, which is the whole point of it. The
+    /// counted total and the per-page count are both published before the run ends; a value only
+    /// written at the finish would leave a bar at zero for the entire sync and then jump.
+    /// </summary>
+    [Fact]
+    public async Task Progress_is_published_during_the_run_not_only_at_the_end()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: false);
+
+        // Two pages of two issues. The observer reads the run row as the orchestrator works.
+        var observed = new List<(int Processed, int? Total, string? Phase)>();
+        var pages = new Queue<SearchPage>(new[]
+        {
+            new SearchPage(new[] { new RawIssue("1", "{}"), new RawIssue("2", "{}") }, "tok"),
+            new SearchPage(new[] { new RawIssue("3", "{}"), new RawIssue("4", "{}") }, null),
+        });
+
+        await using var db = new AppDbContext(options, tenant);
+
+        var jira = new StubJiraClient(() =>
+        {
+            // Read through a SEPARATE context: the orchestrator's own tracked entity would report
+            // in-memory values that were never saved, which would prove nothing about what a
+            // polling client can actually see.
+            using var probe = new AppDbContext(options, tenant);
+            var r = probe.SyncRuns.Single(x => x.JiraProjectId == projectId);
+            observed.Add((r.IssuesProcessed, r.TotalToSync, r.Phase));
+            return Task.FromResult(pages.Dequeue());
+        })
+        { ApproximateCount = 4 };
+
+        var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+
+        var result = await orchestrator.RunProjectAsync(projectId);
+
+        // Before page 1 the total is already known and the phase says what is happening.
+        Assert.Equal(2, observed.Count);
+        Assert.Equal((0, 4, "Fetching"), observed[0]);
+        // Before page 2, page 1's two issues are already visible to a poller.
+        Assert.Equal((2, 4, "Fetching"), observed[1]);
+
+        Assert.Equal(4, result.Run!.IssuesProcessed);
+        Assert.Equal(4, result.Run.TotalToSync);
+        Assert.Null(result.Run.Phase);      // a finished run is doing nothing
+    }
+
+    /// <summary>
+    /// The count is drawn against the SAME JQL that is fetched, watermark clause included.
+    /// Counting the unnarrowed query would give an incremental sync a denominator from a full
+    /// pull, and the bar would stall at a few percent while the run was in fact finished.
+    /// </summary>
+    [Fact]
+    public async Task The_total_counts_the_same_query_that_is_fetched()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: false);
+
+        var jira = new StubJiraClient(() =>
+            Task.FromResult(new SearchPage(new[] { new RawIssue("10001", "{}") }, null)))
+        { ApproximateCount = 3 };
+
+        // A real first run establishes the scope, so the second is genuinely incremental.
+        await using (var db1 = new AppDbContext(options, tenant))
+        {
+            var o1 = new SyncOrchestrator(db1, jira, new PassthroughProtector(),
+                new FakeClock(new DateTime(2026, 3, 1, 9, 30, 0, DateTimeKind.Utc)),
+                new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+            await o1.RunProjectAsync(projectId);
+        }
+
+        jira.SeenJql.Clear();
+        jira.CountedJql.Clear();
+
+        await using (var db2 = new AppDbContext(options, tenant))
+        {
+            var o2 = new SyncOrchestrator(db2, jira, new PassthroughProtector(),
+                new FakeClock(new DateTime(2026, 3, 2, 9, 0, 0, DateTimeKind.Utc)),
+                new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+            await o2.RunProjectAsync(projectId);
+        }
+
+        Assert.Equal(new[] { "(project = \"ACME\") AND updated >= \"2026-03-01 09:30\"" }, jira.CountedJql);
+        Assert.Equal(jira.SeenJql, jira.CountedJql);
+    }
+
+    /// <summary>
+    /// A count Jira will not give must cost the bar its denominator and nothing else. Failing the
+    /// sync because the progress display could not be drawn would be the tail wagging the dog.
+    /// </summary>
+    [Fact]
+    public async Task An_unavailable_count_leaves_the_total_unknown_and_the_sync_fine()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: false);
+
+        var jira = new StubJiraClient(() =>
+            Task.FromResult(new SearchPage(new[] { new RawIssue("10001", "{}") }, null)))
+        { ApproximateCount = null };
+
+        await using var db = new AppDbContext(options, tenant);
+        var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+
+        var result = await orchestrator.RunProjectAsync(projectId);
+
+        Assert.Equal("Succeeded", result.Run!.Status);
+        Assert.Equal(1, result.Run.IssuesProcessed);
+        Assert.Null(result.Run.TotalToSync);   // unknown, NOT zero
     }
 
     /// <summary>

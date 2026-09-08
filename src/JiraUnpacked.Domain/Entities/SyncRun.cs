@@ -11,6 +11,20 @@ public sealed class SyncRun : ITenantOwned
     public SyncRunStatus Status { get; set; }
     public SyncRunKind Kind { get; set; }
     public int IssuesProcessed { get; set; }
+
+    /// <summary>
+    /// How many issues the run expects to fetch, from Jira's approximate count. Null means
+    /// unknown — the count call failed, or this is a Rederive, which fetches nothing. Null and 0
+    /// are different answers and a progress bar must not conflate them.
+    /// </summary>
+    public int? TotalToSync { get; set; }
+
+    /// <summary>
+    /// What the run is doing right now, for the progress display. Null once the run is over.
+    /// Present because extract is only the first of three phases: without it a bar reaches 100%
+    /// and then appears to hang through changelog ingest and derivation.
+    /// </summary>
+    public string? Phase { get; set; }
     public string? Error { get; set; }
     public DateTime? NextRunAt { get; set; }
 
