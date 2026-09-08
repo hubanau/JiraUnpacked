@@ -60,6 +60,9 @@ public sealed class RederiveErrorTests : IClassFixture<JiraUnpackedApiFactory>, 
         var runs = await (await client.GetAsync($"/api/projects/{project.Id}/sync-runs")).Content.ReadFromJsonAsync<List<RunDto>>();
         var rederive = Assert.Single(runs!, r => r.Kind == "Rederive");
         Assert.Equal("Failed", rederive.Status);
-        Assert.Equal("Sync failed unexpectedly.", rederive.Error);   // generic, not the raw JsonException text
+        // Names the exception TYPE and nothing else: enough to diagnose, while the message —
+        // which for a JsonException quotes the malformed payload — stays server-side.
+        Assert.Equal("Sync failed unexpectedly (InvalidOperationException).", rederive.Error);
+        Assert.DoesNotContain("{", rederive.Error);
     }
 }

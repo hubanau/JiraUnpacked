@@ -9,6 +9,12 @@ namespace JiraUnpacked.Infrastructure.Sync;
 
 public sealed class ChangelogIngestService : IChangelogIngestService
 {
+    /// <summary>
+    /// Issues per batch. Small enough that a batch's payloads are a bounded cost, large enough
+    /// that the per-batch round trips stay negligible against the work they do.
+    /// </summary>
+    private const int BatchSize = 250;
+
     private readonly AppDbContext _db;
     private readonly IJiraApiClient _jira;
     private readonly IClock _clock;
@@ -18,9 +24,34 @@ public sealed class ChangelogIngestService : IChangelogIngestService
 
     public async Task IngestProjectAsync(Guid projectId, JiraCredentials creds, CancellationToken ct = default)
     {
-        var snapshots = await _db.RawIssueSnapshots.Where(r => r.JiraProjectId == projectId).ToListAsync(ct);
+        // Ids only. Loading the snapshot ENTITIES for a whole project pulls every issue payload
+        // into memory at once — hundreds of megabytes on a large project, on top of whatever the
+        // extract phase just did — so the payloads are fetched a batch at a time below.
+        var snapshotIds = await _db.RawIssueSnapshots
+            .Where(r => r.JiraProjectId == projectId)
+            .Select(r => r.Id)
+            .ToListAsync(ct);
+
+        foreach (var batch in snapshotIds.Chunk(BatchSize))
+        {
+            await IngestBatchAsync(projectId, batch, creds, ct);
+        }
+    }
+
+    /// <summary>
+    /// One batch, end to end: load the payloads, write their changelogs, save, then let the whole
+    /// batch go. Keeping the context clean between batches is what bounds the memory this phase
+    /// uses, and what stops change detection re-scanning every issue already processed.
+    /// </summary>
+    private async Task IngestBatchAsync(
+        Guid projectId, IReadOnlyList<Guid> ids, JiraCredentials creds, CancellationToken ct)
+    {
+        var snapshots = await _db.RawIssueSnapshots.Where(r => ids.Contains(r.Id)).ToListAsync(ct);
+        var jiraIds = snapshots.Select(s => s.JiraIssueId).ToList();
+
+        // Scoped to this batch rather than the whole project, for the same reason.
         var existingByJiraId = await _db.RawChangelogs
-            .Where(x => x.JiraProjectId == projectId)
+            .Where(x => x.JiraProjectId == projectId && jiraIds.Contains(x.JiraIssueId))
             .ToDictionaryAsync(x => x.JiraIssueId, ct);
 
         foreach (var snap in snapshots)
@@ -41,7 +72,12 @@ public sealed class ChangelogIngestService : IChangelogIngestService
                 });
             }
         }
-        await _db.SaveChangesAsync(ct);   // hoisted out of the loop — one save per project
+
+        await _db.SaveChangesAsync(ct);   // one save per batch
+
+        foreach (var entry in _db.ChangeTracker.Entries().ToList())
+            if (entry.Entity is RawIssueSnapshot or RawChangelog)
+                entry.State = EntityState.Detached;
     }
 
     // Returns each history entry as a raw JSON string, from the embedded changelog if complete, else by paging.
