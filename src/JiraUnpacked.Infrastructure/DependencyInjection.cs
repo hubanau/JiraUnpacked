@@ -110,6 +110,7 @@ public static class DependencyInjection
         // ICurrentTenant rather than from any caller.
         services.AddSingleton<IReportCache, ReportCache>();
         services.AddScoped<IMetricsQueryService, MetricsQueryService>();
+        services.AddScoped<IFieldChurnQueryService, FieldChurnQueryService>();
         services.AddScoped<IGapCheck, OpenEpicAllChildrenDoneCheck>();
         services.AddScoped<IGapCheck, DoneEpicOpenChildrenCheck>();
         services.AddScoped<IGapCheckService, GapCheckRunner>();

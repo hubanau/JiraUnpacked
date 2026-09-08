@@ -99,25 +99,6 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         var projectId = project.Id;
         try
         {
-            var watermark = await _db.SyncRuns
-                .Where(r => r.JiraProjectId == projectId && r.Status == SyncRunStatus.Succeeded && r.Kind == SyncRunKind.Sync)
-                .MaxAsync(r => (DateTime?)r.StartedAt, ct);
-
-            // An incremental pull is only meaningful when there is a baseline to be incremental
-            // FROM. If the project holds no snapshot at all, every "successful" run behind that
-            // watermark stored nothing — the state this whole-project default exists to escape —
-            // and honouring it would ask Jira only for issues changed since a sync that never
-            // happened, leaving the project permanently empty. Start over instead.
-            if (watermark is not null &&
-                !await _db.RawIssueSnapshots.AnyAsync(r => r.JiraProjectId == projectId, ct))
-            {
-                _logger.LogWarning(
-                    "Sync {ProjectKey} ({ProjectId}): ignoring watermark {Watermark} because the project holds no "
-                    + "stored issues — there is nothing to be incremental from. Falling back to a full pull.",
-                    project.JiraProjectKey, projectId, watermark.Value.ToString("o"));
-                watermark = null;
-            }
-
             var conn = await _db.JiraConnections.FirstOrDefaultAsync(c => c.Id == project.JiraConnectionId, ct)
                        ?? throw new InvalidOperationException("Connection not found for project.");
             var creds = new JiraCredentials(conn.BaseUrl, conn.Email, _protector.Unprotect(conn.ApiTokenEncrypted));
@@ -133,17 +114,57 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             var wholeProject = queries.Count == 0;
             if (wholeProject) queries.Add(WholeProjectJql(project.JiraProjectKey));
 
+            // The scope must be known BEFORE the watermark is chosen, because the watermark is
+            // only valid for the scope that produced it.
+            var fingerprint = ScopeFingerprint(queries);
+
+            // Only a run over THIS scope may seed the incremental clause. A run says "everything in
+            // the scope I fetched is current as of then" — it says nothing about a scope that has
+            // never been fetched, so after the queries change the pull must start clean. Runs
+            // predating the column carry a null fingerprint and match nothing, which is intended:
+            // among them are the silent no-ops that fetched nothing at all.
+            var watermark = await _db.SyncRuns
+                .Where(r => r.JiraProjectId == projectId
+                            && r.Status == SyncRunStatus.Succeeded
+                            && r.Kind == SyncRunKind.Sync
+                            && r.ScopeFingerprint == fingerprint)
+                .MaxAsync(r => (DateTime?)r.StartedAt, ct);
+
+            // Belt and braces for a scope whose data went away underneath it — retention, an
+            // erasure, a manual delete. There is then no baseline to be incremental from, whatever
+            // the run history claims.
+            if (watermark is not null &&
+                !await _db.RawIssueSnapshots.AnyAsync(r => r.JiraProjectId == projectId, ct))
+            {
+                _logger.LogWarning(
+                    "Sync {ProjectKey} ({ProjectId}): ignoring watermark {Watermark} because the project holds no "
+                    + "stored issues — there is nothing to be incremental from. Falling back to a full pull.",
+                    project.JiraProjectKey, projectId, watermark.Value.ToString("o"));
+                watermark = null;
+            }
+
+            run.ScopeFingerprint = fingerprint;
+
             _logger.LogInformation(
-                "Sync starting for {ProjectKey} ({ProjectId}): {QueryCount} query(ies), wholeProjectDefault={WholeProject}, watermark={Watermark}.",
-                project.JiraProjectKey, projectId, queries.Count, wholeProject,
-                watermark?.ToString("o") ?? "none (full pull)");
+                "Sync starting for {ProjectKey} ({ProjectId}): {QueryCount} query(ies), wholeProjectDefault={WholeProject}, "
+                + "scope={Fingerprint}, watermark={Watermark}.",
+                project.JiraProjectKey, projectId, queries.Count, wholeProject, fingerprint,
+                watermark?.ToString("o") ?? "none (full pull of this scope)");
+
+            // The JQL actually sent, resolved once so the count and the fetch cannot disagree.
+            var effective = queries
+                .Select(q => watermark is null
+                    ? q
+                    : $"({q}) AND updated >= \"{watermark.Value:yyyy-MM-dd HH:mm}\"")
+                .ToList();
+
+            await SetPhaseAsync(run, SyncPhase.Counting, ct);
+            run.TotalToSync = await CountScopeAsync(creds, effective, ct);
+            await SetPhaseAsync(run, SyncPhase.Fetching, ct);
 
             var processed = 0;
-            foreach (var query in queries)
+            foreach (var jql in effective)
             {
-                var jql = watermark is null
-                    ? query
-                    : $"({query}) AND updated >= \"{watermark.Value:yyyy-MM-dd HH:mm}\"";
 
                 var fetched = 0;
                 var pages = 0;
@@ -175,6 +196,10 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                         }
                         processed++;
                     }
+                    // Progress rides along on the save this loop already does, so a visible bar
+                    // costs no extra round trip. IssuesProcessed is therefore live during the run
+                    // rather than only true once it ends.
+                    run.IssuesProcessed = processed;
                     await _db.SaveChangesAsync(ct);
                     token = page.NextPageToken;
                 } while (token is not null);
@@ -188,7 +213,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             }
 
             // Transform: ingest the full changelog to raw, then derive the modeled tables (Jira-free).
+            // Both are phases of their own because they can outlast the fetch on a large project,
+            // and a bar that sat at 100% through them would read as a hang.
+            await SetPhaseAsync(run, SyncPhase.Changelog, ct);
             await _ingest.IngestProjectAsync(projectId, creds, ct);
+
+            await SetPhaseAsync(run, SyncPhase.Deriving, ct);
             await _derivation.DeriveProjectAsync(projectId, ct);
 
             // Counted AFTER derivation, because "raw arrived but nothing was modelled" is a second,
@@ -210,6 +240,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
 
             run.Status = SyncRunStatus.Succeeded;
             run.IssuesProcessed = processed;
+            run.Phase = null;              // over: a finished run is doing nothing
             run.FinishedAt = _clock.UtcNow;
             run.NextRunAt = _clock.UtcNow.AddMinutes(project.SyncIntervalMinutes);
             await _db.SaveChangesAsync(ct);
@@ -235,8 +266,11 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         var projectId = project.Id;
         try
         {
+            // No TotalToSync: a rederive fetches nothing, so there is no denominator to report and
+            // null is the honest answer rather than a zero that would render as an empty bar.
+            await SetPhaseAsync(run, SyncPhase.Deriving, ct);
             await _derivation.DeriveProjectAsync(projectId, ct);
-            run.Status = SyncRunStatus.Succeeded; run.FinishedAt = _clock.UtcNow;
+            run.Status = SyncRunStatus.Succeeded; run.Phase = null; run.FinishedAt = _clock.UtcNow;
             await _db.SaveChangesAsync(ct);
 
             var modeled = await _db.Issues.CountAsync(i => i.JiraProjectId == projectId, ct);
@@ -250,6 +284,51 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             await _db.SaveChangesAsync(ct);
         }
         return new SyncRunResult(SyncOutcome.Completed, ToView(run));
+    }
+
+    /// <summary>
+    /// Identifies the set of JQL a run extracted, so a later run can tell whether its own scope
+    /// has ever been fetched before.
+    ///
+    /// Sorted, so merely reordering the queries is not a change of scope and does not force a
+    /// refetch. Truncated to 32 hex characters: this only ever decides "same scope or not", and
+    /// collisions between two JQL sets a user actually wrote are not a realistic concern.
+    /// </summary>
+    private static string ScopeFingerprint(IEnumerable<string> effectiveJql)
+    {
+        var canonical = string.Join("\n", effectiveJql.OrderBy(j => j, StringComparer.Ordinal));
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(canonical));
+        return Convert.ToHexString(hash)[..32];
+    }
+
+    /// <summary>
+    /// Publishes the phase immediately, so a poll during a long step sees what is happening
+    /// rather than the previous step's label.
+    /// </summary>
+    private async Task SetPhaseAsync(SyncRun run, string phase, CancellationToken ct)
+    {
+        run.Phase = phase;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Jira's approximate count for the whole scope — the denominator of the progress bar.
+    ///
+    /// /search/jql is token-paginated and reports no total, so this is the only way to size a
+    /// sync in advance. A null from any one query makes the whole total null rather than an
+    /// undercount: a bar reading "300 of 100" is worse than one that admits it does not know.
+    /// </summary>
+    private async Task<int?> CountScopeAsync(
+        JiraCredentials creds, IReadOnlyList<string> effectiveJql, CancellationToken ct)
+    {
+        var total = 0;
+        foreach (var jql in effectiveJql)
+        {
+            var count = await _jira.ApproximateCountAsync(creds, jql, ct);
+            if (count is null) return null;
+            total += count.Value;
+        }
+        return total;
     }
 
     /// <summary>
@@ -267,6 +346,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     private void SetFailure(SyncRun run, Exception ex, Guid projectId)
     {
         run.Status = SyncRunStatus.Failed;
+        run.Phase = null;
         run.FinishedAt = _clock.UtcNow;
         if (ex is JiraApiException)
         {
@@ -298,5 +378,6 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     }
 
     private static SyncRunView ToView(SyncRun r) =>
-        new(r.Id, r.JiraProjectId, r.Status.ToString(), r.StartedAt, r.FinishedAt, r.IssuesProcessed, r.Error, r.NextRunAt, r.Kind.ToString());
+        new(r.Id, r.JiraProjectId, r.Status.ToString(), r.StartedAt, r.FinishedAt, r.IssuesProcessed, r.Error, r.NextRunAt, r.Kind.ToString(),
+            r.TotalToSync, r.Phase);
 }

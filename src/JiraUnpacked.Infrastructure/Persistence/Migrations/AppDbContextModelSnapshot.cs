@@ -792,6 +792,14 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("NextRunAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("Phase")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("ScopeFingerprint")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<DateTime>("StartedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -799,6 +807,9 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
+
+                    b.Property<int?>("TotalToSync")
+                        .HasColumnType("integer");
 
                     b.HasKey("Id");
 
