@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using JiraUnpacked.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
+using JiraUnpacked.Infrastructure.Jira;
 
 namespace JiraUnpacked.Infrastructure.Sync;
 
@@ -17,7 +18,7 @@ public sealed partial class DerivationService
 
         foreach (var log in logs)
         {
-            using var doc = JsonDocument.Parse(log.Payload);
+            using var doc = JsonDocument.Parse(log.Payload, JiraJson.Document);
             if (!doc.RootElement.TryGetProperty("histories", out var hs) || hs.ValueKind != JsonValueKind.Array) continue;
             foreach (var h in hs.EnumerateArray())
             {
