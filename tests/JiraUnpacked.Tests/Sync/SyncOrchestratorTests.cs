@@ -415,6 +415,55 @@ public class SyncOrchestratorTests
     }
 
     /// <summary>
+    /// A long sync must not drag every issue it has already stored along with it.
+    ///
+    /// The context used to keep each RawIssueSnapshot tracked for the whole run — the entity AND
+    /// an original-values copy for change detection — so a whole-project pull carried hundreds of
+    /// megabytes of issue JSON to the end and re-scanned all of it on every page. Two real
+    /// whole-project syncs died at ~31.7k issues, 16 minutes in, with the run marked failed and
+    /// nothing wrong at the database.
+    /// </summary>
+    [Fact]
+    public async Task Stored_pages_are_released_rather_than_accumulated()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: false);
+
+        // Four pages. Whatever the page count, tracked snapshots must not grow with it.
+        var pages = new Queue<SearchPage>(Enumerable.Range(0, 4).Select(p =>
+            new SearchPage(
+                Enumerable.Range(0, 25).Select(i => new RawIssue($"{p}-{i}", "{}")).ToArray(),
+                p < 3 ? $"tok{p}" : null)));
+
+        var trackedPerPage = new List<int>();
+
+        await using var db = new AppDbContext(options, tenant);
+
+        var jira = new StubJiraClient(() =>
+        {
+            trackedPerPage.Add(db.ChangeTracker.Entries<RawIssueSnapshot>().Count());
+            return Task.FromResult(pages.Dequeue());
+        });
+
+        var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+
+        var result = await orchestrator.RunProjectAsync(projectId);
+
+        // Every page starts from a clean tracker, not from the pile left by its predecessors.
+        Assert.Equal(new[] { 0, 0, 0, 0 }, trackedPerPage);
+        Assert.Empty(db.ChangeTracker.Entries<RawIssueSnapshot>());
+
+        // And detaching cost nothing in correctness: all 100 issues are stored, and the run —
+        // which must stay tracked through it — still completed and recorded its own progress.
+        Assert.Equal(100, result.Run!.IssuesProcessed);
+        Assert.Equal("Succeeded", result.Run.Status);
+        Assert.Equal(100, db.RawIssueSnapshots.Count(s => s.JiraProjectId == projectId));
+    }
+
+    /// <summary>
     /// The count is drawn against the SAME JQL that is fetched, watermark clause included.
     /// Counting the unnarrowed query would give an incremental sync a denominator from a full
     /// pull, and the bar would stall at a few percent while the run was in fact finished.
@@ -525,7 +574,11 @@ public class SyncOrchestratorTests
         var result = await orchestrator.RunProjectAsync(projectId);
 
         Assert.Equal("Failed", result.Run!.Status);
-        Assert.Equal("Sync failed unexpectedly.", result.Run.Error); // no SQL fragments / column names leaked
+        // The type is named, the message is not: no SQL fragments, no column names, no
+        // constraint names — all of which the DbUpdateException message carries.
+        Assert.Equal("Sync failed unexpectedly (DbUpdateException).", result.Run.Error);
+        Assert.DoesNotContain("23505", result.Run.Error);
+        Assert.DoesNotContain("IX_RawIssueSnapshots", result.Run.Error);
     }
 
     [Fact]
