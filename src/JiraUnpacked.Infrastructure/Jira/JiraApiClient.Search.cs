@@ -33,6 +33,38 @@ public sealed partial class JiraApiClient
     private static readonly JsonSerializerOptions SearchJson =
         new(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
 
+    /// <summary>
+    /// Progress reporting only, so every failure path returns null rather than throwing: a sync
+    /// that works must not be turned into a failed one by the call that draws its progress bar.
+    /// The count is Jira's own approximation and can disagree slightly with what paging returns,
+    /// which is why the UI treats it as a denominator to display, never as a stopping condition.
+    /// </summary>
+    public async Task<int?> ApproximateCountAsync(
+        JiraCredentials creds, string jql, CancellationToken ct = default)
+    {
+        try
+        {
+            using var resp = await SendWithRetryAsync(() =>
+            {
+                var req = Build(HttpMethod.Post, creds, "/rest/api/3/search/approximate-count");
+                req.Content = JsonContent.Create(new { jql }, options: SearchJson);
+                return req;
+            }, ct);
+
+            if (!resp.IsSuccessStatusCode) return null;
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            return doc.RootElement.TryGetProperty("count", out var c) && c.ValueKind == JsonValueKind.Number
+                && c.TryGetInt32(out var count) ? count : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Includes JiraApiException from the retry helper. A cancellation is the caller
+            // giving up and must still propagate.
+            return null;
+        }
+    }
+
     public async Task<SearchPage> SearchIssuesPageAsync(
         JiraCredentials creds, string jql, string? nextPageToken, CancellationToken ct = default)
     {

@@ -25,6 +25,8 @@ const RUNNING_RUN: SyncRun = {
   error: null,
   nextRunAt: null,
   kind: 'Sync',
+  totalToSync: null,
+  phase: null,
 };
 
 const SUCCEEDED_RUN: SyncRun = {

@@ -28,6 +28,8 @@ export const queryKeys = {
     ['projects', projectId, 'metrics', 'throughput', bucket, from, to] as const,
   statusAging: (projectId: string, page: number) =>
     ['projects', projectId, 'metrics', 'status-aging', page] as const,
+  fieldChurn: (projectId: string, field: string, minChanges: number, classes: string[], page: number) =>
+    ['projects', projectId, 'metrics', 'field-churn', field, minChanges, classes.join(','), page] as const,
   checks: (projectId: string) => ['projects', projectId, 'checks'] as const,
   checkResult: (projectId: string, checkId: string, page: number) =>
     ['projects', projectId, 'checks', checkId, page] as const,

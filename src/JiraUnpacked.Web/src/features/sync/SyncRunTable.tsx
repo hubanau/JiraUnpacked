@@ -2,6 +2,7 @@ import { Badge, EmptyState, ErrorState, Spinner, TBody, TD, TH, THead, TR, Table
 import { ApiError } from '../../api/errors';
 import type { SyncRun, SyncRunStatus } from '../../api/sync';
 import { useSyncRuns } from './useSyncRuns';
+import { SyncProgress } from './SyncProgress';
 
 const STATUS_TONE: Record<SyncRunStatus, 'neutral' | 'success' | 'warning' | 'danger'> = {
   Running: 'neutral',
@@ -56,7 +57,11 @@ export function SyncRunTable({ projectId }: { projectId: string }) {
             </TD>
             <TD>{new Date(run.startedAt).toLocaleString()}</TD>
             <TD>{formatDuration(run)}</TD>
-            <TD>{run.issuesProcessed}</TD>
+            <TD>
+              {run.status === 'Running'
+                ? <SyncProgress run={run} />
+                : run.issuesProcessed}
+            </TD>
             <TD>{run.error ?? '—'}</TD>
           </TR>
         ))}

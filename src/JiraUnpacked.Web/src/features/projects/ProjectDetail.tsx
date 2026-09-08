@@ -115,6 +115,12 @@ export default function ProjectDetail() {
             >
               Checks
             </Link>
+            <Link
+              to={`/projects/${id}/churn`}
+              className="text-sm font-medium text-[var(--ju-primary)] hover:underline"
+            >
+              Churn
+            </Link>
           </div>
         </div>
 
