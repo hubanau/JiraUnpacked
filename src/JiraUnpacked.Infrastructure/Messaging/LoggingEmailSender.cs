@@ -18,4 +18,13 @@ public sealed class LoggingEmailSender : IEmailSender
         _logger.LogInformation("Verification code for {Email}: {Code}", email, code);
         return Task.CompletedTask;
     }
+
+    public Task SendPasswordResetAsync(string email, string resetLink, CancellationToken ct = default)
+    {
+        // Logging the link is the same exposure as logging a verification code — anyone who can
+        // read logs can take the account. Acceptable ONLY because this sender is refused outside
+        // Development by ProductionConfigGate.
+        _logger.LogInformation("Password reset link for {Email}: {ResetLink}", email, resetLink);
+        return Task.CompletedTask;
+    }
 }

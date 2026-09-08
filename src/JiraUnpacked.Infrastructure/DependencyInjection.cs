@@ -76,6 +76,8 @@ public static class DependencyInjection
             services.AddSingleton<IEmailSender, LoggingEmailSender>();
         services.AddScoped<IRegistrationService, RegistrationService>();
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
+        services.Configure<AppOptions>(configuration.GetSection(AppOptions.SectionName));
+        services.AddScoped<IPasswordResetService, PasswordResetService>();
         services.AddScoped<IUserAdminService, UserAdminService>();
         services.AddScoped<IAccountDeletionService, JiraUnpacked.Infrastructure.Services.AccountDeletionService>();
         services.AddScoped<IJiraConnectionService, JiraConnectionService>();

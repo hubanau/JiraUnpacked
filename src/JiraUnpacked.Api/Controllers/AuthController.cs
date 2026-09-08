@@ -15,12 +15,14 @@ public sealed class AuthController : ControllerBase
     private readonly IRegistrationService _registration;
     private readonly IEmailVerificationService _verification;
     private readonly IAccountDeletionService _deletion;
+    private readonly IPasswordResetService _passwordReset;
     private readonly IWebHostEnvironment _environment;
     private readonly bool _secureCookies;
 
     public AuthController(
         IAuthService auth, IRegistrationService registration, IEmailVerificationService verification,
-        IAccountDeletionService deletion, IWebHostEnvironment environment,
+        IAccountDeletionService deletion, IPasswordResetService passwordReset,
+        IWebHostEnvironment environment,
         Microsoft.Extensions.Options.IOptions<JiraUnpacked.Infrastructure.Security.SecurityOptions> security)
     {
         _secureCookies = security.Value.SecureCookiesEnabled;
@@ -28,6 +30,7 @@ public sealed class AuthController : ControllerBase
         _registration = registration;
         _verification = verification;
         _deletion = deletion;
+        _passwordReset = passwordReset;
         _environment = environment;
     }
 
@@ -109,6 +112,47 @@ public sealed class AuthController : ControllerBase
         await _verification.ResendAsync(request.Email, ct);
         // Always 202 — never reveal whether the account exists or is pending.
         return Accepted(new { message = "If the account is awaiting verification, a new code has been sent." });
+    }
+
+    /// <summary>
+    /// Always 202, whatever the address. Any observable difference — a status code, a message,
+    /// even a timing gap large enough to measure — turns this into an account-existence oracle,
+    /// which is the same reason verify/resend answers unconditionally.
+    /// </summary>
+    [HttpPost("password/forgot")]
+    [AllowAnonymous]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> ForgotPassword(ForgotPasswordRequest request, CancellationToken ct)
+    {
+        await _passwordReset.RequestAsync(request.Email, ct);
+        return Accepted(new
+        {
+            message = "If that address belongs to an active account, a reset link has been sent.",
+        });
+    }
+
+    /// <summary>
+    /// Redeems a reset link. An unknown, expired or already-used token all answer the same way:
+    /// each of the three is a fact about somebody else's account.
+    /// </summary>
+    [HttpPost("password/reset")]
+    [AllowAnonymous]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> ResetPassword(ResetPasswordRequest request, CancellationToken ct)
+    {
+        var result = await _passwordReset.ResetAsync(request.Token, request.NewPassword, ct);
+
+        return result.Error switch
+        {
+            PasswordResetError.None => NoContent(),
+            PasswordResetError.WeakPassword => Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Password does not meet the strength policy.",
+                detail: string.Join(" ", result.Errors)),
+            _ => Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "This reset link is invalid or has expired."),
+        };
     }
 
     [HttpPost("login")]

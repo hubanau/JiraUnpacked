@@ -466,6 +466,39 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.ToTable("JiraUsers", (string)null);
                 });
 
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.PasswordResetToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ConsumedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("PasswordResetTokens", (string)null);
+                });
+
             modelBuilder.Entity("JiraUnpacked.Domain.Entities.Priority", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1073,6 +1106,15 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.HasOne("JiraUnpacked.Domain.Entities.JiraConnection", null)
                         .WithMany()
                         .HasForeignKey("JiraConnectionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("JiraUnpacked.Domain.Entities.PasswordResetToken", b =>
+                {
+                    b.HasOne("JiraUnpacked.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

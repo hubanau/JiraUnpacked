@@ -56,6 +56,12 @@ services:
       Jwt__SigningKey: ${JWT_SIGNING_KEY:?set JWT_SIGNING_KEY in .env - see .env.example}
       TokenProtection__Key: ${TOKEN_PROTECTION_KEY:?set TOKEN_PROTECTION_KEY in .env - see .env.example}
 
+      # Where the app refers to itself in outgoing mail — currently the password-reset link.
+      # Configuration rather than the request's Host header, on purpose: deriving it from the
+      # request is host-header injection, which turns a legitimate reset email into a token
+      # handover. Change this the moment the app is served on another address.
+      App__BaseUrl: ${APP_BASE_URL:-http://localhost:8080}
+
       # Mailpit below. Real values here send real mail; these do not leave the compose network.
       Email__Host: mailpit
       Email__Port: "1025"

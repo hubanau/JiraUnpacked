@@ -19,6 +19,7 @@ public class AppDbContext : DbContext
     public DbSet<InviteCode> InviteCodes => Set<InviteCode>();
     public DbSet<EmailVerification> EmailVerifications => Set<EmailVerification>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
     public DbSet<JiraConnection> JiraConnections => Set<JiraConnection>();
     public DbSet<JiraProject> JiraProjects => Set<JiraProject>();
     public DbSet<JiraQuery> JiraQueries => Set<JiraQuery>();
