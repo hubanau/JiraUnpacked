@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
@@ -20,7 +21,51 @@ function renderHome() {
 const CONNECTION_1 = { id: 'c1', baseUrl: 'https://a.atlassian.net', email: 'a@b.c', createdAtUtc: '2026-01-01T00:00:00Z' };
 const CONNECTION_2 = { id: 'c2', baseUrl: 'https://b.atlassian.net', email: 'd@e.f', createdAtUtc: '2026-01-01T00:00:00Z' };
 
+const project = (id: string, connId: string, key: string) => ({
+  id, jiraConnectionId: connId, jiraProjectKey: key, jiraProjectId: '1',
+  syncIntervalMinutes: 60, createdAtUtc: '2026-01-01T00:00:00Z',
+});
+
 describe('Home', () => {
+  it('offers Add project once projects already exist', async () => {
+    // The gap this closes: the only link to the form was a connection's own detail page, and the
+    // projects list linked to it in its EMPTY state only — so the action vanished from the
+    // projects page the moment there was a project on it, which is when it is looked for.
+    server.use(
+      http.get('/api/connections', () => HttpResponse.json([CONNECTION_1])),
+      http.get('/api/connections/c1/projects', () => HttpResponse.json([project('p1', 'c1', 'ACME')])),
+    );
+
+    renderHome();
+    await screen.findByText('ACME');
+
+    // One connection: the choice is already made, so no picker is put in the way.
+    expect(screen.getByRole('link', { name: /add project/i }))
+      .toHaveAttribute('href', '/connections/c1/projects/new');
+    expect(screen.queryByLabelText(/connection to add/i)).not.toBeInTheDocument();
+  });
+
+  it('asks which connection when there is more than one', async () => {
+    // A project is added TO a connection and there is no defensible default among several, so
+    // the choice is offered rather than guessed at.
+    server.use(
+      http.get('/api/connections', () => HttpResponse.json([CONNECTION_1, CONNECTION_2])),
+      http.get('/api/connections/c1/projects', () => HttpResponse.json([project('p1', 'c1', 'ACME')])),
+      http.get('/api/connections/c2/projects', () => HttpResponse.json([])),
+    );
+
+    renderHome();
+    await screen.findByText('ACME');
+
+    const picker = screen.getByLabelText(/connection to add/i);
+    expect(screen.getByRole('link', { name: /add project/i }))
+      .toHaveAttribute('href', '/connections/c1/projects/new');
+
+    await userEvent.selectOptions(picker, 'c2');
+    expect(screen.getByRole('link', { name: /add project/i }))
+      .toHaveAttribute('href', '/connections/c2/projects/new');
+  });
+
   it('fans out one projects query per connection and flattens the results', async () => {
     server.use(
       http.get('/api/connections', () => HttpResponse.json([CONNECTION_1, CONNECTION_2])),
