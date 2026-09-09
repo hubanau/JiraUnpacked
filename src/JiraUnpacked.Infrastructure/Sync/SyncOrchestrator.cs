@@ -2,6 +2,7 @@ using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Abstractions.Jira;
 using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Domain.Enums;
+using JiraUnpacked.Infrastructure.Jira;
 using JiraUnpacked.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -174,6 +175,10 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                     var page = await _jira.SearchIssuesPageAsync(creds, jql, token, ct);
                     fetched += page.Issues.Count;
                     pages++;
+                    // Postgres rejects NUL in jsonb, and Jira serves back whatever someone pasted
+                    // into a text field. One such issue used to fail its page's INSERT and, with
+                    // it, the whole run. Stripped here, at the boundary where the payload stops
+                    // being an HTTP response and becomes a database row.
                     var pageIds = page.Issues.Select(i => i.JiraIssueId).ToList();
                     var existingByJiraId = await _db.RawIssueSnapshots
                         .Where(x => x.JiraProjectId == projectId && pageIds.Contains(x.JiraIssueId))
@@ -186,12 +191,13 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                             _db.RawIssueSnapshots.Add(new RawIssueSnapshot
                             {
                                 Id = Guid.NewGuid(), JiraProjectId = projectId,
-                                JiraIssueId = issue.JiraIssueId, Payload = issue.RawJson, FetchedAt = _clock.UtcNow
+                                JiraIssueId = issue.JiraIssueId,
+                                Payload = JiraJson.StripNulls(issue.RawJson), FetchedAt = _clock.UtcNow
                             });
                         }
                         else
                         {
-                            existing.Payload = issue.RawJson;
+                            existing.Payload = JiraJson.StripNulls(issue.RawJson);
                             existing.FetchedAt = _clock.UtcNow;
                         }
                         processed++;
@@ -257,6 +263,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         }
         catch (Exception ex)
         {
+            // The pending changes are WHY we are here. They have to go before the failure can be
+            // recorded: saving the run through a context that still holds the rejected rows
+            // re-attempts them, throws again, and the second throw escapes past this catch —
+            // leaving the run Running forever and blocking the project until the reaper. That is
+            // exactly how a NUL in one issue's description looked like a hung sync.
+            DiscardPendingChangesExcept(run);
             SetFailure(run, ex, projectId);
             run.NextRunAt = _clock.UtcNow.AddMinutes(project.SyncIntervalMinutes);
             await _db.SaveChangesAsync(ct);
@@ -290,6 +302,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         }
         catch (Exception ex)
         {
+            DiscardPendingChangesExcept(run);   // see ExecuteProjectAsync
             SetFailure(run, ex, projectId);
             await _db.SaveChangesAsync(ct);
         }
@@ -309,6 +322,22 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         var canonical = string.Join("\n", effectiveJql.OrderBy(j => j, StringComparer.Ordinal));
         var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(canonical));
         return Convert.ToHexString(hash)[..32];
+    }
+
+    /// <summary>
+    /// Detaches everything except the run, abandoning whatever was pending. Used only on the
+    /// failure path, where the pending changes are the thing that failed and the single write
+    /// that still MUST succeed is the one recording that failure.
+    /// </summary>
+    private void DiscardPendingChangesExcept(SyncRun run)
+    {
+        foreach (var entry in _db.ChangeTracker.Entries().ToList())
+            if (entry.Entity is not SyncRun)
+                entry.State = EntityState.Detached;
+
+        // The run must still be tracked AND still carry its edits, or the failure write below is
+        // a no-op and the run stays Running — the very thing this method exists to prevent.
+        _db.Entry(run).State = EntityState.Modified;
     }
 
     /// <summary>
