@@ -17,7 +17,7 @@ public sealed class FieldChurnTests : IClassFixture<JiraUnpackedApiFactory>, IAs
     public Task DisposeAsync() => Task.CompletedTask;
 
     private sealed record ItemDto(string JiraIssueId, string JiraKey, string? Summary, string? IssueType,
-        string? CurrentStatus, string Class, int Changes, int DistinctValues,
+        string? CurrentStatus, string Class, string? Team, int Changes, int DistinctValues,
         DateTime FirstChangedAt, DateTime LastChangedAt);
     private sealed record BandDto(string Band, int Count);
     private sealed record PageDto(List<ItemDto> Items, int Page, int PageSize, int TotalCount);
@@ -66,6 +66,32 @@ public sealed class FieldChurnTests : IClassFixture<JiraUnpackedApiFactory>, IAs
         Assert.Equal(2, r.Items.Items[1].Changes);
         Assert.Equal("In Progress", r.Items.Items[0].CurrentStatus);
         Assert.Equal("Active", r.Items.Items[0].Class);
+    }
+
+    [Fact]
+    public async Task Each_row_carries_the_issue_s_team()
+    {
+        // Sprint churn is a delivery-health signal, and the first question about a list of
+        // repeatedly-carried stories is whose they are.
+        var (client, tenant) = await MetricsTestData.AuthedTenantAsync(_factory);
+        var ctx = await MetricsTestData.SeedProjectAsync(tenant);
+        var now = DateTime.UtcNow;
+
+        var cicd = await MetricsTestData.SeedTeamAsync(ctx, "CI/CD");
+
+        await MetricsTestData.SeedIssueAsync(ctx, "10001", "ACME-1", "owned", ctx.InProgressStatusId, null, now.AddDays(-60), cicd);
+        await SprintMovesAsync(ctx, "10001", "S1", "S2");
+
+        // No team is a real state — an issue nobody has assigned to one, or a project that maps
+        // no Team field — and must come back as null rather than being dropped from the report.
+        await MetricsTestData.SeedIssueAsync(ctx, "10002", "ACME-2", "unowned", ctx.InProgressStatusId, null, now.AddDays(-60));
+        await SprintMovesAsync(ctx, "10002", "S1", "S2");
+
+        var r = await GetAsync(client, ctx.ProjectId);
+
+        Assert.Equal("CI/CD", Assert.Single(r.Items.Items, i => i.JiraKey == "ACME-1").Team);
+        Assert.Null(Assert.Single(r.Items.Items, i => i.JiraKey == "ACME-2").Team);
+        Assert.Equal(2, r.Items.TotalCount);
     }
 
     [Fact]

@@ -94,6 +94,7 @@ public sealed class FieldChurnQueryService : IFieldChurnQueryService
                 i.Summary,
                 IssueType = _db.IssueTypes.Where(t => t.Id == i.IssueTypeId).Select(t => t.Name).FirstOrDefault(),
                 Status = _db.Statuses.Where(s => s.Id == i.StatusId).Select(s => s.Name).FirstOrDefault(),
+                Team = _db.Teams.Where(t => t.Id == i.TeamId).Select(t => t.Name).FirstOrDefault(),
             })
             .ToListAsync(ct);
 
@@ -111,7 +112,7 @@ public sealed class FieldChurnQueryService : IFieldChurnQueryService
             var k = byIssueId[i.JiraIssueId];
             matched.Add(new FieldChurnItem(
                 i.JiraIssueId, i.JiraKey, i.Summary, i.IssueType,
-                i.Status, cls.ToString(), k.Changes, k.DistinctValues,
+                i.Status, cls.ToString(), i.Team, k.Changes, k.DistinctValues,
                 k.FirstChangedAt, k.LastChangedAt));
         }
 
