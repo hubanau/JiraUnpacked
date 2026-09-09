@@ -84,6 +84,32 @@ public class SyncOrchestratorTests
         }
     }
 
+    /// <summary>
+    /// Refuses to save while any RawIssueSnapshot is pending, and succeeds once none is — which
+    /// is exactly how Postgres behaves when one payload in the batch is unstorable. The point is
+    /// that the SAME failure recurs until the offending changes are discarded, so a failure path
+    /// that saves through the same context throws a second time.
+    /// </summary>
+    private sealed class RejectsSnapshotsDbContext : AppDbContext
+    {
+        public int RejectedSaves { get; private set; }
+
+        public RejectsSnapshotsDbContext(DbContextOptions<AppDbContext> options, ICurrentTenant tenant)
+            : base(options, tenant) { }
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            if (ChangeTracker.Entries<RawIssueSnapshot>().Any())
+            {
+                RejectedSaves++;
+                throw new DbUpdateException(
+                    "22P05: unsupported Unicode escape sequence",
+                    new Exception("Postgres refuses NUL in jsonb"));
+            }
+            return base.SaveChangesAsync(cancellationToken);
+        }
+    }
+
     private static DbContextOptions<AppDbContext> InMemoryOptions() =>
         new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString(), new InMemoryDatabaseRoot())
@@ -412,6 +438,48 @@ public class SyncOrchestratorTests
         Assert.Equal(4, result.Run!.IssuesProcessed);
         Assert.Equal(4, result.Run.TotalToSync);
         Assert.Null(result.Run.Phase);      // a finished run is doing nothing
+    }
+
+    /// <summary>
+    /// A run whose SAVE fails must still be able to record that it failed.
+    ///
+    /// The failure path used to call SaveChanges through the same context that still held the
+    /// rejected rows, so it re-attempted them, threw a second time, and that throw escaped the
+    /// orchestrator entirely. The run stayed Running — forever, since the partial unique index
+    /// permits one Running run per project and the reaper only sweeps after two hours. On screen
+    /// it looked exactly like a hung sync; in reality it had died minutes earlier and could not
+    /// say so. That is how a NUL in one issue's description presented.
+    /// </summary>
+    [Fact]
+    public async Task A_run_that_cannot_save_still_records_its_own_failure()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: false);
+
+        var jira = new StubJiraClient(() =>
+            Task.FromResult(new SearchPage(new[] { new RawIssue("10001", "{}") }, null)));
+
+        await using var db = new RejectsSnapshotsDbContext(options, tenant);
+        var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+
+        // Must not throw: the orchestrator owns its failures.
+        var result = await orchestrator.RunProjectAsync(projectId);
+
+        Assert.Equal("Failed", result.Run!.Status);
+        Assert.Equal("Sync failed unexpectedly (DbUpdateException).", result.Run.Error);
+        Assert.Null(result.Run.Phase);
+
+        // Exactly one save was rejected — the page. The failure write got through because the
+        // pending snapshots were discarded first rather than re-sent.
+        Assert.Equal(1, db.RejectedSaves);
+
+        // And it is really persisted, not just returned: a Running row left behind is what blocks
+        // the project.
+        await using var probe = new AppDbContext(options, tenant);
+        Assert.Equal(SyncRunStatus.Failed, probe.SyncRuns.Single(r => r.JiraProjectId == projectId).Status);
     }
 
     /// <summary>
