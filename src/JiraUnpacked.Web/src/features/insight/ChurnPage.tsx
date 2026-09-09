@@ -139,6 +139,7 @@ export default function ChurnPage() {
                     <TH>Issue</TH>
                     <TH>Type</TH>
                     <TH>Status</TH>
+                    <TH>Team</TH>
                     <TH>Changes</TH>
                     <TH>Distinct</TH>
                     <TH>First</TH>
@@ -159,6 +160,7 @@ export default function ChurnPage() {
                       </TD>
                       <TD>{i.issueType ?? EMPTY}</TD>
                       <TD>{i.currentStatus ?? EMPTY}</TD>
+                      <TD>{i.team ?? EMPTY}</TD>
                       <TD className="ju-numeric">{i.changes}</TD>
                       <TD className="ju-numeric">{i.distinctValues}</TD>
                       <TD>{formatDate(i.firstChangedAt)}</TD>
