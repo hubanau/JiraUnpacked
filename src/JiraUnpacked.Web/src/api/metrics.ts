@@ -87,6 +87,8 @@ export interface FieldChurnItem {
   issueType: string | null;
   currentStatus: string | null;
   class: string;
+  /** Null when the issue has no team, or the project maps no Team field — a real state, not an error. */
+  team: string | null;
   changes: number;
   distinctValues: number;
   firstChangedAt: string;

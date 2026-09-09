@@ -24,7 +24,7 @@ function renderPage() {
 
 const item = (over: Partial<Record<string, unknown>> = {}) => ({
   jiraIssueId: '10001', jiraKey: 'ACME-1', summary: 'carried', issueType: 'Story',
-  currentStatus: 'In Progress', class: 'Active', changes: 4, distinctValues: 4,
+  currentStatus: 'In Progress', class: 'Active', team: 'CI/CD', changes: 4, distinctValues: 4,
   firstChangedAt: '2026-07-01T00:00:00Z', lastChangedAt: '2026-08-30T00:00:00Z', ...over,
 });
 

@@ -9,7 +9,7 @@ namespace JiraUnpacked.Domain.Abstractions;
 /// </summary>
 public sealed record FieldChurnItem(
     string JiraIssueId, string JiraKey, string? Summary, string? IssueType,
-    string? CurrentStatus, string Class, int Changes, int DistinctValues,
+    string? CurrentStatus, string Class, string? Team, int Changes, int DistinctValues,
     DateTime FirstChangedAt, DateTime LastChangedAt);
 
 public sealed record FieldChurnBand(string Band, int Count);

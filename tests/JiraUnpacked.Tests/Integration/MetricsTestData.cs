@@ -109,15 +109,26 @@ internal static class MetricsTestData
             ("c", cls), ("p", ctx.ProjectId), ("sid", jiraStatusId));
     }
 
+    /// <summary>Seeds a project-scoped team and returns its id, for issues that belong to one.</summary>
+    internal static async Task<Guid> SeedTeamAsync(SeedContext ctx, string name)
+    {
+        var id = Guid.NewGuid();
+        await using var conn = Conn();
+        await conn.OpenAsync();
+        await Exec(conn, @"INSERT INTO ""Teams""(""Id"",""EndUserId"",""JiraProjectId"",""JiraTeamId"",""Name"") VALUES (@i,@t,@p,@jt,@n)",
+            ("i", id), ("t", ctx.Tenant), ("p", ctx.ProjectId), ("jt", id.ToString("N")[..12]), ("n", name));
+        return id;
+    }
+
     internal static async Task SeedIssueAsync(
         SeedContext ctx, string jiraIssueId, string jiraKey, string? summary,
-        Guid? statusId, decimal? storyPoints, DateTime createdAt)
+        Guid? statusId, decimal? storyPoints, DateTime createdAt, Guid? teamId = null)
     {
         await using var conn = Conn();
         await conn.OpenAsync();
-        await Exec(conn, @"INSERT INTO ""Issues""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""JiraKey"",""Summary"",""StatusId"",""StoryPoints"",""JiraCreatedAt"",""JiraUpdatedAt"",""LastSyncedAt"") VALUES (@i,@t,@p,@jid,@k,@s,@st,@sp,@c,@c,now())",
+        await Exec(conn, @"INSERT INTO ""Issues""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""JiraKey"",""Summary"",""StatusId"",""TeamId"",""StoryPoints"",""JiraCreatedAt"",""JiraUpdatedAt"",""LastSyncedAt"") VALUES (@i,@t,@p,@jid,@k,@s,@st,@tm,@sp,@c,@c,now())",
             ("i", Guid.NewGuid()), ("t", ctx.Tenant), ("p", ctx.ProjectId), ("jid", jiraIssueId),
-            ("k", jiraKey), ("s", summary), ("st", statusId), ("sp", storyPoints), ("c", createdAt));
+            ("k", jiraKey), ("s", summary), ("st", statusId), ("tm", teamId), ("sp", storyPoints), ("c", createdAt));
     }
 
     /// <summary>
