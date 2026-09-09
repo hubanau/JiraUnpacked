@@ -59,6 +59,7 @@ public sealed class ChangelogIngestService : IChangelogIngestService
         {
             var histories = await AssembleHistoriesJsonAsync(snap, creds, ct);
             var payload = "{\"histories\":[" + string.Join(",", histories) + "]}";
+            payload = JiraJson.StripNulls(payload);   // jsonb cannot hold NUL — see JiraJson
 
             if (existingByJiraId.TryGetValue(snap.JiraIssueId, out var existing))
             {
