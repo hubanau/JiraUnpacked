@@ -32,19 +32,12 @@ internal static class JiraJson
     public static readonly JsonSerializerOptions Web =
         new(JsonSerializerDefaults.Web) { MaxDepth = MaxDepth };
 
-    /// <summary>A single backslash, by code point — see <see cref="NulEscape"/> for why.</summary>
-    private const char Backslash = (char)0x5C;
-
     /// <summary>
-    /// The six characters JSON uses to escape NUL: backslash, u, 0, 0, 0, 0 — NOT the NUL
-    /// character itself. Built from the backslash's code point rather than written as a literal,
-    /// because a source file containing this escape is one careless rewrite away from holding a
-    /// real NUL instead, and that corruption is invisible on screen.
+    /// A single backslash, by code point rather than as a literal. A source file holding these
+    /// sequences is one careless rewrite away from holding the character they describe instead,
+    /// and that corruption is invisible on screen — which has already happened once here.
     /// </summary>
-    private static readonly string NulEscape = Backslash + "u0000";
-
-    /// <summary>The prefix every surrogate escape starts with: backslash, u, d.</summary>
-    private static readonly string SurrogatePrefix = Backslash + "ud";
+    private const char Backslash = (char)0x5C;
 
     /// <summary>
     /// Makes a Jira payload storable in a jsonb column.
@@ -55,10 +48,10 @@ internal static class JiraJson
     /// here, applied at every point a payload becomes a row.
     /// </summary>
     public static string SanitiseForStorage(string json) =>
-        StripUnpairedSurrogates(StripNulls(json));
+        RepairEscapes(StripNulls(json));
 
     /// <summary>
-    /// Removes half a character.
+    /// Repairs the escape sequences PostgreSQL refuses but System.Text.Json lets through.
     ///
     /// A code point above U+FFFF is written in JSON as a SURROGATE PAIR — two escapes that mean
     /// one character only together. An escape from the surrogate range without its partner is not
@@ -74,32 +67,60 @@ internal static class JiraJson
     /// this. U+FFFD would be defensible, but the surrounding content is already the wreckage of
     /// binary-as-text and a visible glyph would be content Jira never sent — the same reasoning
     /// that drops NUL. VALID PAIRS MUST SURVIVE: an emoji in a summary is ordinary and correct.
+    ///
+    /// The other half of the job: a backslash followed by anything JSON does not define as an
+    /// escape. GetRawText hands back the ORIGINAL bytes without validating them, so such a
+    /// payload parses perfectly and then fails at the INSERT with 22P02, DETAIL "Escape sequence
+    /// is invalid" — which is how a raw PNG in an issue's text field killed a project's first
+    /// sync at exactly one page, three separate times.
     /// </summary>
-    public static string StripUnpairedSurrogates(string json)
+    public static string RepairEscapes(string json)
     {
-        // Every surrogate escape begins with this prefix; nothing else needs scanning at all.
-        if (json.IndexOf(SurrogatePrefix, StringComparison.OrdinalIgnoreCase) < 0) return json;
+        // Nothing to repair without a backslash, and most payloads are dominated by plain text.
+        if (json.IndexOf(Backslash) < 0) return json;
 
         var sb = new StringBuilder(json.Length);
         var i = 0;
 
         while (i < json.Length)
         {
-            // Two-character escapes are consumed ATOMICALLY, which is what stops an escaped
-            // backslash from being misread as the start of the escape that follows it.
-            if (json[i] == Backslash && i + 1 < json.Length && json[i + 1] != 'u')
+            if (json[i] != Backslash)
             {
-                sb.Append(json[i]).Append(json[i + 1]);
+                sb.Append(json[i]);
+                i++;
+                continue;
+            }
+
+            // A trailing backslash cannot begin anything. Dropping it is the only repair.
+            if (i + 1 >= json.Length) { i++; continue; }
+
+            var next = json[i + 1];
+
+            // The two-character escapes JSON defines, consumed ATOMICALLY — which is what stops
+            // an escaped backslash from being misread as the start of the escape after it.
+            if (next is '"' or '\\' or '/' or 'b' or 'f' or 'n' or 'r' or 't')
+            {
+                sb.Append(json[i]).Append(next);
                 i += 2;
                 continue;
             }
 
-            if (TryReadUnicodeEscape(json, i, out var value))
+            if (next == 'u' && TryReadUnicodeEscape(json, i, out var value))
             {
-                if (char.IsHighSurrogate((char)value))
+                // An escaped NUL, removed HERE rather than by a substring replace over the whole
+                // text. That replace is what broke this: in valid JSON containing an escaped
+                // backslash followed by the literal characters u0000, it matched from the SECOND
+                // backslash, cut six characters out, and left a lone backslash in front of the
+                // next character — an invalid escape, which Postgres then refused. Reaching it
+                // through the scanner means only a real escape is ever touched.
+                if (value == 0)
+                {
+                    i += 6;
+                }
+                else if (char.IsHighSurrogate((char)value))
                 {
                     // Valid only when its low half follows immediately.
-                    if (TryReadUnicodeEscape(json, i + 6, out var next) && char.IsLowSurrogate((char)next))
+                    if (TryReadUnicodeEscape(json, i + 6, out var low) && char.IsLowSurrogate((char)low))
                     {
                         sb.Append(json, i, 12);
                         i += 12;
@@ -121,7 +142,11 @@ internal static class JiraJson
                 continue;
             }
 
-            sb.Append(json[i]);
+            // Anything else after a backslash is not an escape JSON defines, and PostgreSQL
+            // rejects the whole document: 22P02, DETAIL "Escape sequence is invalid". Only the
+            // BACKSLASH is dropped; the character after it is ordinary and is copied on the next
+            // pass round, so the text keeps everything that was really there. Also covers \u
+            // without four hex digits, which is the same defect wearing a longer name.
             i++;
         }
 
@@ -154,34 +179,27 @@ internal static class JiraJson
     }
 
     /// <summary>
-    /// Removes NUL from JSON about to be stored in a jsonb column.
+    /// Removes RAW NUL characters — the actual character, never the escape.
     ///
-    /// PostgreSQL cannot hold NUL in json or jsonb. Neither a bug nor configurable: jsonb is
-    /// converted to text, and text cannot represent NUL, so Postgres rejects the whole INSERT
-    /// with 22P05 "unsupported Unicode escape sequence". Jira accepts a NUL pasted into a text
-    /// field and serves it back escaped, so a single such issue anywhere in a project failed the
-    /// page it landed on and, through that, the entire sync — a real 42,918-issue run died on
-    /// a description reading "Date/Time of Incident: - June 22, 8:53 am" followed by one.
+    /// PostgreSQL cannot hold NUL in json or jsonb: jsonb is converted to text, and text cannot
+    /// represent NUL, so it rejects the whole INSERT with 22P05 "unsupported Unicode escape
+    /// sequence". Jira accepts a NUL pasted into a text field and serves it back, so this is
+    /// ordinary data — a real 42,918-issue run died on a description reading
+    /// "Date/Time of Incident: - June 22, 8:53 am" followed by one.
+    ///
+    /// The ESCAPED form is deliberately NOT handled here. It used to be, by a substring replace
+    /// over the whole document, and that replace could not tell a real escape from the literal
+    /// characters u0000 sitting after an escaped backslash — so it cut six characters out of
+    /// valid JSON and left a lone backslash behind, which Postgres refused in turn. Escapes are
+    /// only safe to touch from a scanner that knows where each one begins, so
+    /// <see cref="RepairEscapes"/> does it.
     ///
     /// Dropped rather than replaced: NUL carries no meaning in a text field, and substituting a
-    /// visible character would invent content that was never in Jira. Stripping the escape from
-    /// the JSON TEXT leaves the surrounding string intact and the document still valid JSON.
-    /// Rejecting the issue instead would lose a real issue over an invisible character.
+    /// visible character would invent content that was never in Jira. Rejecting the issue instead
+    /// would lose a real issue over an invisible character.
     ///
     /// The common case — no NUL anywhere — allocates nothing.
     /// </summary>
-    public static string StripNulls(string json)
-    {
-        // A raw NUL is not legal in JSON text, but it costs nothing to guard against and would
-        // fail in exactly the same way if anything upstream ever emitted one unescaped.
-        var hasEscaped = json.Contains(NulEscape, StringComparison.OrdinalIgnoreCase);
-        var hasRaw = json.IndexOf((char)0) >= 0;
-        if (!hasEscaped && !hasRaw) return json;
-
-        if (hasEscaped)
-            json = json.Replace(NulEscape, string.Empty, StringComparison.OrdinalIgnoreCase);
-        if (hasRaw)
-            json = json.Replace(((char)0).ToString(), string.Empty, StringComparison.Ordinal);
-        return json;
-    }
+    public static string StripNulls(string json) =>
+        json.IndexOf((char)0) < 0 ? json : json.Replace(((char)0).ToString(), string.Empty, StringComparison.Ordinal);
 }

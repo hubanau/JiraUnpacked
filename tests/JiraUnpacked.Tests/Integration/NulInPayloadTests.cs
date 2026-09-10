@@ -151,4 +151,72 @@ public sealed class NulInPayloadTests : IClassFixture<JiraUnpackedApiFactory>, I
         var emoji = await db.Issues.IgnoreQueryFilters().FirstAsync(i => i.JiraProjectId == project.Id && i.JiraIssueId == "50002");
         Assert.Equal("ship it \U0001F680", emoji.Summary);
     }
+
+    /// <summary>
+    /// The bug this codebase INTRODUCED while fixing NUL — the one that actually killed PLAT.
+    /// Jira escapes binary pasted into a text field, producing runs of escaped backslashes. Valid
+    ///
+    /// This is the one that actually killed the project's first sync, three times over, always at
+    /// exactly one page. It survives the read because GetRawText hands back the ORIGINAL bytes
+    /// without validating the escapes inside them — so the page parses perfectly and then the
+    /// INSERT fails with 22P02, DETAIL "Escape sequence is invalid". Confirmed by turning on
+    /// Postgres error detail against the real payload rather than by guessing, after two earlier
+    /// theories about it — memory, then control characters — turned out to be wrong.
+    ///
+    /// The escape is written into the response body by hand: serialising it from an object would
+    /// produce a VALID escape, which is precisely the case that already works.
+    /// </summary>
+    [Fact]
+    public async Task An_issue_carrying_an_invalid_escape_still_syncs()
+    {
+        _jira.Given(Request.Create().WithPath("/rest/api/3/myself").UsingGet()).RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { accountId = "a" }));
+        _jira.Given(Request.Create().WithPath("/rest/api/3/project/ACME").UsingGet()).RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { id = "1", key = "ACME", name = "Acme" }));
+
+        // Valid JSON: an ESCAPED backslash, then the literal characters u0000. Jira produces
+        // this constantly for binary pasted into a text field, and Postgres accepts it.
+        //
+        // It is what the old blind substring replace could not tell from a real escaped NUL:
+        // it matched from the SECOND backslash, cut six characters out, and left a lone
+        // backslash in front of the next character. The stored payload was then invalid JSON
+        // and Postgres refused it — a bug this codebase INTRODUCED while fixing NUL, which is
+        // why the escape work now happens in a scanner that knows where each escape begins.
+        var tricky = "PNG" + (char)0x5C + (char)0x5C + "u0000 IHDR";
+        var body =
+            "{\"issues\":[{\"id\":\"60001\",\"key\":\"ACME-ESC\",\"fields\":{\"summary\":\"" + tricky +
+            "\",\"created\":\"2024-01-01T00:00:00.000+0000\",\"updated\":\"2024-01-02T00:00:00.000+0000\"," +
+            "\"status\":{\"id\":\"10\",\"name\":\"Done\"}}," +
+            "\"changelog\":{\"startAt\":0,\"maxResults\":100,\"total\":0,\"histories\":[]}}," +
+            // An ordinary neighbour on the same page: the rejected INSERT took the whole batch
+            // with it, so losing the innocent issue is part of the defect.
+            "{\"id\":\"60002\",\"key\":\"ACME-FINE\",\"fields\":{\"summary\":\"ordinary\"," +
+            "\"created\":\"2024-01-01T00:00:00.000+0000\",\"updated\":\"2024-01-02T00:00:00.000+0000\"," +
+            "\"status\":{\"id\":\"10\",\"name\":\"Done\"}}," +
+            "\"changelog\":{\"startAt\":0,\"maxResults\":100,\"total\":0,\"histories\":[]}}]}";
+
+        _jira.Given(Request.Create().WithPath("/rest/api/3/search/jql").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json").WithBody(body));
+
+        var client = await TestData.AuthedClientAsync(_factory);
+        var conn = (await (await client.PostAsJsonAsync("/api/connections", new { baseUrl = _jira.Url, email = "e@x.com", apiToken = "t" })).Content.ReadFromJsonAsync<ConnectionDto>())!;
+        var project = (await (await client.PostAsJsonAsync($"/api/connections/{conn.Id}/projects", new { projectKey = "ACME", syncIntervalMinutes = 60 })).Content.ReadFromJsonAsync<ProjectDto>())!;
+
+        var resp = await SyncWait.SyncAsync(client, project.Id);
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, resp.StatusCode);
+
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(JiraUnpackedApiFactory.TestConnectionString).Options;
+        await using var db = new AppDbContext(options, new NullCurrentTenant());
+
+        var run = await db.SyncRuns.IgnoreQueryFilters().FirstAsync(r => r.JiraProjectId == project.Id);
+        Assert.Equal(SyncRunStatus.Succeeded, run.Status);
+        Assert.Null(run.Error);
+
+        // Both issues land: the offending one is repaired, not skipped, and its neighbour is safe.
+        Assert.Equal(2, await db.Issues.IgnoreQueryFilters().CountAsync(i => i.JiraProjectId == project.Id));
+
+        // Only the stray backslash is gone — every character that was really there survives.
+        var issue = await db.Issues.IgnoreQueryFilters().FirstAsync(i => i.JiraProjectId == project.Id && i.JiraIssueId == "60001");
+        // Nothing is lost: the escaped backslash is still one backslash, and u0000 is still text.
+        Assert.Equal("PNG" + (char)0x5C + "u0000 IHDR", issue.Summary);
+    }
 }
