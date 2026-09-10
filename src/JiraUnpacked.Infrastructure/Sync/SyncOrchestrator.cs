@@ -192,12 +192,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                             {
                                 Id = Guid.NewGuid(), JiraProjectId = projectId,
                                 JiraIssueId = issue.JiraIssueId,
-                                Payload = JiraJson.StripNulls(issue.RawJson), FetchedAt = _clock.UtcNow
+                                Payload = JiraJson.SanitiseForStorage(issue.RawJson), FetchedAt = _clock.UtcNow
                             });
                         }
                         else
                         {
-                            existing.Payload = JiraJson.StripNulls(issue.RawJson);
+                            existing.Payload = JiraJson.SanitiseForStorage(issue.RawJson);
                             existing.FetchedAt = _clock.UtcNow;
                         }
                         processed++;
