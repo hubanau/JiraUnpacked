@@ -5,7 +5,8 @@ public enum SyncOutcome { Completed, AlreadyRunning, ProjectNotFound, Started }
 public sealed record SyncRunView(
     Guid Id, Guid JiraProjectId, string Status, DateTime StartedAt, DateTime? FinishedAt,
     int IssuesProcessed, string? Error, DateTime? NextRunAt, string Kind,
-    int? TotalToSync = null, string? Phase = null);
+    int? TotalToSync = null, string? Phase = null,
+    int? PhaseProcessed = null, int? PhaseTotal = null);
 
 public sealed record SyncRunResult(SyncOutcome Outcome, SyncRunView? Run);
 

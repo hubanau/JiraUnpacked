@@ -822,12 +822,21 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)");
 
+                    b.Property<DateTime?>("LastProgressAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime?>("NextRunAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Phase")
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
+
+                    b.Property<int?>("PhaseProcessed")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("PhaseTotal")
+                        .HasColumnType("integer");
 
                     b.Property<string>("ScopeFingerprint")
                         .HasMaxLength(64)

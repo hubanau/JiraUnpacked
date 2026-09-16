@@ -6,6 +6,7 @@ import { SyncProgress } from './SyncProgress';
 
 const STATUS_TONE: Record<SyncRunStatus, 'neutral' | 'success' | 'warning' | 'danger'> = {
   Running: 'neutral',
+  Cancelled: 'neutral',
   Succeeded: 'success',
   Failed: 'danger',
   PartiallyFailed: 'warning',

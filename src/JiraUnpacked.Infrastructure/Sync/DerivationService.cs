@@ -15,7 +15,13 @@ public sealed partial class DerivationService : IDerivationService
     private readonly IClock _clock;
     public DerivationService(AppDbContext db, IClock clock) { _db = db; _clock = clock; }
 
-    public async Task DeriveProjectAsync(Guid projectId, CancellationToken ct = default)
+    /// <summary>How often progress is published. Often enough to move, rarely enough to be free.</summary>
+    private const int ProgressEvery = 250;
+
+    public async Task DeriveProjectAsync(
+        Guid projectId,
+        Func<int, int, CancellationToken, Task>? onProgress = null,
+        CancellationToken ct = default)
     {
         var project = await _db.JiraProjects.FirstOrDefaultAsync(p => p.Id == projectId, ct);
         if (project is null) return;
@@ -30,6 +36,14 @@ public sealed partial class DerivationService : IDerivationService
         var teamField = mappings.FirstOrDefault(m => m.Role == FieldRole.Team)?.JiraFieldId;
 
         var snapshots = await _db.RawIssueSnapshots.Where(r => r.JiraProjectId == projectId).ToListAsync(ct);
+
+        // Counted up front so the bar has its denominator before the first row, rather than
+        // appearing only once the first chunk lands.
+        var changelogCount = await _db.RawChangelogs.CountAsync(r => r.JiraProjectId == projectId, ct);
+        var total = snapshots.Count + changelogCount;
+        var done = 0;
+        if (onProgress is not null) await onProgress(0, total, ct);
+
         var existingIssues = await _db.Issues
             .Where(i => i.JiraProjectId == projectId)
             .ToDictionaryAsync(i => i.JiraIssueId, ct);
@@ -68,11 +82,21 @@ public sealed partial class DerivationService : IDerivationService
             issue.StoryPoints = pointsField is null ? null : GetDecimal(f, pointsField);
 
             if (_db.Entry(issue).State == EntityState.Detached) _db.Issues.Add(issue);
+
+            // Publishing mid-stage flushes the issues built so far. That is safe because
+            // derivation is idempotent — it rebuilds from raw every time — and a run that dies
+            // half way is marked Failed and re-derived, never left half-trusted.
+            if (++done % ProgressEvery == 0 && onProgress is not null) await onProgress(done, total, ct);
         }
         await _db.SaveChangesAsync(ct);
+        if (onProgress is not null) await onProgress(done, total, ct);
 
-        await DeriveChangeHistoryAsync(projectId, ct);
+        done = await DeriveChangeHistoryAsync(projectId, done, total, onProgress, ct);
         await DeriveHierarchyAsync(projectId, ct);
+
+        // The hierarchy pass walks issues already in memory and is quick next to the two stages
+        // above, so the bar simply completes rather than inventing a third denominator.
+        if (onProgress is not null) await onProgress(total, total, ct);
     }
 
     // ---- JSON helpers ----

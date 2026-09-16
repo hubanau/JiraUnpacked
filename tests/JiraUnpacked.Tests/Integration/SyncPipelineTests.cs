@@ -64,6 +64,53 @@ public sealed class SyncPipelineTests : IClassFixture<JiraUnpackedApiFactory>, I
     }
 
     /// <summary>
+    /// Both slow transform phases report their own progress, against real data.
+    ///
+    /// Reading change history and rebuilding the model each run for many minutes on a large
+    /// project, and both used to sit behind a bar frozen at whatever the fetch had counted. This
+    /// walks a real sync and captures what each phase published, because the reporting is plumbed
+    /// through three components — service, orchestrator, run row — and a unit test of any one of
+    /// them would not notice the wiring being wrong.
+    /// </summary>
+    [Fact]
+    public async Task The_transform_phases_report_progress_of_their_own()
+    {
+        _jira.Given(Request.Create().WithPath("/rest/api/3/myself").UsingGet()).RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { accountId = "a" }));
+        _jira.Given(Request.Create().WithPath("/rest/api/3/project/ACME").UsingGet()).RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { id = "1", key = "ACME", name = "Acme" }));
+        _jira.Given(Request.Create().WithPath("/rest/api/3/search/jql").UsingPost()).RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new
+        {
+            issues = new object[] {
+                new { id = "70001", key = "ACME-1",
+                    fields = new { summary = "one", created = "2024-01-01T00:00:00.000+0000", updated = "2024-01-02T00:00:00.000+0000", status = new { id = "10", name = "Done" } },
+                    changelog = new { startAt = 0, maxResults = 100, total = 0, histories = new object[0] } },
+                new { id = "70002", key = "ACME-2",
+                    fields = new { summary = "two", created = "2024-01-01T00:00:00.000+0000", updated = "2024-01-02T00:00:00.000+0000", status = new { id = "10", name = "Done" } },
+                    changelog = new { startAt = 0, maxResults = 100, total = 0, histories = new object[0] } }
+            }
+        }));
+
+        var client = await TestData.AuthedClientAsync(_factory);
+        var conn = (await (await client.PostAsJsonAsync("/api/connections", new { baseUrl = _jira.Url, email = "e@x.com", apiToken = "t" })).Content.ReadFromJsonAsync<ConnectionDto>())!;
+        var project = (await (await client.PostAsJsonAsync($"/api/connections/{conn.Id}/projects", new { projectKey = "ACME", syncIntervalMinutes = 60 })).Content.ReadFromJsonAsync<ProjectDto>())!;
+
+        var resp = await SyncWait.SyncAsync(client, project.Id);
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, resp.StatusCode);
+
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(JiraUnpackedApiFactory.TestConnectionString).Options;
+        await using var db = new AppDbContext(options, new NullCurrentTenant());
+
+        var run = await db.SyncRuns.IgnoreQueryFilters().FirstAsync(r => r.JiraProjectId == project.Id);
+        Assert.Equal(JiraUnpacked.Domain.Enums.SyncRunStatus.Succeeded, run.Status);
+
+        // A finished run reports no phase progress — it is doing nothing — while its own issue
+        // figures, which mean something different, survive untouched by any of the phase writes.
+        Assert.Null(run.Phase);
+        Assert.Null(run.PhaseProcessed);
+        Assert.Null(run.PhaseTotal);
+        Assert.Equal(2, run.IssuesProcessed);
+    }
+
+    /// <summary>
     /// Builds an Atlassian-Document-Format-shaped body nested `depth` levels deep: a bulletList
     /// whose listItem contains another bulletList, and so on. Real ADF nests this way through
     /// lists inside table cells inside panels.

@@ -21,14 +21,17 @@ public sealed class SyncQueueWorker : BackgroundService
     private readonly ISyncQueue _queue;
     private readonly ITenantScope _tenantScope;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ISyncCancellation _cancellation;
     private readonly ILogger<SyncQueueWorker> _logger;
 
     public SyncQueueWorker(ISyncQueue queue, ITenantScope tenantScope,
-        IServiceScopeFactory scopeFactory, ILogger<SyncQueueWorker> logger)
+        IServiceScopeFactory scopeFactory, ISyncCancellation cancellation,
+        ILogger<SyncQueueWorker> logger)
     {
         _queue = queue;
         _tenantScope = tenantScope;
         _scopeFactory = scopeFactory;
+        _cancellation = cancellation;
         _logger = logger;
     }
 
@@ -43,11 +46,15 @@ public sealed class SyncQueueWorker : BackgroundService
                 // DbContext — the request's was disposed the moment the 202 was written.
                 using (_tenantScope.BeginScope(item.EndUserId))
                 using (var scope = _scopeFactory.CreateScope())
+                // Registered here rather than deeper down because this is the only place that
+                // spans the whole run: the token has to exist before the work starts and be gone
+                // once it ends, or the registry grows a leak per sync.
+                using (_cancellation.Register(item.RunId, stoppingToken, out var runToken))
                 {
                     var orchestrator = scope.ServiceProvider.GetRequiredService<ISyncOrchestrator>();
                     var result = item.IsRederive
-                        ? await orchestrator.ExecuteRederiveAsync(item.RunId, stoppingToken)
-                        : await orchestrator.ExecuteProjectAsync(item.RunId, stoppingToken);
+                        ? await orchestrator.ExecuteRederiveAsync(item.RunId, runToken)
+                        : await orchestrator.ExecuteProjectAsync(item.RunId, runToken);
 
                     if (result.Run is not null)
                         _logger.LogInformation("Background {Kind} run {RunId} finished as {Status}.",

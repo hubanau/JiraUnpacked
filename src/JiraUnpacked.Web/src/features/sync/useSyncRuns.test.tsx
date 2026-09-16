@@ -27,6 +27,8 @@ const RUNNING_RUN: SyncRun = {
   kind: 'Sync',
   totalToSync: null,
   phase: null,
+  phaseProcessed: null,
+  phaseTotal: null,
 };
 
 const SUCCEEDED_RUN: SyncRun = {
