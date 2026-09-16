@@ -206,6 +206,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                     // costs no extra round trip. IssuesProcessed is therefore live during the run
                     // rather than only true once it ends.
                     run.IssuesProcessed = processed;
+                    run.PhaseProcessed = processed;
+                    run.PhaseTotal = run.TotalToSync;
                     await _db.SaveChangesAsync(ct);
 
                     // Let the page go. Without this the context accumulates every snapshot for
@@ -232,7 +234,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             // Both are phases of their own because they can outlast the fetch on a large project,
             // and a bar that sat at 100% through them would read as a hang.
             await SetPhaseAsync(run, SyncPhase.Changelog, ct);
-            await _ingest.IngestProjectAsync(projectId, creds, ct);
+            await _ingest.IngestProjectAsync(projectId, creds, async (done, total, token) =>
+            {
+                run.PhaseProcessed = done;
+                run.PhaseTotal = total;
+                await _db.SaveChangesAsync(token);
+            }, ct);
 
             await SetPhaseAsync(run, SyncPhase.Deriving, ct);
             await _derivation.DeriveProjectAsync(projectId, ct);
@@ -257,6 +264,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             run.Status = SyncRunStatus.Succeeded;
             run.IssuesProcessed = processed;
             run.Phase = null;              // over: a finished run is doing nothing
+            run.PhaseProcessed = null;
+            run.PhaseTotal = null;
             run.FinishedAt = _clock.UtcNow;
             run.NextRunAt = _clock.UtcNow.AddMinutes(project.SyncIntervalMinutes);
             await _db.SaveChangesAsync(ct);
@@ -357,6 +366,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     private async Task SetPhaseAsync(SyncRun run, string phase, CancellationToken ct)
     {
         run.Phase = phase;
+
+        // Each phase counts something different, so entering one clears the previous one's
+        // numbers. Leaving them would show the last phase's progress under this phase's label —
+        // a bar that reads 100% while the work has only just begun.
+        run.PhaseProcessed = null;
+        run.PhaseTotal = null;
         await _db.SaveChangesAsync(ct);
     }
 
@@ -396,6 +411,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     {
         run.Status = SyncRunStatus.Failed;
         run.Phase = null;
+        run.PhaseProcessed = null;
+        run.PhaseTotal = null;
         run.FinishedAt = _clock.UtcNow;
         if (ex is JiraApiException)
         {
@@ -434,5 +451,5 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
 
     private static SyncRunView ToView(SyncRun r) =>
         new(r.Id, r.JiraProjectId, r.Status.ToString(), r.StartedAt, r.FinishedAt, r.IssuesProcessed, r.Error, r.NextRunAt, r.Kind.ToString(),
-            r.TotalToSync, r.Phase);
+            r.TotalToSync, r.Phase, r.PhaseProcessed, r.PhaseTotal);
 }

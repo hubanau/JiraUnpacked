@@ -59,7 +59,22 @@ public class SyncOrchestratorTests
     // These failure tests never reach the transform phase (they throw during extract), so no-op stubs suffice.
     private sealed class NoopIngest : IChangelogIngestService
     {
-        public Task IngestProjectAsync(Guid projectId, JiraCredentials creds, CancellationToken ct = default) => Task.CompletedTask;
+        public Task IngestProjectAsync(
+            Guid projectId, JiraCredentials creds,
+            Func<int, int, CancellationToken, Task>? onProgress = null,
+            CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    /// <summary>Ingest that hands its progress reporter to the test to drive.</summary>
+    private sealed class ReportingIngest : IChangelogIngestService
+    {
+        private readonly Func<Func<int, int, CancellationToken, Task>, CancellationToken, Task> _run;
+        public ReportingIngest(Func<Func<int, int, CancellationToken, Task>, CancellationToken, Task> run) => _run = run;
+
+        public Task IngestProjectAsync(
+            Guid projectId, JiraCredentials creds,
+            Func<int, int, CancellationToken, Task>? onProgress = null,
+            CancellationToken ct = default) => _run(onProgress!, ct);
     }
 
     private sealed class NoopDerivation : IDerivationService
@@ -529,6 +544,60 @@ public class SyncOrchestratorTests
         Assert.Equal(100, result.Run!.IssuesProcessed);
         Assert.Equal("Succeeded", result.Run.Status);
         Assert.Equal(100, db.RawIssueSnapshots.Count(s => s.JiraProjectId == projectId));
+    }
+
+    /// <summary>
+    /// Reading change history is a phase of its own, and on a large project it outlasts the fetch
+    /// by a long way. Its progress has to be published under its own denominator: reporting the
+    /// FETCH numbers through it is what left a real 92,673-issue run behind a bar frozen at 100%
+    /// for many minutes, which reads as a hang rather than as work.
+    /// </summary>
+    [Fact]
+    public async Task The_changelog_phase_publishes_its_own_progress()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: false);
+
+        var jira = new StubJiraClient(() =>
+            Task.FromResult(new SearchPage(new[] { new RawIssue("1", "{}") }, null)))
+        { ApproximateCount = 1 };
+
+        // Reads the run through a SEPARATE context, so what is asserted is what a polling client
+        // could actually see rather than values that only ever lived in memory.
+        var observed = new List<(string? Phase, int? Done, int? Total)>();
+        var ingest = new ReportingIngest(async (report, ct) =>
+        {
+            await report(0, 40, ct);
+            Observe();
+            await report(20, 40, ct);
+            Observe();
+        });
+
+        void Observe()
+        {
+            using var probe = new AppDbContext(options, tenant);
+            var r = probe.SyncRuns.Single(x => x.JiraProjectId == projectId);
+            observed.Add((r.Phase, r.PhaseProcessed, r.PhaseTotal));
+        }
+
+        await using var db = new AppDbContext(options, tenant);
+        var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
+            new FakeClock(DateTime.UtcNow), ingest, new NoopDerivation(), NullLogger<SyncOrchestrator>.Instance);
+
+        var result = await orchestrator.RunProjectAsync(projectId);
+
+        Assert.Equal(("Changelog", 0, 40), observed[0]);
+        Assert.Equal(("Changelog", 20, 40), observed[1]);
+
+        // A finished run is doing nothing, so it reports no phase progress — while the run's own
+        // issue figures, which mean something else entirely, are untouched by any of this.
+        Assert.Null(result.Run!.Phase);
+        Assert.Null(result.Run.PhaseProcessed);
+        Assert.Null(result.Run.PhaseTotal);
+        Assert.Equal(1, result.Run.IssuesProcessed);
+        Assert.Equal(1, result.Run.TotalToSync);
     }
 
     /// <summary>

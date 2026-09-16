@@ -7,7 +7,8 @@ const run = (over: Partial<SyncRun> = {}): SyncRun => ({
   id: 'r1', jiraProjectId: 'p1', status: 'Running',
   startedAt: '2026-09-08T10:00:00Z', finishedAt: null,
   issuesProcessed: 120, error: null, nextRunAt: null, kind: 'Sync',
-  totalToSync: 480, phase: 'Fetching', ...over,
+  totalToSync: 480, phase: 'Fetching',
+  phaseProcessed: 120, phaseTotal: 480, ...over,
 });
 
 describe('SyncProgress', () => {
@@ -23,7 +24,7 @@ describe('SyncProgress', () => {
   it('draws no bar when the total is unknown', () => {
     // Null is not zero. A determinate bar against a zero total renders as FULL, which would
     // claim a finished sync — so an unknown total gets a count and no bar at all.
-    render(<SyncProgress run={run({ totalToSync: null })} />);
+    render(<SyncProgress run={run({ phaseTotal: null })} />);
 
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
     expect(screen.getByText('120')).toBeInTheDocument();
@@ -32,9 +33,23 @@ describe('SyncProgress', () => {
   it('never renders past 100% when Jira undercounts', () => {
     // The count is Jira's approximation and can undershoot what paging actually returns; the bar
     // is clamped rather than allowed to overflow its own track.
-    render(<SyncProgress run={run({ issuesProcessed: 500, totalToSync: 480 })} />);
+    render(<SyncProgress run={run({ phaseProcessed: 500, phaseTotal: 480 })} />);
 
     expect(screen.getByText('500 / 480 · 100%')).toBeInTheDocument();
+  });
+
+  it('counts the phase it is in, not the fetch it already finished', () => {
+    // The whole point of the change: reading change history is its own long phase with its own
+    // denominator. Before this the bar showed the FETCH numbers throughout, so it sat frozen at
+    // 100% for the many minutes this phase can take, which reads as a hang.
+    render(<SyncProgress run={run({
+      phase: 'Changelog', issuesProcessed: 92673, totalToSync: 92673,
+      phaseProcessed: 12000, phaseTotal: 92673,
+    })} />);
+
+    expect(screen.getByText(/change history/i)).toBeInTheDocument();
+    expect(screen.getByText('12000 / 92673 · 13%')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '12000');
   });
 
   it('says what the run is doing in each phase', () => {

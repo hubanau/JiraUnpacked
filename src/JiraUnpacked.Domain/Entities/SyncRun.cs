@@ -25,6 +25,18 @@ public sealed class SyncRun : ITenantOwned
     /// and then appears to hang through changelog ingest and derivation.
     /// </summary>
     public string? Phase { get; set; }
+
+    /// <summary>
+    /// How far through the CURRENT phase the run is, and out of how much. Null when the phase
+    /// cannot say — counting, deriving, or a run that is over.
+    ///
+    /// Deliberately separate from IssuesProcessed/TotalToSync, which mean one thing and keep
+    /// meaning it: how many issues this run fetched from Jira. Reusing those for the progress bar
+    /// would leave a finished run reporting whatever the last phase happened to be counting.
+    /// </summary>
+    public int? PhaseProcessed { get; set; }
+
+    public int? PhaseTotal { get; set; }
     public string? Error { get; set; }
     public DateTime? NextRunAt { get; set; }
 

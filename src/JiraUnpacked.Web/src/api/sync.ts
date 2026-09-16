@@ -17,6 +17,10 @@ export interface SyncRun {
   totalToSync: number | null;
   /** What a Running run is doing: Counting, Fetching, Changelog, Deriving. Null once it ends. */
   phase: string | null;
+  /** Progress within the CURRENT phase. Null when the phase cannot say, or the run is over —
+   *  each phase counts something different, so these reset as the run moves between them. */
+  phaseProcessed: number | null;
+  phaseTotal: number | null;
 }
 
 export const listSyncRuns = (projectId: string) =>

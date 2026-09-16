@@ -829,6 +829,12 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
+                    b.Property<int?>("PhaseProcessed")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("PhaseTotal")
+                        .HasColumnType("integer");
+
                     b.Property<string>("ScopeFingerprint")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");

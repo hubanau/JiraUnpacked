@@ -29,6 +29,8 @@ const NEW_RUN: SyncRun = {
   kind: 'Sync',
   totalToSync: null,
   phase: null,
+  phaseProcessed: null,
+  phaseTotal: null,
 };
 
 describe('SyncControls', () => {
