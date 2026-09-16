@@ -242,7 +242,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             }, ct);
 
             await SetPhaseAsync(run, SyncPhase.Deriving, ct);
-            await _derivation.DeriveProjectAsync(projectId, ct);
+            await _derivation.DeriveProjectAsync(projectId, async (d, t, token) =>
+            {
+                run.PhaseProcessed = d;
+                run.PhaseTotal = t;
+                await _db.SaveChangesAsync(token);
+            }, ct);
 
             // Counted AFTER derivation, because "raw arrived but nothing was modelled" is a second,
             // separate way for this screen to show zeroes, and the two need telling apart.
@@ -300,7 +305,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             // No TotalToSync: a rederive fetches nothing, so there is no denominator to report and
             // null is the honest answer rather than a zero that would render as an empty bar.
             await SetPhaseAsync(run, SyncPhase.Deriving, ct);
-            await _derivation.DeriveProjectAsync(projectId, ct);
+            await _derivation.DeriveProjectAsync(projectId, async (d, t, token) =>
+            {
+                run.PhaseProcessed = d;
+                run.PhaseTotal = t;
+                await _db.SaveChangesAsync(token);
+            }, ct);
             run.Status = SyncRunStatus.Succeeded; run.Phase = null; run.FinishedAt = _clock.UtcNow;
             await _db.SaveChangesAsync(ct);
 

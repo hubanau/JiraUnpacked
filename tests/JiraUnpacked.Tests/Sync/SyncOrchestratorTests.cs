@@ -77,9 +77,24 @@ public class SyncOrchestratorTests
             CancellationToken ct = default) => _run(onProgress!, ct);
     }
 
+    /// <summary>Derivation that hands its progress reporter to the test to drive.</summary>
+    private sealed class ReportingDerivation : IDerivationService
+    {
+        private readonly Func<Func<int, int, CancellationToken, Task>, CancellationToken, Task> _run;
+        public ReportingDerivation(Func<Func<int, int, CancellationToken, Task>, CancellationToken, Task> run) => _run = run;
+
+        public Task DeriveProjectAsync(
+            Guid projectId,
+            Func<int, int, CancellationToken, Task>? onProgress = null,
+            CancellationToken ct = default) => _run(onProgress!, ct);
+    }
+
     private sealed class NoopDerivation : IDerivationService
     {
-        public Task DeriveProjectAsync(Guid projectId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeriveProjectAsync(
+            Guid projectId,
+            Func<int, int, CancellationToken, Task>? onProgress = null,
+            CancellationToken ct = default) => Task.CompletedTask;
     }
 
     // Simulates an infra failure mid-sync: throws a DbUpdateException (carrying raw SQL detail) on the Nth save.
@@ -598,6 +613,51 @@ public class SyncOrchestratorTests
         Assert.Null(result.Run.PhaseTotal);
         Assert.Equal(1, result.Run.IssuesProcessed);
         Assert.Equal(1, result.Run.TotalToSync);
+    }
+
+    /// <summary>
+    /// Rebuilding the model is the last long phase, and it too has to publish under its own
+    /// denominator. Without this the bar showed whatever the previous phase had counted, which on
+    /// a 92,673-issue project meant a full bar sitting over work that had only just started.
+    /// </summary>
+    [Fact]
+    public async Task The_derive_phase_publishes_its_own_progress()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: false);
+
+        var jira = new StubJiraClient(() =>
+            Task.FromResult(new SearchPage(new[] { new RawIssue("1", "{}") }, null)))
+        { ApproximateCount = 1 };
+
+        var observed = new List<(string? Phase, int? Done, int? Total)>();
+        var derivation = new ReportingDerivation(async (report, ct) =>
+        {
+            await report(0, 60, ct);
+            Observe();
+            await report(30, 60, ct);
+            Observe();
+        });
+
+        void Observe()
+        {
+            using var probe = new AppDbContext(options, tenant);
+            var r = probe.SyncRuns.Single(x => x.JiraProjectId == projectId);
+            observed.Add((r.Phase, r.PhaseProcessed, r.PhaseTotal));
+        }
+
+        await using var db = new AppDbContext(options, tenant);
+        var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), derivation, NullLogger<SyncOrchestrator>.Instance);
+
+        var result = await orchestrator.RunProjectAsync(projectId);
+
+        Assert.Equal(("Deriving", 0, 60), observed[0]);
+        Assert.Equal(("Deriving", 30, 60), observed[1]);
+        Assert.Equal("Succeeded", result.Run!.Status);
+        Assert.Null(result.Run.PhaseTotal);
     }
 
     /// <summary>
