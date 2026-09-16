@@ -23,7 +23,10 @@ public sealed class ChangelogIngestService : IChangelogIngestService
     public ChangelogIngestService(AppDbContext db, IJiraApiClient jira, IClock clock)
     { _db = db; _jira = jira; _clock = clock; }
 
-    public async Task IngestProjectAsync(Guid projectId, JiraCredentials creds, CancellationToken ct = default)
+    public async Task IngestProjectAsync(
+        Guid projectId, JiraCredentials creds,
+        Func<int, int, CancellationToken, Task>? onProgress = null,
+        CancellationToken ct = default)
     {
         // Ids only. Loading the snapshot ENTITIES for a whole project pulls every issue payload
         // into memory at once — hundreds of megabytes on a large project, on top of whatever the
@@ -33,9 +36,17 @@ public sealed class ChangelogIngestService : IChangelogIngestService
             .Select(r => r.Id)
             .ToListAsync(ct);
 
+        // Reported before the first batch as well as after each one, so a watcher sees the
+        // denominator immediately rather than a blank bar until the first batch lands — and a
+        // batch here can take a while, because issues with long histories are paged from Jira.
+        if (onProgress is not null) await onProgress(0, snapshotIds.Count, ct);
+
+        var done = 0;
         foreach (var batch in snapshotIds.Chunk(BatchSize))
         {
             await IngestBatchAsync(projectId, batch, creds, ct);
+            done += batch.Length;
+            if (onProgress is not null) await onProgress(done, snapshotIds.Count, ct);
         }
     }
 

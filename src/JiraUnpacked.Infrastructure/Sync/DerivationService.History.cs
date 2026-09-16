@@ -9,7 +9,9 @@ namespace JiraUnpacked.Infrastructure.Sync;
 public sealed partial class DerivationService
 {
     // Append-only, idempotent: skip (issue, historyId, field) already present.
-    private async Task DeriveChangeHistoryAsync(Guid projectId, CancellationToken ct)
+    private async Task<int> DeriveChangeHistoryAsync(
+        Guid projectId, int done, int total,
+        Func<int, int, CancellationToken, Task>? onProgress, CancellationToken ct)
     {
         var logs = await _db.RawChangelogs.Where(r => r.JiraProjectId == projectId).ToListAsync(ct);
         var existing = (await _db.IssueChangeHistory.Where(h => h.JiraProjectId == projectId)
@@ -18,6 +20,8 @@ public sealed partial class DerivationService
 
         foreach (var log in logs)
         {
+            if (++done % ProgressEvery == 0 && onProgress is not null) await onProgress(done, total, ct);
+
             using var doc = JsonDocument.Parse(log.Payload, JiraJson.Document);
             if (!doc.RootElement.TryGetProperty("histories", out var hs) || hs.ValueKind != JsonValueKind.Array) continue;
             foreach (var h in hs.EnumerateArray())
@@ -41,6 +45,7 @@ public sealed partial class DerivationService
             }
         }
         await _db.SaveChangesAsync(ct);
+        return done;
     }
 
     // Second pass: resolve ParentIssueId (self-FK) by matching ParentJiraIssueId to a sibling in the project.

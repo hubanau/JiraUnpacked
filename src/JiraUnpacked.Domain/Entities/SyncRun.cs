@@ -25,6 +25,29 @@ public sealed class SyncRun : ITenantOwned
     /// and then appears to hang through changelog ingest and derivation.
     /// </summary>
     public string? Phase { get; set; }
+
+    /// <summary>
+    /// How far through the CURRENT phase the run is, and out of how much. Null when the phase
+    /// cannot say — counting, deriving, or a run that is over.
+    ///
+    /// Deliberately separate from IssuesProcessed/TotalToSync, which mean one thing and keep
+    /// meaning it: how many issues this run fetched from Jira. Reusing those for the progress bar
+    /// would leave a finished run reporting whatever the last phase happened to be counting.
+    /// </summary>
+    public int? PhaseProcessed { get; set; }
+
+    public int? PhaseTotal { get; set; }
+
+    /// <summary>
+    /// When this run last showed a sign of life — set every time it publishes progress or enters
+    /// a phase. Null on runs that predate the column.
+    ///
+    /// This is what separates a STUCK run from a slow one. The reaper used to compare StartedAt
+    /// against a fixed timeout and so killed a perfectly healthy 92,673-issue sync at the
+    /// two-hour mark, three hours into work it would have finished. A run that is still reporting
+    /// is alive whatever its age; a run whose process died stops reporting and is reaped.
+    /// </summary>
+    public DateTime? LastProgressAt { get; set; }
     public string? Error { get; set; }
     public DateTime? NextRunAt { get; set; }
 

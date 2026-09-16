@@ -18,13 +18,15 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     private readonly IClock _clock;
     private readonly IChangelogIngestService _ingest;
     private readonly IDerivationService _derivation;
+    private readonly ISyncCancellation _cancellation;
     private readonly ILogger<SyncOrchestrator> _logger;
 
     public SyncOrchestrator(AppDbContext db, IJiraApiClient jira, ITokenProtector protector, IClock clock,
-        IChangelogIngestService ingest, IDerivationService derivation, ILogger<SyncOrchestrator> logger)
+        IChangelogIngestService ingest, IDerivationService derivation, ISyncCancellation cancellation,
+        ILogger<SyncOrchestrator> logger)
     {
         _db = db; _jira = jira; _protector = protector; _clock = clock;
-        _ingest = ingest; _derivation = derivation; _logger = logger;
+        _ingest = ingest; _derivation = derivation; _cancellation = cancellation; _logger = logger;
     }
 
     /// <summary>Both halves in one call — the scheduled tick, which is already off the request path.</summary>
@@ -206,6 +208,9 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                     // costs no extra round trip. IssuesProcessed is therefore live during the run
                     // rather than only true once it ends.
                     run.IssuesProcessed = processed;
+                    run.PhaseProcessed = processed;
+                    run.PhaseTotal = run.TotalToSync;
+                    run.LastProgressAt = _clock.UtcNow;
                     await _db.SaveChangesAsync(ct);
 
                     // Let the page go. Without this the context accumulates every snapshot for
@@ -232,10 +237,22 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             // Both are phases of their own because they can outlast the fetch on a large project,
             // and a bar that sat at 100% through them would read as a hang.
             await SetPhaseAsync(run, SyncPhase.Changelog, ct);
-            await _ingest.IngestProjectAsync(projectId, creds, ct);
+            await _ingest.IngestProjectAsync(projectId, creds, async (done, total, token) =>
+            {
+                run.PhaseProcessed = done;
+                run.PhaseTotal = total;
+                run.LastProgressAt = _clock.UtcNow;
+                await _db.SaveChangesAsync(token);
+            }, ct);
 
             await SetPhaseAsync(run, SyncPhase.Deriving, ct);
-            await _derivation.DeriveProjectAsync(projectId, ct);
+            await _derivation.DeriveProjectAsync(projectId, async (d, t, token) =>
+            {
+                run.PhaseProcessed = d;
+                run.PhaseTotal = t;
+                run.LastProgressAt = _clock.UtcNow;
+                await _db.SaveChangesAsync(token);
+            }, ct);
 
             // Counted AFTER derivation, because "raw arrived but nothing was modelled" is a second,
             // separate way for this screen to show zeroes, and the two need telling apart.
@@ -257,9 +274,32 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             run.Status = SyncRunStatus.Succeeded;
             run.IssuesProcessed = processed;
             run.Phase = null;              // over: a finished run is doing nothing
+            run.PhaseProcessed = null;
+            run.PhaseTotal = null;
             run.FinishedAt = _clock.UtcNow;
             run.NextRunAt = _clock.UtcNow.AddMinutes(project.SyncIntervalMinutes);
             await _db.SaveChangesAsync(ct);
+        }
+        catch (OperationCanceledException) when (_cancellation.WasCancelled(run.Id))
+        {
+            // Someone pressed stop. Recorded as Cancelled rather than Failed: a deliberate stop is
+            // not a fault, and colouring it red would bury the real failures among decisions.
+            DiscardPendingChangesExcept(run);
+            run.Status = SyncRunStatus.Cancelled;
+            run.Error = "Stopped on request.";
+            run.Phase = null;
+            run.PhaseProcessed = null;
+            run.PhaseTotal = null;
+            run.FinishedAt = _clock.UtcNow;
+            run.NextRunAt = _clock.UtcNow.AddMinutes(project.SyncIntervalMinutes);
+
+            // CancellationToken.None, not ct: ct is the cancelled one, and recording WHY the run
+            // ended is the single write that still has to happen after a cancellation.
+            await _db.SaveChangesAsync(CancellationToken.None);
+
+            _logger.LogInformation(
+                "Sync {ProjectKey} ({ProjectId}) stopped on request after {Processed} issue(s).",
+                project.JiraProjectKey, projectId, run.IssuesProcessed);
         }
         catch (Exception ex)
         {
@@ -291,7 +331,13 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             // No TotalToSync: a rederive fetches nothing, so there is no denominator to report and
             // null is the honest answer rather than a zero that would render as an empty bar.
             await SetPhaseAsync(run, SyncPhase.Deriving, ct);
-            await _derivation.DeriveProjectAsync(projectId, ct);
+            await _derivation.DeriveProjectAsync(projectId, async (d, t, token) =>
+            {
+                run.PhaseProcessed = d;
+                run.PhaseTotal = t;
+                run.LastProgressAt = _clock.UtcNow;
+                await _db.SaveChangesAsync(token);
+            }, ct);
             run.Status = SyncRunStatus.Succeeded; run.Phase = null; run.FinishedAt = _clock.UtcNow;
             await _db.SaveChangesAsync(ct);
 
@@ -357,6 +403,13 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     private async Task SetPhaseAsync(SyncRun run, string phase, CancellationToken ct)
     {
         run.Phase = phase;
+        run.LastProgressAt = _clock.UtcNow;
+
+        // Each phase counts something different, so entering one clears the previous one's
+        // numbers. Leaving them would show the last phase's progress under this phase's label —
+        // a bar that reads 100% while the work has only just begun.
+        run.PhaseProcessed = null;
+        run.PhaseTotal = null;
         await _db.SaveChangesAsync(ct);
     }
 
@@ -396,6 +449,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     {
         run.Status = SyncRunStatus.Failed;
         run.Phase = null;
+        run.PhaseProcessed = null;
+        run.PhaseTotal = null;
         run.FinishedAt = _clock.UtcNow;
         if (ex is JiraApiException)
         {
@@ -434,5 +489,5 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
 
     private static SyncRunView ToView(SyncRun r) =>
         new(r.Id, r.JiraProjectId, r.Status.ToString(), r.StartedAt, r.FinishedAt, r.IssuesProcessed, r.Error, r.NextRunAt, r.Kind.ToString(),
-            r.TotalToSync, r.Phase);
+            r.TotalToSync, r.Phase, r.PhaseProcessed, r.PhaseTotal);
 }

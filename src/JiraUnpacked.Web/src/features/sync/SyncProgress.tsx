@@ -19,15 +19,19 @@ export function phaseLabel(run: SyncRun): string {
 /**
  * Progress for one Running sync.
  *
- * `totalToSync` is null whenever the total is unknown — Jira's count endpoint declined, or the
- * run is a rederive that fetches nothing. That is NOT zero, and the difference matters: a
- * determinate bar drawn against a zero total is a full bar, which would be a lie. Unknown gets
- * a count of what has been done so far and no bar at all.
+ * The numbers are the CURRENT PHASE's, not the run's. Fetching counts issues pulled from Jira;
+ * reading change history counts issues whose history has been read — a phase that can run for
+ * many minutes on a large project, and used to sit behind a bar frozen at 100% because the bar
+ * only ever measured the fetch.
+ *
+ * A null total means the phase cannot say — counting, deriving, or a run that is over. That is
+ * NOT zero, and the difference matters: a determinate bar drawn against a zero total is a full
+ * bar, which would be a lie. Unknown gets a count of what has been done so far and no bar.
  */
 export function SyncProgress({ run }: { run: SyncRun }) {
   const label = phaseLabel(run);
-  const total = run.totalToSync;
-  const done = run.issuesProcessed;
+  const total = run.phaseTotal;
+  const done = run.phaseProcessed ?? 0;
 
   // Jira's count is approximate and can undershoot what paging returns, so the bar is clamped
   // rather than allowed to render past its own track.

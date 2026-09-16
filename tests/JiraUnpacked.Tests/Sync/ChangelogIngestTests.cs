@@ -30,7 +30,7 @@ public sealed class ChangelogIngestTests : IClassFixture<JiraUnpackedApiFactory>
         {
             using var scope = _factory.Services.CreateScope();
             var svc = scope.ServiceProvider.GetRequiredService<IChangelogIngestService>();
-            await svc.IngestProjectAsync(projectId, creds, CancellationToken.None);
+            await svc.IngestProjectAsync(projectId, creds, null, CancellationToken.None);
         }
     }
 
