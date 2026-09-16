@@ -661,6 +661,49 @@ public class SyncOrchestratorTests
     }
 
     /// <summary>
+    /// A run the queue worker did not start must still be stoppable.
+    ///
+    /// The scheduled tick calls the orchestrator DIRECTLY, so registering for cancellation in the
+    /// worker left every scheduled run uncancellable: Stop answered "nothing is running to stop"
+    /// while a run was plainly running, because the registry had never heard of it. This calls
+    /// RunProjectAsync the way the tick does — no worker anywhere — and stops it mid-flight.
+    /// </summary>
+    [Fact]
+    public async Task A_run_started_outside_the_worker_can_still_be_stopped()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var (projectId, _unused) = Seed(options, tenant, withQuery: false);
+
+        var cancellation = new SyncCancellation();
+
+        // Stops the run from inside the work, which is the only moment the registration exists.
+        var ingest = new ReportingIngest(async (report, ct) =>
+        {
+            var runId = new AppDbContext(options, tenant).SyncRuns.Single(r => r.JiraProjectId == projectId).Id;
+            Assert.True(cancellation.Cancel(runId), "the orchestrator did not register the run");
+            await report(0, 1, ct);
+        });
+
+        var jira = new StubJiraClient(() =>
+            Task.FromResult(new SearchPage(new[] { new RawIssue("1", "{}") }, null)))
+        { ApproximateCount = 1 };
+
+        await using var db = new AppDbContext(options, tenant);
+        var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
+            new FakeClock(DateTime.UtcNow), ingest, new NoopDerivation(), cancellation,
+            NullLogger<SyncOrchestrator>.Instance);
+
+        var result = await orchestrator.RunProjectAsync(projectId);
+
+        // Cancelled, not Failed: a deliberate stop is not a fault.
+        Assert.Equal("Cancelled", result.Run!.Status);
+        Assert.Equal("Stopped on request.", result.Run.Error);
+        Assert.Null(result.Run.Phase);
+    }
+
+    /// <summary>
     /// The count is drawn against the SAME JQL that is fetched, watermark clause included.
     /// Counting the unnarrowed query would give an incremental sync a denominator from a full
     /// pull, and the bar would stall at a few percent while the run was in fact finished.

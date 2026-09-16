@@ -99,6 +99,16 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         if (claim is null) return new SyncRunResult(SyncOutcome.ProjectNotFound, null);
         var (run, project) = claim.Value;
 
+        // Registered HERE, not in the worker that usually calls this. The scheduled tick invokes
+        // the orchestrator directly, so registering one level up left every scheduled run
+        // uncancellable — Stop answered "nothing is running to stop" while a run was plainly
+        // running. This is the one place every path goes through.
+        //
+        // Reassigning ct is deliberate: everything below then uses the cancellable token, with no
+        // chance of one stray call still holding the original and ignoring a stop.
+        using var registration = _cancellation.Register(run.Id, ct, out var runToken);
+        ct = runToken;
+
         var projectId = project.Id;
         try
         {
@@ -324,6 +334,16 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         var claim = await ClaimAsync(runId, ct);
         if (claim is null) return new SyncRunResult(SyncOutcome.ProjectNotFound, null);
         var (run, project) = claim.Value;
+
+        // Registered HERE, not in the worker that usually calls this. The scheduled tick invokes
+        // the orchestrator directly, so registering one level up left every scheduled run
+        // uncancellable — Stop answered "nothing is running to stop" while a run was plainly
+        // running. This is the one place every path goes through.
+        //
+        // Reassigning ct is deliberate: everything below then uses the cancellable token, with no
+        // chance of one stray call still holding the original and ignoring a stop.
+        using var registration = _cancellation.Register(run.Id, ct, out var runToken);
+        ct = runToken;
 
         var projectId = project.Id;
         try
