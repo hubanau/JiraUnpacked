@@ -111,6 +111,9 @@ public static class DependencyInjection
         // requests a metrics page makes. Tenant scoping is inside the cache, keyed from
         // ICurrentTenant rather than from any caller.
         services.AddSingleton<IReportCache, ReportCache>();
+        // Singleton: the request that stops a run and the worker running it live in different
+        // scopes, and a registry that is not shared between them can cancel nothing.
+        services.AddSingleton<ISyncCancellation, JiraUnpacked.Infrastructure.Sync.SyncCancellation>();
         services.AddScoped<IMetricsQueryService, MetricsQueryService>();
         services.AddScoped<IFieldChurnQueryService, FieldChurnQueryService>();
         services.AddScoped<IGapCheck, OpenEpicAllChildrenDoneCheck>();

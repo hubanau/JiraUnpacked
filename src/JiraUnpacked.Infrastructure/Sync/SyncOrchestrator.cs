@@ -18,13 +18,15 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     private readonly IClock _clock;
     private readonly IChangelogIngestService _ingest;
     private readonly IDerivationService _derivation;
+    private readonly ISyncCancellation _cancellation;
     private readonly ILogger<SyncOrchestrator> _logger;
 
     public SyncOrchestrator(AppDbContext db, IJiraApiClient jira, ITokenProtector protector, IClock clock,
-        IChangelogIngestService ingest, IDerivationService derivation, ILogger<SyncOrchestrator> logger)
+        IChangelogIngestService ingest, IDerivationService derivation, ISyncCancellation cancellation,
+        ILogger<SyncOrchestrator> logger)
     {
         _db = db; _jira = jira; _protector = protector; _clock = clock;
-        _ingest = ingest; _derivation = derivation; _logger = logger;
+        _ingest = ingest; _derivation = derivation; _cancellation = cancellation; _logger = logger;
     }
 
     /// <summary>Both halves in one call — the scheduled tick, which is already off the request path.</summary>
@@ -208,6 +210,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                     run.IssuesProcessed = processed;
                     run.PhaseProcessed = processed;
                     run.PhaseTotal = run.TotalToSync;
+                    run.LastProgressAt = _clock.UtcNow;
                     await _db.SaveChangesAsync(ct);
 
                     // Let the page go. Without this the context accumulates every snapshot for
@@ -238,6 +241,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             {
                 run.PhaseProcessed = done;
                 run.PhaseTotal = total;
+                run.LastProgressAt = _clock.UtcNow;
                 await _db.SaveChangesAsync(token);
             }, ct);
 
@@ -246,6 +250,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             {
                 run.PhaseProcessed = d;
                 run.PhaseTotal = t;
+                run.LastProgressAt = _clock.UtcNow;
                 await _db.SaveChangesAsync(token);
             }, ct);
 
@@ -274,6 +279,27 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             run.FinishedAt = _clock.UtcNow;
             run.NextRunAt = _clock.UtcNow.AddMinutes(project.SyncIntervalMinutes);
             await _db.SaveChangesAsync(ct);
+        }
+        catch (OperationCanceledException) when (_cancellation.WasCancelled(run.Id))
+        {
+            // Someone pressed stop. Recorded as Cancelled rather than Failed: a deliberate stop is
+            // not a fault, and colouring it red would bury the real failures among decisions.
+            DiscardPendingChangesExcept(run);
+            run.Status = SyncRunStatus.Cancelled;
+            run.Error = "Stopped on request.";
+            run.Phase = null;
+            run.PhaseProcessed = null;
+            run.PhaseTotal = null;
+            run.FinishedAt = _clock.UtcNow;
+            run.NextRunAt = _clock.UtcNow.AddMinutes(project.SyncIntervalMinutes);
+
+            // CancellationToken.None, not ct: ct is the cancelled one, and recording WHY the run
+            // ended is the single write that still has to happen after a cancellation.
+            await _db.SaveChangesAsync(CancellationToken.None);
+
+            _logger.LogInformation(
+                "Sync {ProjectKey} ({ProjectId}) stopped on request after {Processed} issue(s).",
+                project.JiraProjectKey, projectId, run.IssuesProcessed);
         }
         catch (Exception ex)
         {
@@ -309,6 +335,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             {
                 run.PhaseProcessed = d;
                 run.PhaseTotal = t;
+                run.LastProgressAt = _clock.UtcNow;
                 await _db.SaveChangesAsync(token);
             }, ct);
             run.Status = SyncRunStatus.Succeeded; run.Phase = null; run.FinishedAt = _clock.UtcNow;
@@ -376,6 +403,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     private async Task SetPhaseAsync(SyncRun run, string phase, CancellationToken ct)
     {
         run.Phase = phase;
+        run.LastProgressAt = _clock.UtcNow;
 
         // Each phase counts something different, so entering one clears the previous one's
         // numbers. Leaving them would show the last phase's progress under this phase's label —

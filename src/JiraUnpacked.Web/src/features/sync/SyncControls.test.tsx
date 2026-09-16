@@ -34,6 +34,50 @@ const NEW_RUN: SyncRun = {
 };
 
 describe('SyncControls', () => {
+  it('offers Stop only while something is running', async () => {
+    // A stop button with nothing to stop is a trap: it can only ever report failure.
+    server.use(http.get('/api/projects/p1/sync-runs', () => HttpResponse.json([])));
+
+    renderControls();
+    await waitFor(() => expect(screen.getByRole('button', { name: /sync now/i })).toBeEnabled());
+
+    expect(screen.queryByRole('button', { name: /^stop$/i })).not.toBeInTheDocument();
+  });
+
+  it('asks the server to stop, and lets the poll report the result', async () => {
+    // Stopping is a REQUEST the run notices at its next checkpoint, so the row keeps reading
+    // Running until it unwinds. Showing it as stopped straight away would be a guess that is
+    // wrong for as long as the run takes to notice.
+    let cancelled = 0;
+    server.use(
+      http.get('/api/projects/p1/sync-runs', () => HttpResponse.json([NEW_RUN])),
+      http.post('/api/projects/p1/sync/cancel', () => { cancelled++; return new HttpResponse(null, { status: 202 }); }),
+    );
+
+    renderControls();
+
+    const stop = await screen.findByRole('button', { name: /^stop$/i });
+    await userEvent.click(stop);
+
+    await waitFor(() => expect(cancelled).toBe(1));
+    // Still Running, because the server has not said otherwise yet.
+    expect(screen.getByRole('button', { name: /running/i })).toBeInTheDocument();
+  });
+
+  it('says so when there was nothing to stop', async () => {
+    // 404 means the run ended between the page rendering and the click, or belongs to a process
+    // that is gone. Either way the honest answer is that nothing was stopped.
+    server.use(
+      http.get('/api/projects/p1/sync-runs', () => HttpResponse.json([NEW_RUN])),
+      http.post('/api/projects/p1/sync/cancel', () => new HttpResponse(null, { status: 404 })),
+    );
+
+    renderControls();
+    await userEvent.click(await screen.findByRole('button', { name: /^stop$/i }));
+
+    expect(await screen.findByText(/nothing is running to stop/i)).toBeInTheDocument();
+  });
+
   it('disables both triggers while a run is in flight, and says the work is server-side', async () => {
     // The server accepts the run and performs it in the background, so the mutation settles in
     // milliseconds and its own pending flag says nothing about whether a sync is happening. The

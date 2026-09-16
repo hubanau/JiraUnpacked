@@ -822,6 +822,9 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)");
 
+                    b.Property<DateTime?>("LastProgressAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime?>("NextRunAt")
                         .HasColumnType("timestamp with time zone");
 

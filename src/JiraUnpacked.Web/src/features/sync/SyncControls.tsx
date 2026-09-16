@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Card } from '../../ui';
 import { ApiError } from '../../api/errors';
-import { runRederive, runSync } from '../../api/sync';
+import { cancelSync, runRederive, runSync } from '../../api/sync';
 import { queryKeys } from '../../api/queryKeys';
 import { useSyncRuns } from './useSyncRuns';
 
@@ -46,6 +46,16 @@ export function SyncControls({ projectId }: { projectId: string }) {
     },
   });
 
+  // Stopping is a REQUEST, not an event: the run notices at its next checkpoint and only then
+  // records itself Cancelled. So this invalidates and lets the poll show the change, rather than
+  // pretending the run has already stopped.
+  const cancel = useMutation({
+    mutationFn: () => cancelSync(projectId),
+    onSuccess: () => {
+      void invalidateRuns();
+    },
+  });
+
   return (
     <Card className="flex flex-col gap-4">
       {sync.error && (
@@ -56,6 +66,13 @@ export function SyncControls({ projectId }: { projectId: string }) {
       {rederive.error && (
         <p role="alert" className="text-sm text-[var(--ju-danger)]">
           {syncError(rederive.error)}
+        </p>
+      )}
+      {cancel.error && (
+        <p role="alert" className="text-sm text-[var(--ju-danger)]">
+          {cancel.error instanceof ApiError && cancel.error.status === 404
+            ? 'Nothing is running to stop.'
+            : 'Could not stop the sync.'}
         </p>
       )}
 
@@ -76,12 +93,23 @@ export function SyncControls({ projectId }: { projectId: string }) {
         >
           Re-derive
         </Button>
+
+        {/* Only while something is running: a stop button with nothing to stop is a trap. */}
+        {inFlight && (
+          <Button
+            variant="secondary"
+            loading={cancel.isPending}
+            onClick={() => cancel.mutate()}
+          >
+            Stop
+          </Button>
+        )}
       </div>
 
       {inFlight && (
         <p className="text-xs text-[var(--ju-muted)]">
           This runs on the server — it keeps going if you close this page. Progress appears in the
-          runs table below.
+          runs table below. Stop asks it to finish early; what it has already stored is kept.
         </p>
       )}
 

@@ -1,6 +1,8 @@
 import { apiFetch } from './client';
 
-export type SyncRunStatus = 'Running' | 'Succeeded' | 'Failed' | 'PartiallyFailed';
+/** Cancelled is not Failed: someone stopped this run on purpose, and it is not coloured as a
+ *  fault — red rows should mean something went wrong. */
+export type SyncRunStatus = 'Running' | 'Succeeded' | 'Failed' | 'PartiallyFailed' | 'Cancelled';
 
 export interface SyncRun {
   id: string;
@@ -31,3 +33,8 @@ export const runSync = (projectId: string) =>
 
 export const runRederive = (projectId: string) =>
   apiFetch<SyncRun>(`/api/projects/${projectId}/rederive`, { method: 'POST' });
+
+/** Asks the running sync to stop. 202: it stops at its next checkpoint, not instantly, so the
+ *  row keeps reading Running until it unwinds — the poll picks the change up. */
+export const cancelSync = (projectId: string) =>
+  apiFetch<void>(`/api/projects/${projectId}/sync/cancel`, { method: 'POST' });

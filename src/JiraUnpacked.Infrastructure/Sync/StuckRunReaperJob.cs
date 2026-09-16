@@ -62,10 +62,15 @@ public sealed class StuckRunReaperJob : IJob
                     using var scope = _scopeFactory.CreateScope();
                     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+                    // Silence, not age. A run still publishing progress is alive however long it
+                    // has been going: comparing StartedAt reaped a healthy 92,673-issue sync at
+                    // the two-hour mark, three hours into work it would have finished. Runs from
+                    // before LastProgressAt existed fall back to StartedAt — the old behaviour,
+                    // for the only rows that cannot report.
                     var stuck = await db.SyncRuns
                         .Where(r => r.JiraProjectId == projectId
                                     && r.Status == SyncRunStatus.Running
-                                    && r.StartedAt < cutoff)
+                                    && (r.LastProgressAt ?? r.StartedAt) < cutoff)
                         .ToListAsync(ct);
 
                     if (stuck.Count == 0) continue;
@@ -73,7 +78,7 @@ public sealed class StuckRunReaperJob : IJob
                     foreach (var run in stuck)
                     {
                         run.Status = SyncRunStatus.Failed;
-                        run.Error = "Marked failed: exceeded maximum runtime (stuck-run reaper).";
+                        run.Error = "Marked failed: no progress for the maximum runtime (stuck-run reaper).";
                         run.FinishedAt = _clock.UtcNow;
                     }
                     await db.SaveChangesAsync(ct);
