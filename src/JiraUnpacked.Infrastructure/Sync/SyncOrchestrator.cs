@@ -166,6 +166,14 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
 
             run.ScopeFingerprint = fingerprint;
 
+            // Where the last attempt over THIS scope stopped, if there was one.
+            var checkpoint = await FindResumePointAsync(projectId, SyncRunKind.Sync, fingerprint, ct);
+            var startStage = ResumeStage.IndexOf(checkpoint?.Stage);
+            if (checkpoint is not null)
+                _logger.LogInformation(
+                    "Sync {ProjectKey}: resuming at stage {Stage} with {Done} item(s) already done.",
+                    project.JiraProjectKey, checkpoint.Value.Stage, checkpoint.Value.ItemsDone);
+
             _logger.LogInformation(
                 "Sync starting for {ProjectKey} ({ProjectId}): {QueryCount} query(ies), wholeProjectDefault={WholeProject}, "
                 + "scope={Fingerprint}, watermark={Watermark}.",
@@ -179,12 +187,26 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                     : $"({q}) AND updated >= \"{watermark.Value:yyyy-MM-dd HH:mm}\"")
                 .ToList();
 
-            await SetPhaseAsync(run, SyncPhase.Counting, ct);
-            run.TotalToSync = await CountScopeAsync(creds, effective, ct);
-            await SetPhaseAsync(run, SyncPhase.Fetching, ct);
+            // A checkpoint past the fetch means a previous attempt already pulled this scope in
+            // full. Counting and fetching it again would cost the better part of an hour and
+            // change nothing, which is the waste this whole design exists to remove.
+            var skipFetch = startStage > ResumeStage.IndexOf(ResumeStage.Fetch);
 
-            var processed = 0;
-            foreach (var jql in effective)
+            if (!skipFetch)
+            {
+                await SetPhaseAsync(run, SyncPhase.Counting, ct);
+                run.TotalToSync = await CountScopeAsync(creds, effective, ct);
+                await SetPhaseAsync(run, SyncPhase.Fetching, ct);
+            }
+
+            // A resumed run reports the issues the ATTEMPT has stored rather than the zero it
+            // fetched itself, because the number on screen means "how big is this project", and
+            // dropping it to zero mid-way would read as data loss.
+            var processed = skipFetch
+                ? await _db.RawIssueSnapshots.CountAsync(r => r.JiraProjectId == projectId, ct)
+                : 0;
+
+            foreach (var jql in skipFetch ? Enumerable.Empty<string>() : effective)
             {
 
                 var fetched = 0;
@@ -254,14 +276,17 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             // Transform: ingest the full changelog to raw, then derive the modeled tables (Jira-free).
             // Both are phases of their own because they can outlast the fetch on a large project,
             // and a bar that sat at 100% through them would read as a hang.
-            await SetPhaseAsync(run, SyncPhase.Changelog, ct);
-            await _ingest.IngestProjectAsync(projectId, creds, async (done, total, token) =>
+            if (startStage <= ResumeStage.IndexOf(ResumeStage.Changelog))
             {
-                run.PhaseProcessed = done;
-                run.PhaseTotal = total;
-                run.LastProgressAt = _clock.UtcNow;
-                await _db.SaveChangesAsync(token);
-            }, ct);
+                await SetPhaseAsync(run, SyncPhase.Changelog, ct);
+                await _ingest.IngestProjectAsync(projectId, creds, async (done, total, token) =>
+                {
+                    run.PhaseProcessed = done;
+                    run.PhaseTotal = total;
+                    run.LastProgressAt = _clock.UtcNow;
+                    await _db.SaveChangesAsync(token);
+                }, ct);
+            }
 
             await SetPhaseAsync(run, SyncPhase.Deriving, ct);
             await _derivation.DeriveProjectAsync(projectId, async (d, t, token) =>
@@ -291,6 +316,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
 
             run.Status = SyncRunStatus.Succeeded;
             run.IssuesProcessed = processed;
+            ClearCheckpoint(run);          // nothing left to resume
             run.Phase = null;              // over: a finished run is doing nothing
             run.PhaseProcessed = null;
             run.PhaseTotal = null;
@@ -366,7 +392,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                 run.LastProgressAt = _clock.UtcNow;
                 await _db.SaveChangesAsync(token);
             }, ct);
-            run.Status = SyncRunStatus.Succeeded; run.Phase = null; run.FinishedAt = _clock.UtcNow;
+            run.Status = SyncRunStatus.Succeeded; ClearCheckpoint(run); run.Phase = null; run.FinishedAt = _clock.UtcNow;
             await _db.SaveChangesAsync(ct);
 
             var modeled = await _db.Issues.CountAsync(i => i.JiraProjectId == projectId, ct);
@@ -391,6 +417,74 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     /// refetch. Truncated to 32 hex characters: this only ever decides "same scope or not", and
     /// collisions between two JQL sets a user actually wrote are not a realistic concern.
     /// </summary>
+    /// <summary>Where a previous attempt stopped: a stage, a position within it, and how much of
+    /// that stage was already done.</summary>
+    private readonly record struct SyncCheckpoint(string Stage, string? Cursor, int ItemsDone);
+
+    /// <summary>
+    /// Commits a batch: whatever entities the caller has already added or modified, the cursor,
+    /// and the progress fields — in ONE SaveChangesAsync.
+    ///
+    /// The single save is the whole point. Two saves can be interrupted between them, and a
+    /// cursor that survives while its data does not claims work that was never committed, which
+    /// skips those issues for good. Callers must NOT save their data separately.
+    /// </summary>
+    private async Task SaveCheckpointAsync(
+        SyncRun run, string stage, string? cursor, int itemsDone, int? phaseTotal, CancellationToken ct)
+    {
+        run.ResumeStage = stage;
+        run.ResumeCursor = cursor;
+        run.ResumeItemsDone = itemsDone;
+        run.PhaseProcessed = itemsDone;
+        run.PhaseTotal = phaseTotal;
+        run.LastProgressAt = _clock.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// The checkpoint this run may continue from, or null to start clean.
+    ///
+    /// Matched on scope, because a checkpoint is only valid for the queries that produced it —
+    /// the same rule the incremental watermark follows, and for the same reason. Matched on Kind
+    /// so a Rederive continues a Rederive and nothing else: predictable beats clever here.
+    /// </summary>
+    private async Task<SyncCheckpoint?> FindResumePointAsync(
+        Guid projectId, SyncRunKind kind, string fingerprint, CancellationToken ct)
+    {
+        var prior = await _db.SyncRuns
+            .Where(r => r.JiraProjectId == projectId
+                     && r.Kind == kind
+                     && r.ScopeFingerprint == fingerprint
+                     && r.ResumeStage != null
+                     && (r.Status == SyncRunStatus.Failed || r.Status == SyncRunStatus.Cancelled))
+            .OrderByDescending(r => r.StartedAt)
+            .Select(r => new { r.ResumeStage, r.ResumeCursor, r.ResumeItemsDone })
+            .FirstOrDefaultAsync(ct);
+
+        if (prior?.ResumeStage is null) return null;
+
+        // Belt and braces, mirroring the watermark guard: a cursor past the fetch indexes into raw
+        // rows, and if those went away there is nothing to be part-way through.
+        if (prior.ResumeStage != ResumeStage.Fetch &&
+            !await _db.RawIssueSnapshots.AnyAsync(r => r.JiraProjectId == projectId, ct))
+        {
+            _logger.LogWarning(
+                "Sync {ProjectId}: discarding a {Stage} checkpoint because the project holds no stored "
+                + "issues — there is nothing to resume over. Starting clean.", projectId, prior.ResumeStage);
+            return null;
+        }
+
+        return new SyncCheckpoint(prior.ResumeStage, prior.ResumeCursor, prior.ResumeItemsDone ?? 0);
+    }
+
+    /// <summary>A finished run is not part-way through anything.</summary>
+    private static void ClearCheckpoint(SyncRun run)
+    {
+        run.ResumeStage = null;
+        run.ResumeCursor = null;
+        run.ResumeItemsDone = null;
+    }
+
     private static string ScopeFingerprint(IEnumerable<string> effectiveJql)
     {
         var canonical = string.Join("\n", effectiveJql.OrderBy(j => j, StringComparer.Ordinal));

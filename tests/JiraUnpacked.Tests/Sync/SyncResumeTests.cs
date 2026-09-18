@@ -1,6 +1,7 @@
 using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Abstractions.Jira;
 using JiraUnpacked.Domain.Entities;
+using JiraUnpacked.Domain.Enums;
 using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Sync;
 using JiraUnpacked.Infrastructure.Tenancy;
@@ -139,5 +140,142 @@ public class SyncResumeTests
         await orchestrator.RunProjectAsync(projectId);
 
         Assert.Equal(new[] { "project = A", "project = M", "project = Z" }, jira.SeenJql);
+    }
+
+    private static SyncOrchestrator NewOrchestrator(
+        AppDbContext db, IJiraApiClient jira, int batchSize = 10_000) =>
+        new(db, jira, new PassthroughProtector(), new FakeClock(DateTime.UtcNow),
+            new NoopIngest(), new NoopDerivation(), new SyncCancellation(),
+            Options(batchSize), NullLogger<SyncOrchestrator>.Instance);
+
+    /// <summary>
+    /// Runs one sync, then rewrites that run as a failure carrying a checkpoint.
+    ///
+    /// Going through a real run is what makes the ScopeFingerprint right: it is computed by a
+    /// private method from the project's own queries, so writing one by hand would test a
+    /// fingerprint the orchestrator never produces — the test would pass while real runs never
+    /// matched anything.
+    /// </summary>
+    private static async Task SeedFailedCheckpointAsync(
+        DbContextOptions<AppDbContext> options, ICurrentTenant tenant, Guid projectId,
+        RecordingJiraClient jira, string stage, string? cursor, int itemsDone,
+        SyncRunKind kind = SyncRunKind.Sync)
+    {
+        await using (var db = new AppDbContext(options, tenant))
+            await NewOrchestrator(db, jira).RunProjectAsync(projectId);
+
+        await using (var db = new AppDbContext(options, tenant))
+        {
+            var run = await db.SyncRuns.Where(r => r.JiraProjectId == projectId)
+                .OrderByDescending(r => r.StartedAt).FirstAsync();
+            run.Status = SyncRunStatus.Failed;
+            run.Kind = kind;
+            run.ResumeStage = stage;
+            run.ResumeCursor = cursor;
+            run.ResumeItemsDone = itemsDone;
+            await db.SaveChangesAsync();
+        }
+    }
+
+    [Fact]
+    public async Task A_checkpoint_skips_the_stages_it_has_already_passed()
+    {
+        // The positive case the rest are measured against: a run that already finished fetching
+        // must not ask Jira for a single page on the way back in.
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var projectId = SeedProject(options, tenant, "project = A");
+        var jira = new RecordingJiraClient((_, _) =>
+            new SearchPage(new[] { new RawIssue("10001", "{}") }, null));
+
+        await SeedFailedCheckpointAsync(options, tenant, projectId, jira,
+            ResumeStage.Changelog, cursor: Guid.NewGuid().ToString(), itemsDone: 1);
+        jira.Requests.Clear();
+
+        await using var db = new AppDbContext(options, tenant);
+        await NewOrchestrator(db, jira).RunProjectAsync(projectId);
+
+        Assert.Empty(jira.Requests);
+    }
+
+    [Fact]
+    public async Task A_checkpoint_is_only_inherited_within_the_same_scope()
+    {
+        // A checkpoint, like a watermark, says "I got this far through THIS set of queries".
+        // After the queries change it describes a scope that was never fetched, and honouring it
+        // would skip every issue the new query covers but the old one did not.
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var projectId = SeedProject(options, tenant, "project = A");
+        var jira = new RecordingJiraClient((_, _) =>
+            new SearchPage(new[] { new RawIssue("10001", "{}") }, null));
+
+        await SeedFailedCheckpointAsync(options, tenant, projectId, jira,
+            ResumeStage.Changelog, cursor: Guid.NewGuid().ToString(), itemsDone: 1);
+
+        await using (var db = new AppDbContext(options, tenant))
+        {
+            var q = await db.JiraQueries.FirstAsync(x => x.JiraProjectId == projectId);
+            q.Jql = "project = B";                      // the scope changes
+            await db.SaveChangesAsync();
+        }
+        jira.Requests.Clear();
+
+        await using var db2 = new AppDbContext(options, tenant);
+        await NewOrchestrator(db2, jira).RunProjectAsync(projectId);
+
+        Assert.Contains(jira.Requests, r => r.Jql == "project = B");
+    }
+
+    [Fact]
+    public async Task A_post_fetch_checkpoint_is_discarded_when_the_raw_rows_are_gone()
+    {
+        // Retention, an erasure or a manual delete. The cursor indexes into rows that no longer
+        // exist, so resuming would start part-way through a project holding nothing at all.
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var projectId = SeedProject(options, tenant, "project = A");
+        var jira = new RecordingJiraClient((_, _) =>
+            new SearchPage(new[] { new RawIssue("10001", "{}") }, null));
+
+        await SeedFailedCheckpointAsync(options, tenant, projectId, jira,
+            ResumeStage.DeriveIssues, cursor: Guid.NewGuid().ToString(), itemsDone: 1);
+
+        await using (var db = new AppDbContext(options, tenant))
+        {
+            db.RawIssueSnapshots.RemoveRange(db.RawIssueSnapshots.Where(r => r.JiraProjectId == projectId));
+            await db.SaveChangesAsync();
+        }
+        jira.Requests.Clear();
+
+        await using var db2 = new AppDbContext(options, tenant);
+        await NewOrchestrator(db2, jira).RunProjectAsync(projectId);
+
+        Assert.NotEmpty(jira.Requests);   // fell back to a full pull
+    }
+
+    [Fact]
+    public async Task A_succeeded_run_leaves_no_checkpoint_behind()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var projectId = SeedProject(options, tenant, "project = A");
+        var jira = new RecordingJiraClient((_, _) =>
+            new SearchPage(new[] { new RawIssue("10001", "{}") }, null));
+
+        await using var db = new AppDbContext(options, tenant);
+        var result = await NewOrchestrator(db, jira).RunProjectAsync(projectId);
+
+        Assert.Equal("Succeeded", result.Run!.Status);
+
+        await using var read = new AppDbContext(options, tenant);
+        var row = await read.SyncRuns.FirstAsync(r => r.Id == result.Run.Id);
+        Assert.Null(row.ResumeStage);
+        Assert.Null(row.ResumeCursor);
+        Assert.Null(row.ResumeItemsDone);
     }
 }
