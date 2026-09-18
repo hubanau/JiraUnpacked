@@ -6,6 +6,7 @@ using JiraUnpacked.Infrastructure.Jira;
 using JiraUnpacked.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Npgsql;
 
 namespace JiraUnpacked.Infrastructure.Sync;
@@ -19,14 +20,16 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     private readonly IChangelogIngestService _ingest;
     private readonly IDerivationService _derivation;
     private readonly ISyncCancellation _cancellation;
+    private readonly SyncSchedulerOptions _options;
     private readonly ILogger<SyncOrchestrator> _logger;
 
     public SyncOrchestrator(AppDbContext db, IJiraApiClient jira, ITokenProtector protector, IClock clock,
         IChangelogIngestService ingest, IDerivationService derivation, ISyncCancellation cancellation,
-        ILogger<SyncOrchestrator> logger)
+        IOptions<SyncSchedulerOptions> options, ILogger<SyncOrchestrator> logger)
     {
         _db = db; _jira = jira; _protector = protector; _clock = clock;
-        _ingest = ingest; _derivation = derivation; _cancellation = cancellation; _logger = logger;
+        _ingest = ingest; _derivation = derivation; _cancellation = cancellation;
+        _options = options.Value; _logger = logger;
     }
 
     /// <summary>Both halves in one call — the scheduled tick, which is already off the request path.</summary>
@@ -116,10 +119,15 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                        ?? throw new InvalidOperationException("Connection not found for project.");
             var creds = new JiraCredentials(conn.BaseUrl, conn.Email, _protector.Unprotect(conn.ApiTokenEncrypted));
 
+            // Sorted here, once, and this same list feeds BOTH the fingerprint and the fetch loop.
+            // ScopeFingerprint sorts internally so the hash never cared about order, but a fetch
+            // cursor addresses a query by INDEX, and Postgres promises no order without ORDER BY.
+            // Unsorted, a resumed run could re-enter the wrong query and skip every issue in another.
             var queries = await _db.JiraQueries
                 .Where(q => q.JiraProjectId == projectId)
                 .Select(q => q.Jql)
                 .ToListAsync(ct);
+            queries.Sort(StringComparer.Ordinal);
 
             // A project with no query of its own syncs in full. Queries NARROW what is pulled, so an
             // empty list means "nothing to narrow by", not "nothing to sync" — reading it as the

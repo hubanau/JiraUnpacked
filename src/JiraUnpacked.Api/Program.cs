@@ -24,8 +24,13 @@ builder.Services.AddOptions<JwtOptions>()
 
 builder.Services.Configure<SeedOptions>(builder.Configuration.GetSection(SeedOptions.SectionName));
 
-builder.Services.Configure<JiraUnpacked.Infrastructure.Sync.SyncSchedulerOptions>(
-    builder.Configuration.GetSection(JiraUnpacked.Infrastructure.Sync.SyncSchedulerOptions.SectionName));
+// Validated on start rather than on first use: a CheckpointBatchSize of 0 would make every
+// batched stage loop forever taking nothing, and the place to find that out is boot, not three
+// hours into a sync.
+builder.Services.AddOptions<JiraUnpacked.Infrastructure.Sync.SyncSchedulerOptions>()
+    .Bind(builder.Configuration.GetSection(JiraUnpacked.Infrastructure.Sync.SyncSchedulerOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
 
 builder.Services.Configure<JiraUnpacked.Infrastructure.Retention.RetentionOptions>(
     builder.Configuration.GetSection(JiraUnpacked.Infrastructure.Retention.RetentionOptions.SectionName));
