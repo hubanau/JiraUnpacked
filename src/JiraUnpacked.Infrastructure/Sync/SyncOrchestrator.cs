@@ -169,6 +169,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             // Where the last attempt over THIS scope stopped, if there was one.
             var checkpoint = await FindResumePointAsync(projectId, SyncRunKind.Sync, fingerprint, ct);
             var startStage = ResumeStage.IndexOf(checkpoint?.Stage);
+            _committed = (checkpoint?.Stage, checkpoint?.Cursor, checkpoint?.ItemsDone);
             if (checkpoint is not null)
                 _logger.LogInformation(
                     "Sync {ProjectKey}: resuming at stage {Stage} with {Done} item(s) already done.",
@@ -206,15 +207,50 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                 ? await _db.RawIssueSnapshots.CountAsync(r => r.JiraProjectId == projectId, ct)
                 : 0;
 
-            foreach (var jql in skipFetch ? Enumerable.Empty<string>() : effective)
-            {
+            // Resume position within the fetch. A cursor from any LATER stage is not ours to read,
+            // so only a fetch-stage checkpoint seeds these.
+            var (startIndex, startToken) = startStage == ResumeStage.IndexOf(ResumeStage.Fetch)
+                ? ParseFetchCursor(checkpoint?.Cursor)
+                : (0, null);
 
+            var sinceCheckpoint = 0;
+            for (var q = skipFetch ? effective.Count : Math.Min(startIndex, effective.Count);
+                 q < effective.Count; q++)
+            {
+                var jql = effective[q];
                 var fetched = 0;
                 var pages = 0;
-                string? token = null;
+
+                // Only the FIRST query we re-enter carries an inherited token; the ones after it
+                // start clean, because the attempt never reached them.
+                string? token = q == startIndex ? startToken : null;
+                var inheritedToken = token;
+
                 do
                 {
-                    var page = await _jira.SearchIssuesPageAsync(creds, jql, token, ct);
+                    SearchPage page;
+                    try
+                    {
+                        page = await _jira.SearchIssuesPageAsync(creds, jql, token, ct);
+                    }
+                    catch (JiraApiException) when (token is not null && token == inheritedToken)
+                    {
+                        // Only a token we inherited can be stale. One minted during this run
+                        // cannot be, so a failure there is a real error and must propagate.
+                        //
+                        // Retried inline rather than by `continue`: in a do/while, continue jumps
+                        // to the CONDITION, and the condition is `token is not null` — so setting
+                        // token to null and continuing would exit the query instead of restarting
+                        // it, quietly dropping every page after the stale one.
+                        _logger.LogWarning(
+                            "Sync {ProjectKey}: Jira rejected the resumed page token for query {Index}. "
+                            + "Restarting that query alone — snapshots are upserted, so this repeats work "
+                            + "without duplicating rows.", project.JiraProjectKey, q);
+                        token = null;
+                        inheritedToken = null;
+                        page = await _jira.SearchIssuesPageAsync(creds, jql, null, ct);
+                    }
+
                     fetched += page.Issues.Count;
                     pages++;
                     // Postgres rejects NUL in jsonb, and Jira serves back whatever someone pasted
@@ -244,14 +280,30 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                         }
                         processed++;
                     }
+                    sinceCheckpoint += page.Issues.Count;
+                    token = page.NextPageToken;
+
                     // Progress rides along on the save this loop already does, so a visible bar
                     // costs no extra round trip. IssuesProcessed is therefore live during the run
                     // rather than only true once it ends.
                     run.IssuesProcessed = processed;
-                    run.PhaseProcessed = processed;
-                    run.PhaseTotal = run.TotalToSync;
-                    run.LastProgressAt = _clock.UtcNow;
-                    await _db.SaveChangesAsync(ct);
+
+                    // The cursor advances with the data, in the same save. An exhausted query
+                    // writes an empty token, which ParseFetchCursor reads back as "this query is
+                    // done" — the next stage's checkpoint supersedes it a moment later anyway.
+                    if (sinceCheckpoint >= _options.CheckpointBatchSize || token is null)
+                    {
+                        await SaveCheckpointAsync(
+                            run, ResumeStage.Fetch, $"{q}|{token}", processed, run.TotalToSync, ct);
+                        sinceCheckpoint = 0;
+                    }
+                    else
+                    {
+                        run.PhaseProcessed = processed;
+                        run.PhaseTotal = run.TotalToSync;
+                        run.LastProgressAt = _clock.UtcNow;
+                        await _db.SaveChangesAsync(ct);
+                    }
 
                     // Let the page go. Without this the context accumulates every snapshot for
                     // the whole run — EF keeps each entity AND an original-values copy for change
@@ -262,7 +314,6 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                     // progress and completion writes below would silently do nothing.
                     DetachAll<RawIssueSnapshot>();
 
-                    token = page.NextPageToken;
                 } while (token is not null);
 
                 // The JQL is logged with its result because "which query returned nothing" is the
@@ -353,6 +404,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             // leaving the run Running forever and blocking the project until the reaper. That is
             // exactly how a NUL in one issue's description looked like a hung sync.
             DiscardPendingChangesExcept(run);
+            RevertCheckpointToLastCommitted(run);
             SetFailure(run, ex, projectId);
             run.NextRunAt = _clock.UtcNow.AddMinutes(project.SyncIntervalMinutes);
             await _db.SaveChangesAsync(ct);
@@ -403,6 +455,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         catch (Exception ex)
         {
             DiscardPendingChangesExcept(run);   // see ExecuteProjectAsync
+            RevertCheckpointToLastCommitted(run);
             SetFailure(run, ex, projectId);
             await _db.SaveChangesAsync(ct);
         }
@@ -439,6 +492,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         run.PhaseTotal = phaseTotal;
         run.LastProgressAt = _clock.UtcNow;
         await _db.SaveChangesAsync(ct);
+        _committed = (stage, cursor, itemsDone);   // only once the save has returned
     }
 
     /// <summary>
@@ -476,6 +530,47 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
 
         return new SyncCheckpoint(prior.ResumeStage, prior.ResumeCursor, prior.ResumeItemsDone ?? 0);
     }
+
+    /// <summary>
+    /// "{jqlIndex}|{pageToken}". Anything unparseable answers (0, null) — start the fetch over.
+    /// Redoing work is the safe failure here; guessing a position is not.
+    /// </summary>
+    private static (int JqlIndex, string? PageToken) ParseFetchCursor(string? cursor)
+    {
+        if (string.IsNullOrEmpty(cursor)) return (0, null);
+        var bar = cursor.IndexOf('|');
+        if (bar <= 0 || !int.TryParse(cursor[..bar], out var index) || index < 0) return (0, null);
+        var token = cursor[(bar + 1)..];
+        return (index, token.Length == 0 ? null : token);
+    }
+
+    /// <summary>
+    /// Puts the resume columns back to what is actually committed.
+    ///
+    /// The failure handler keeps the run's pending edits on purpose — that is how the failure gets
+    /// recorded at all. But those edits may include a cursor set by a SaveCheckpointAsync whose
+    /// save then threw, and persisting THAT would point the next run past issues which were never
+    /// stored. It would skip them silently, permanently, and no later run would ever notice.
+    /// </summary>
+    private void RevertCheckpointToLastCommitted(SyncRun run)
+    {
+        run.ResumeStage = _committed.Stage;
+        run.ResumeCursor = _committed.Cursor;
+        run.ResumeItemsDone = _committed.ItemsDone;
+    }
+
+    /// <summary>
+    /// The checkpoint that is actually in the database. Recorded here only AFTER a save returns,
+    /// which is what makes it trustworthy, and read back by the failure handler.
+    ///
+    /// Tracked explicitly rather than read from EF's OriginalValues: this has to be right on the
+    /// one path where a save threw, and depending on a provider's bookkeeping in exactly that
+    /// situation is how a cursor ends up ahead of its data. One field, set at one place.
+    ///
+    /// Safe as instance state because an orchestrator serves a single run: it is resolved per DI
+    /// scope, and each run gets its own scope.
+    /// </summary>
+    private (string? Stage, string? Cursor, int? ItemsDone) _committed;
 
     /// <summary>A finished run is not part-way through anything.</summary>
     private static void ClearCheckpoint(SyncRun run)

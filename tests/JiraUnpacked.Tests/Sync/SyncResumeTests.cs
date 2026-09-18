@@ -42,10 +42,23 @@ public class SyncResumeTests
         public Task<int?> ApproximateCountAsync(JiraCredentials creds, string jql, CancellationToken ct = default)
             => Task.FromResult(ApproximateCount);
 
+        /// <summary>Simulates an infrastructure failure: throws once this many requests have been served.</summary>
+        public int? ThrowAfterRequests { get; set; }
+
+        /// <summary>Page tokens Jira no longer accepts — what an opaque token looks like after it expires.</summary>
+        public HashSet<string> RejectedTokens { get; } = new();
+
         public Task<SearchPage> SearchIssuesPageAsync(
             JiraCredentials creds, string jql, string? nextPageToken, CancellationToken ct = default)
         {
             Requests.Add((jql, nextPageToken));
+
+            if (nextPageToken is not null && RejectedTokens.Contains(nextPageToken))
+                throw new JiraApiException(JiraErrorKind.Upstream, "Page token is no longer valid.");
+
+            if (ThrowAfterRequests is int n && Requests.Count > n)
+                throw new InvalidOperationException("simulated infrastructure failure");
+
             return Task.FromResult(_search(jql, nextPageToken));
         }
 
@@ -277,5 +290,117 @@ public class SyncResumeTests
         Assert.Null(row.ResumeStage);
         Assert.Null(row.ResumeCursor);
         Assert.Null(row.ResumeItemsDone);
+    }
+
+    /// <summary>
+    /// Serves <paramref name="pageCount"/> pages of <paramref name="perPage"/> issues, chained by
+    /// the tokens p1, p2, ... The token IS the position, so a resumed run asking for "p2" gets
+    /// page three and nothing earlier.
+    /// </summary>
+    private static Func<string, string?, SearchPage> Pages(int pageCount, int perPage) =>
+        (jql, token) =>
+        {
+            var index = token is null ? 0 : int.Parse(token[1..]);
+            var issues = Enumerable.Range(0, perPage)
+                .Select(i => new RawIssue($"{jql.GetHashCode():X}-{index * perPage + i}", "{}"))
+                .ToArray();
+            var next = index + 1 < pageCount ? $"p{index + 1}" : null;
+            return new SearchPage(issues, next);
+        };
+
+    [Fact]
+    public async Task A_resumed_fetch_does_not_ask_Jira_for_pages_it_already_stored()
+    {
+        // THE test. A resumption that merely redid the work harmlessly would satisfy a weaker
+        // assertion — "all the data is there" — while fixing nothing, so this asserts on what is
+        // ABSENT from the request log: the query is never restarted from its first page.
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var projectId = SeedProject(options, tenant, "project = A");
+
+        var jira = new RecordingJiraClient(Pages(pageCount: 3, perPage: 2)) { ThrowAfterRequests = 2 };
+
+        await using (var db = new AppDbContext(options, tenant))
+            await NewOrchestrator(db, jira, batchSize: 2).RunProjectAsync(projectId);
+
+        jira.ThrowAfterRequests = null;
+        jira.Requests.Clear();
+
+        await using (var db = new AppDbContext(options, tenant))
+            await NewOrchestrator(db, jira, batchSize: 2).RunProjectAsync(projectId);
+
+        Assert.NotEmpty(jira.Requests);
+        Assert.DoesNotContain(jira.Requests, r => r.Token is null);   // never restarted the query
+
+        await using var read = new AppDbContext(options, tenant);
+        Assert.Equal(6, await read.RawIssueSnapshots.CountAsync(r => r.JiraProjectId == projectId));
+    }
+
+    [Fact]
+    public async Task An_expired_page_token_restarts_only_its_own_query()
+    {
+        // nextPageToken is opaque and can expire across a long outage. Restarting that one query
+        // costs time but not correctness, because snapshots upsert. Restarting the whole run is
+        // what this design exists to prevent.
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var projectId = SeedProject(options, tenant, "project = A", "project = B");
+
+        var jira = new RecordingJiraClient(Pages(pageCount: 2, perPage: 2));
+        await SeedFailedCheckpointAsync(options, tenant, projectId, jira,
+            ResumeStage.Fetch, cursor: "1|stale", itemsDone: 4);
+
+        jira.RejectedTokens.Add("stale");
+        jira.Requests.Clear();
+
+        await using (var db = new AppDbContext(options, tenant))
+            await NewOrchestrator(db, jira, batchSize: 2).RunProjectAsync(projectId);
+
+        Assert.DoesNotContain(jira.Requests, r => r.Jql == "project = A");          // query 0 untouched
+        Assert.Contains(jira.Requests, r => r.Jql == "project = B" && r.Token is null);
+    }
+
+    /// <summary>
+    /// Refuses any save carrying a snapshot — how Postgres behaves when one payload in the batch
+    /// is unstorable, which this project has hit for real with a NUL in an issue description.
+    /// </summary>
+    private sealed class RejectsSnapshotsDbContext : AppDbContext
+    {
+        public RejectsSnapshotsDbContext(DbContextOptions<AppDbContext> o, ICurrentTenant t) : base(o, t) { }
+
+        public override Task<int> SaveChangesAsync(CancellationToken ct = default)
+        {
+            if (ChangeTracker.Entries<RawIssueSnapshot>().Any())
+                throw new DbUpdateException("22P05: unsupported Unicode escape sequence");
+            return base.SaveChangesAsync(ct);
+        }
+    }
+
+    [Fact]
+    public async Task A_batch_that_fails_to_save_does_not_advance_the_cursor()
+    {
+        // The invariant the whole design rests on. SaveCheckpointAsync sets the cursor and saves
+        // in one call, but the failure handler deliberately keeps the RUN's pending changes while
+        // discarding the data — so without care it would persist a cursor pointing past issues
+        // that were never stored, and every later run would skip them silently and for good.
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var projectId = SeedProject(options, tenant, "project = A");
+
+        var jira = new RecordingJiraClient(Pages(pageCount: 3, perPage: 2));
+
+        await using (var db = new RejectsSnapshotsDbContext(options, tenant))
+            await NewOrchestrator(db, jira, batchSize: 2).RunProjectAsync(projectId);
+
+        await using var read = new AppDbContext(options, tenant);
+        var run = await read.SyncRuns.Where(r => r.JiraProjectId == projectId)
+            .OrderByDescending(r => r.StartedAt).FirstAsync();
+
+        Assert.Equal("Failed", run.Status.ToString());
+        Assert.Equal(0, await read.RawIssueSnapshots.CountAsync(r => r.JiraProjectId == projectId));
+        Assert.Null(run.ResumeCursor);   // nothing committed, so nothing to resume past
     }
 }
