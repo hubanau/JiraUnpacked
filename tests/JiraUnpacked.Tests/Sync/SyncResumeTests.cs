@@ -100,8 +100,9 @@ public class SyncResumeTests
     internal sealed class NoopDerivation : IDerivationService
     {
         public Task DeriveProjectAsync(
-            Guid projectId,
-            Func<int, int, CancellationToken, Task>? onProgress = null,
+            Guid projectId, string? resumeStage = null, string? resumeCursor = null,
+            int alreadyDone = 0, int batchSize = 10_000,
+            Func<string, string, int, int, CancellationToken, Task>? onBatch = null,
             CancellationToken ct = default) => Task.CompletedTask;
     }
 
@@ -313,8 +314,12 @@ public class SyncResumeTests
         (jql, token) =>
         {
             var index = token is null ? 0 : int.Parse(token[1..]);
+            // Ids depend on the POSITION only, never on the query text. Real Jira issue ids are
+            // stable, so an incremental re-pull returns the same ids and upserts over them; ids
+            // derived from the jql string would fake duplicates the moment a watermark clause
+            // changed that string, and the test would be measuring its own stub.
             var issues = Enumerable.Range(0, perPage)
-                .Select(i => new RawIssue($"{jql.GetHashCode():X}-{index * perPage + i}", "{}"))
+                .Select(i => new RawIssue($"ISSUE-{index * perPage + i}", "{}"))
                 .ToArray();
             var next = index + 1 < pageCount ? $"p{index + 1}" : null;
             return new SearchPage(issues, next);
@@ -473,5 +478,250 @@ public class SyncResumeTests
 
         Assert.All(skipped, jid => Assert.DoesNotContain(jid, jira.ChangelogRequests));
         Assert.Equal(350, await read.RawChangelogs.CountAsync(r => r.JiraProjectId == projectId));
+    }
+
+    /// <summary>A minimal but real issue payload, so derivation has something to model.</summary>
+    private static string IssuePayload(int i) =>
+        "{\"key\":\"ACME-" + i + "\",\"fields\":{\"summary\":\"s" + i + "\"," +
+        "\"created\":\"2026-01-01T00:00:00.000+0000\",\"updated\":\"2026-01-02T00:00:00.000+0000\"}}";
+
+    private static async Task<List<Guid>> SeedIssueSnapshotsAsync(
+        DbContextOptions<AppDbContext> options, ICurrentTenant tenant, Guid projectId, int count)
+    {
+        await using var db = new AppDbContext(options, tenant);
+        var ids = new List<Guid>();
+        for (var i = 0; i < count; i++)
+        {
+            var id = Guid.NewGuid();
+            ids.Add(id);
+            db.RawIssueSnapshots.Add(new RawIssueSnapshot
+            {
+                Id = id, JiraProjectId = projectId, JiraIssueId = $"J{i}",
+                Payload = IssuePayload(i), FetchedAt = DateTime.UtcNow
+            });
+        }
+        await db.SaveChangesAsync();
+        return ids;
+    }
+
+    [Fact]
+    public async Task Derivation_never_holds_more_than_one_batch_in_the_change_tracker()
+    {
+        // The code this replaces loaded every snapshot payload, every changelog payload and every
+        // change-history key at once -- 1,477,699 of those keys on the real project. A stage that
+        // needs the whole project resident is a stage that cannot survive a laptop, and every long
+        // run so far has died inside it.
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var projectId = SeedProject(options, tenant, "project = A");
+        await SeedIssueSnapshotsAsync(options, tenant, projectId, count: 20_000);
+
+        // Changelogs too, so the assertion covers the history pass and not only the issue pass.
+        // Both loaded their whole table before; only measuring one would leave the other free to
+        // regress unnoticed.
+        await SeedChangelogsAsync(options, tenant, projectId, count: 5_000, historiesPerIssue: 2);
+
+        await using var db = new AppDbContext(options, tenant);
+        var derivation = new DerivationService(db, new FakeClock(DateTime.UtcNow));
+        var peak = 0;
+
+        await derivation.DeriveProjectAsync(projectId, null, null, 0, batchSize: 500,
+            onBatch: async (stage, cursor, done, total, ct) =>
+            {
+                await db.SaveChangesAsync(ct);
+                peak = Math.Max(peak, db.ChangeTracker.Entries().Count());
+            });
+
+        Assert.True(peak < 2_000, $"change tracker peaked at {peak} entries against a batch of 500");
+        await using var read = new AppDbContext(options, tenant);
+        Assert.Equal(20_000, await read.Issues.CountAsync(i => i.JiraProjectId == projectId));
+    }
+
+    [Fact]
+    public async Task A_resumed_derivation_starts_after_the_last_committed_snapshot()
+    {
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var projectId = SeedProject(options, tenant, "project = A");
+        var ids = (await SeedIssueSnapshotsAsync(options, tenant, projectId, count: 300))
+            .OrderBy(x => x).ToList();
+
+        await using var db = new AppDbContext(options, tenant);
+        var derivation = new DerivationService(db, new FakeClock(DateTime.UtcNow));
+
+        await derivation.DeriveProjectAsync(projectId,
+            ResumeStage.DeriveIssues, ids[99].ToString(), alreadyDone: 100, batchSize: 100,
+            onBatch: async (stage, cursor, done, total, ct) => await db.SaveChangesAsync(ct));
+
+        // Only the remaining 200 were modelled; the first 100 were left to the attempt that did them.
+        await using var read = new AppDbContext(options, tenant);
+        Assert.Equal(200, await read.Issues.CountAsync(i => i.JiraProjectId == projectId));
+    }
+
+    private static async Task SeedChangelogsAsync(
+        DbContextOptions<AppDbContext> options, ICurrentTenant tenant, Guid projectId,
+        int count, int historiesPerIssue)
+    {
+        await using var db = new AppDbContext(options, tenant);
+        for (var i = 0; i < count; i++)
+        {
+            var histories = string.Join(",", Enumerable.Range(0, historiesPerIssue).Select(h =>
+                "{\"id\":\"" + h + "\",\"created\":\"2026-01-01T00:00:00.000+0000\"," +
+                "\"items\":[{\"field\":\"status\",\"fromString\":\"A\",\"toString\":\"B\"}]}"));
+            db.RawChangelogs.Add(new RawChangelog
+            {
+                Id = Guid.NewGuid(), JiraProjectId = projectId, JiraIssueId = $"J{i}",
+                Payload = "{\"histories\":[" + histories + "]}", FetchedAt = DateTime.UtcNow
+            });
+        }
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task History_dedup_is_scoped_per_batch_and_stays_idempotent()
+    {
+        // The dedup set used to hold every (issue, historyId, field) key in the project — 1,477,699
+        // of them on the real one — purely to answer "have I seen this". Scoped per batch it must
+        // still answer identically, which means running the whole stage twice adds nothing.
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var projectId = SeedProject(options, tenant, "project = A");
+        await SeedChangelogsAsync(options, tenant, projectId, count: 1_000, historiesPerIssue: 5);
+
+        await using var db = new AppDbContext(options, tenant);
+        var derivation = new DerivationService(db, new FakeClock(DateTime.UtcNow));
+
+        await derivation.DeriveProjectAsync(projectId, batchSize: 100);
+        await using (var read1 = new AppDbContext(options, tenant))
+            Assert.Equal(5_000, await read1.IssueChangeHistory.CountAsync(h => h.JiraProjectId == projectId));
+
+        await derivation.DeriveProjectAsync(projectId, batchSize: 100);
+
+        await using var read2 = new AppDbContext(options, tenant);
+        Assert.Equal(5_000, await read2.IssueChangeHistory.CountAsync(h => h.JiraProjectId == projectId));
+    }
+
+    [Fact]
+    public async Task A_rederive_resumes_a_rederive_and_not_a_sync()
+    {
+        // Kind-matched on purpose: predictable beats clever. A Sync that died in derivation is
+        // continued by the next Sync, not by pressing Re-derive — and derivation is the fast
+        // stage, so the cost of that choice is small.
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var projectId = SeedProject(options, tenant, "project = A");
+        var ids = (await SeedIssueSnapshotsAsync(options, tenant, projectId, count: 100))
+            .OrderBy(x => x).ToList();
+
+        var jira = new RecordingJiraClient((_, _) => new SearchPage(Array.Empty<RawIssue>(), null));
+
+        // A SYNC checkpoint half way through derivation. A rederive must ignore it.
+        await using (var db = new AppDbContext(options, tenant))
+        {
+            db.SyncRuns.Add(new SyncRun
+            {
+                Id = Guid.NewGuid(), JiraProjectId = projectId, StartedAt = DateTime.UtcNow.AddHours(-1),
+                Status = SyncRunStatus.Failed, Kind = SyncRunKind.Sync, IssuesProcessed = 50,
+                ResumeStage = ResumeStage.DeriveIssues, ResumeCursor = ids[49].ToString(), ResumeItemsDone = 50
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await using (var db = new AppDbContext(options, tenant))
+        {
+            var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
+                new FakeClock(DateTime.UtcNow), new NoopIngest(),
+                new DerivationService(db, new FakeClock(DateTime.UtcNow)),
+                new SyncCancellation(), Options(100), NullLogger<SyncOrchestrator>.Instance);
+            await orchestrator.RunRederiveAsync(projectId);
+        }
+
+        await using var read = new AppDbContext(options, tenant);
+        Assert.Equal(100, await read.Issues.CountAsync(i => i.JiraProjectId == projectId));
+    }
+
+    [Fact]
+    public async Task A_run_with_no_checkpoint_columns_behaves_exactly_as_before()
+    {
+        // Every run written before this feature has nulls here. They must simply run in full.
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var projectId = SeedProject(options, tenant, "project = A");
+        var jira = new RecordingJiraClient((_, _) =>
+            new SearchPage(new[] { new RawIssue("10001", "{}") }, null));
+
+        await using (var db = new AppDbContext(options, tenant))
+        {
+            db.SyncRuns.Add(new SyncRun
+            {
+                Id = Guid.NewGuid(), JiraProjectId = projectId, StartedAt = DateTime.UtcNow.AddHours(-2),
+                Status = SyncRunStatus.Failed, Kind = SyncRunKind.Sync, IssuesProcessed = 7,
+                ScopeFingerprint = null, ResumeStage = null, ResumeCursor = null, ResumeItemsDone = null
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await using var db2 = new AppDbContext(options, tenant);
+        var result = await NewOrchestrator(db2, jira).RunProjectAsync(projectId);
+
+        Assert.Equal("Succeeded", result.Run!.Status);
+        Assert.Contains(jira.Requests, r => r.Token is null);   // started from the beginning
+    }
+
+    [Fact]
+    public async Task An_interrupted_sync_ends_with_the_same_data_as_an_uninterrupted_one()
+    {
+        // The end-to-end proof: resumption has to be invisible in the result.
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+
+        async Task<(int Issues, int Snapshots)> ReadAsync(DbContextOptions<AppDbContext> o, Guid pid)
+        {
+            await using var read = new AppDbContext(o, tenant);
+            return (await read.Issues.CountAsync(i => i.JiraProjectId == pid),
+                    await read.RawIssueSnapshots.CountAsync(r => r.JiraProjectId == pid));
+        }
+
+        var cleanOptions = InMemoryOptions();
+        var cleanProject = SeedProject(cleanOptions, tenant, "project = A");
+        var cleanJira = new RecordingJiraClient(Pages(pageCount: 6, perPage: 20));
+        await using (var db = new AppDbContext(cleanOptions, tenant))
+            await new SyncOrchestrator(db, cleanJira, new PassthroughProtector(),
+                new FakeClock(DateTime.UtcNow), new NoopIngest(),
+                new DerivationService(db, new FakeClock(DateTime.UtcNow)),
+                new SyncCancellation(), Options(20), NullLogger<SyncOrchestrator>.Instance)
+                .RunProjectAsync(cleanProject);
+        var clean = await ReadAsync(cleanOptions, cleanProject);
+
+        var brokenOptions = InMemoryOptions();
+        var brokenProject = SeedProject(brokenOptions, tenant, "project = A");
+        var brokenJira = new RecordingJiraClient(Pages(pageCount: 6, perPage: 20)) { ThrowAfterRequests = 2 };
+
+        // Three attempts, each dying part way, then one that is allowed to finish.
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            await using var db = new AppDbContext(brokenOptions, tenant);
+            await new SyncOrchestrator(db, brokenJira, new PassthroughProtector(),
+                new FakeClock(DateTime.UtcNow), new NoopIngest(),
+                new DerivationService(db, new FakeClock(DateTime.UtcNow)),
+                new SyncCancellation(), Options(20), NullLogger<SyncOrchestrator>.Instance)
+                .RunProjectAsync(brokenProject);
+            brokenJira.ThrowAfterRequests = brokenJira.Requests.Count + 2;
+        }
+
+        brokenJira.ThrowAfterRequests = null;
+        await using (var db = new AppDbContext(brokenOptions, tenant))
+            await new SyncOrchestrator(db, brokenJira, new PassthroughProtector(),
+                new FakeClock(DateTime.UtcNow), new NoopIngest(),
+                new DerivationService(db, new FakeClock(DateTime.UtcNow)),
+                new SyncCancellation(), Options(20), NullLogger<SyncOrchestrator>.Instance)
+                .RunProjectAsync(brokenProject);
+
+        Assert.Equal(clean, await ReadAsync(brokenOptions, brokenProject));
     }
 }

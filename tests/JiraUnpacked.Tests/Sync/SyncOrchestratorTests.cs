@@ -86,16 +86,21 @@ public class SyncOrchestratorTests
         public ReportingDerivation(Func<Func<int, int, CancellationToken, Task>, CancellationToken, Task> run) => _run = run;
 
         public Task DeriveProjectAsync(
-            Guid projectId,
-            Func<int, int, CancellationToken, Task>? onProgress = null,
-            CancellationToken ct = default) => _run(onProgress!, ct);
+            Guid projectId, string? resumeStage = null, string? resumeCursor = null,
+            int alreadyDone = 0, int batchSize = 10_000,
+            Func<string, string, int, int, CancellationToken, Task>? onBatch = null,
+            CancellationToken ct = default)
+            // Adapts the stage/cursor callback back to the (done, total) shape these older tests
+            // drive; they are about progress reporting, not about where a run resumes.
+            => _run((d, t, token) => onBatch!(ResumeStage.DeriveIssues, Guid.NewGuid().ToString(), d, t, token), ct);
     }
 
     private sealed class NoopDerivation : IDerivationService
     {
         public Task DeriveProjectAsync(
-            Guid projectId,
-            Func<int, int, CancellationToken, Task>? onProgress = null,
+            Guid projectId, string? resumeStage = null, string? resumeCursor = null,
+            int alreadyDone = 0, int batchSize = 10_000,
+            Func<string, string, int, int, CancellationToken, Task>? onBatch = null,
             CancellationToken ct = default) => Task.CompletedTask;
     }
 

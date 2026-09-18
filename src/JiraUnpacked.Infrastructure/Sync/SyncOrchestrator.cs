@@ -352,14 +352,25 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                     ct);
             }
 
-            await SetPhaseAsync(run, SyncPhase.Deriving, ct);
-            await _derivation.DeriveProjectAsync(projectId, async (d, t, token) =>
+            if (startStage <= ResumeStage.IndexOf(ResumeStage.DeriveHierarchy))
             {
-                run.PhaseProcessed = d;
-                run.PhaseTotal = t;
-                run.LastProgressAt = _clock.UtcNow;
-                await _db.SaveChangesAsync(token);
-            }, ct);
+                await SetPhaseAsync(run, SyncPhase.Deriving, ct);
+
+                // The service owns the order of its three passes and reports which one it is in;
+                // the orchestrator only persists what it is told, in one save per batch.
+                var derivingAlready = startStage >= ResumeStage.IndexOf(ResumeStage.DeriveIssues)
+                    ? checkpoint!.Value.ItemsDone : 0;
+
+                await _derivation.DeriveProjectAsync(
+                    projectId,
+                    startStage >= ResumeStage.IndexOf(ResumeStage.DeriveIssues) ? checkpoint!.Value.Stage : null,
+                    startStage >= ResumeStage.IndexOf(ResumeStage.DeriveIssues) ? checkpoint!.Value.Cursor : null,
+                    derivingAlready,
+                    _options.CheckpointBatchSize,
+                    async (stage, cursor, d, t, token) =>
+                        await SaveCheckpointAsync(run, stage, cursor, d, t, token),
+                    ct);
+            }
 
             // Counted AFTER derivation, because "raw arrived but nothing was modelled" is a second,
             // separate way for this screen to show zeroes, and the two need telling apart.
@@ -450,13 +461,19 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             // No TotalToSync: a rederive fetches nothing, so there is no denominator to report and
             // null is the honest answer rather than a zero that would render as an empty bar.
             await SetPhaseAsync(run, SyncPhase.Deriving, ct);
-            await _derivation.DeriveProjectAsync(projectId, async (d, t, token) =>
-            {
-                run.PhaseProcessed = d;
-                run.PhaseTotal = t;
-                run.LastProgressAt = _clock.UtcNow;
-                await _db.SaveChangesAsync(token);
-            }, ct);
+
+            var rederiveCheckpoint = await FindResumePointAsync(projectId, SyncRunKind.Rederive, null, ct);
+            _committed = (rederiveCheckpoint?.Stage, rederiveCheckpoint?.Cursor, rederiveCheckpoint?.ItemsDone);
+            if (rederiveCheckpoint is not null)
+                _logger.LogInformation(
+                    "Rederive {ProjectKey}: resuming at stage {Stage} with {Done} row(s) already done.",
+                    project.JiraProjectKey, rederiveCheckpoint.Value.Stage, rederiveCheckpoint.Value.ItemsDone);
+            await _derivation.DeriveProjectAsync(
+                projectId, rederiveCheckpoint?.Stage, rederiveCheckpoint?.Cursor,
+                rederiveCheckpoint?.ItemsDone ?? 0, _options.CheckpointBatchSize,
+                async (stage, cursor, d, t, token) =>
+                    await SaveCheckpointAsync(run, stage, cursor, d, t, token),
+                ct);
             run.Status = SyncRunStatus.Succeeded; ClearCheckpoint(run); run.Phase = null; run.FinishedAt = _clock.UtcNow;
             await _db.SaveChangesAsync(ct);
 
@@ -516,14 +533,21 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     /// so a Rederive continues a Rederive and nothing else: predictable beats clever here.
     /// </summary>
     private async Task<SyncCheckpoint?> FindResumePointAsync(
-        Guid projectId, SyncRunKind kind, string fingerprint, CancellationToken ct)
+        Guid projectId, SyncRunKind kind, string? fingerprint, CancellationToken ct)
     {
-        var prior = await _db.SyncRuns
+        var candidates = _db.SyncRuns
             .Where(r => r.JiraProjectId == projectId
                      && r.Kind == kind
-                     && r.ScopeFingerprint == fingerprint
                      && r.ResumeStage != null
-                     && (r.Status == SyncRunStatus.Failed || r.Status == SyncRunStatus.Cancelled))
+                     && (r.Status == SyncRunStatus.Failed || r.Status == SyncRunStatus.Cancelled));
+
+        // A sync must match the scope it was pulling. A rederive has none to match: it reads the
+        // raw tables, which do not vary with the project's queries, so it passes null and is
+        // matched on Kind alone.
+        if (fingerprint is not null)
+            candidates = candidates.Where(r => r.ScopeFingerprint == fingerprint);
+
+        var prior = await candidates
             .OrderByDescending(r => r.StartedAt)
             .Select(r => new { r.ResumeStage, r.ResumeCursor, r.ResumeItemsDone })
             .FirstOrDefaultAsync(ct);
