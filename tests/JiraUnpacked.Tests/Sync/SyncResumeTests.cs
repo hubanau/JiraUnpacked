@@ -68,7 +68,18 @@ public class SyncResumeTests
         public Task<JiraProjectSummary?> GetProjectAsync(JiraCredentials creds, string projectKey, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<JiraStatus>> GetStatusesAsync(JiraCredentials creds, string projectKey, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<JqlValidationResult> ParseJqlAsync(JiraCredentials creds, string jql, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<ChangelogPage> GetIssueChangelogPageAsync(JiraCredentials creds, string jiraIssueId, int startAt, CancellationToken ct = default) => throw new NotSupportedException();
+        /// <summary>Which issues the changelog endpoint was asked about. A resumed ingest proving
+        /// it skipped work means proving these issues are NOT in here.</summary>
+        public List<string> ChangelogRequests { get; } = new();
+
+        public Task<ChangelogPage> GetIssueChangelogPageAsync(
+            JiraCredentials creds, string jiraIssueId, int startAt, CancellationToken ct = default)
+        {
+            ChangelogRequests.Add(jiraIssueId);
+            return Task.FromResult(new ChangelogPage(
+                new[] { "{\"id\":\"1\",\"created\":\"2026-01-01T00:00:00.000+0000\",\"items\":[]}" },
+                Total: 1, IsLast: true));
+        }
     }
 
     internal sealed class PassthroughProtector : ITokenProtector
@@ -81,7 +92,8 @@ public class SyncResumeTests
     {
         public Task IngestProjectAsync(
             Guid projectId, JiraCredentials creds,
-            Func<int, int, CancellationToken, Task>? onProgress = null,
+            Guid? afterSnapshotId = null, int alreadyDone = 0,
+            Func<int, int, Guid, CancellationToken, Task>? onBatch = null,
             CancellationToken ct = default) => Task.CompletedTask;
     }
 
@@ -402,5 +414,64 @@ public class SyncResumeTests
         Assert.Equal("Failed", run.Status.ToString());
         Assert.Equal(0, await read.RawIssueSnapshots.CountAsync(r => r.JiraProjectId == projectId));
         Assert.Null(run.ResumeCursor);   // nothing committed, so nothing to resume past
+    }
+
+    /// <summary>
+    /// A payload declaring more history than it carries inline, which is what forces the ingest
+    /// to call Jira's dedicated changelog endpoint — the expensive part this stage checkpoints.
+    /// </summary>
+    private const string TruncatedChangelogPayload = "{\"changelog\":{\"total\":5,\"histories\":[]}}";
+
+    private static async Task<List<Guid>> SeedSnapshotsAsync(
+        DbContextOptions<AppDbContext> options, ICurrentTenant tenant, Guid projectId, int count)
+    {
+        await using var db = new AppDbContext(options, tenant);
+        var ids = new List<Guid>();
+        for (var i = 0; i < count; i++)
+        {
+            var id = Guid.NewGuid();
+            ids.Add(id);
+            db.RawIssueSnapshots.Add(new RawIssueSnapshot
+            {
+                Id = id, JiraProjectId = projectId, JiraIssueId = $"J{i}",
+                Payload = TruncatedChangelogPayload, FetchedAt = DateTime.UtcNow
+            });
+        }
+        await db.SaveChangesAsync();
+        return ids;
+    }
+
+    [Fact]
+    public async Task A_resumed_changelog_ingest_skips_the_issues_it_already_wrote()
+    {
+        // Every issue here costs a Jira round trip, so redoing a completed batch is the single
+        // most expensive kind of wasted work in the whole sync.
+        var tenant = new AmbientCurrentTenant();
+        using var _ = tenant.BeginScope(Guid.NewGuid());
+        var options = InMemoryOptions();
+        var projectId = SeedProject(options, tenant, "project = A");
+        var ids = await SeedSnapshotsAsync(options, tenant, projectId, count: 600);
+
+        var jira = new RecordingJiraClient((_, _) => new SearchPage(Array.Empty<RawIssue>(), null));
+
+        await using var db = new AppDbContext(options, tenant);
+        var ingest = new ChangelogIngestService(db, jira, new FakeClock(DateTime.UtcNow));
+
+        // Ordered by Id, because that is the order the cursor walks.
+        var ordered = ids.OrderBy(x => x).ToList();
+        var alreadyDone = ordered.Take(250).ToList();
+
+        await ingest.IngestProjectAsync(
+            projectId, new JiraCredentials("https://acme.atlassian.net", "ops@acme.com", "t"),
+            afterSnapshotId: ordered[249], alreadyDone: 250,
+            onBatch: null, ct: default);
+
+        // The issues in the completed batch are never asked about again.
+        await using var read = new AppDbContext(options, tenant);
+        var skipped = await read.RawIssueSnapshots
+            .Where(r => alreadyDone.Contains(r.Id)).Select(r => r.JiraIssueId).ToListAsync();
+
+        Assert.All(skipped, jid => Assert.DoesNotContain(jid, jira.ChangelogRequests));
+        Assert.Equal(350, await read.RawChangelogs.CountAsync(r => r.JiraProjectId == projectId));
     }
 }

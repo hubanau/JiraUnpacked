@@ -61,20 +61,22 @@ public class SyncOrchestratorTests
     {
         public Task IngestProjectAsync(
             Guid projectId, JiraCredentials creds,
-            Func<int, int, CancellationToken, Task>? onProgress = null,
+            Guid? afterSnapshotId = null, int alreadyDone = 0,
+            Func<int, int, Guid, CancellationToken, Task>? onBatch = null,
             CancellationToken ct = default) => Task.CompletedTask;
     }
 
     /// <summary>Ingest that hands its progress reporter to the test to drive.</summary>
     private sealed class ReportingIngest : IChangelogIngestService
     {
-        private readonly Func<Func<int, int, CancellationToken, Task>, CancellationToken, Task> _run;
-        public ReportingIngest(Func<Func<int, int, CancellationToken, Task>, CancellationToken, Task> run) => _run = run;
+        private readonly Func<Func<int, int, Guid, CancellationToken, Task>, CancellationToken, Task> _run;
+        public ReportingIngest(Func<Func<int, int, Guid, CancellationToken, Task>, CancellationToken, Task> run) => _run = run;
 
         public Task IngestProjectAsync(
             Guid projectId, JiraCredentials creds,
-            Func<int, int, CancellationToken, Task>? onProgress = null,
-            CancellationToken ct = default) => _run(onProgress!, ct);
+            Guid? afterSnapshotId = null, int alreadyDone = 0,
+            Func<int, int, Guid, CancellationToken, Task>? onBatch = null,
+            CancellationToken ct = default) => _run(onBatch!, ct);
     }
 
     /// <summary>Derivation that hands its progress reporter to the test to drive.</summary>
@@ -597,9 +599,9 @@ public class SyncOrchestratorTests
         var observed = new List<(string? Phase, int? Done, int? Total)>();
         var ingest = new ReportingIngest(async (report, ct) =>
         {
-            await report(0, 40, ct);
+            await report(0, 40, Guid.NewGuid(), ct);
             Observe();
-            await report(20, 40, ct);
+            await report(20, 40, Guid.NewGuid(), ct);
             Observe();
         });
 
@@ -696,7 +698,7 @@ public class SyncOrchestratorTests
         {
             var runId = new AppDbContext(options, tenant).SyncRuns.Single(r => r.JiraProjectId == projectId).Id;
             Assert.True(cancellation.Cancel(runId), "the orchestrator did not register the run");
-            await report(0, 1, ct);
+            await report(0, 1, Guid.NewGuid(), ct);
         });
 
         var jira = new StubJiraClient(() =>

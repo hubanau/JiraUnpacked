@@ -330,13 +330,26 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             if (startStage <= ResumeStage.IndexOf(ResumeStage.Changelog))
             {
                 await SetPhaseAsync(run, SyncPhase.Changelog, ct);
-                await _ingest.IngestProjectAsync(projectId, creds, async (done, total, token) =>
-                {
-                    run.PhaseProcessed = done;
-                    run.PhaseTotal = total;
-                    run.LastProgressAt = _clock.UtcNow;
-                    await _db.SaveChangesAsync(token);
-                }, ct);
+
+                var resumingChangelog = startStage == ResumeStage.IndexOf(ResumeStage.Changelog);
+                var afterSnapshot = resumingChangelog && Guid.TryParse(checkpoint?.Cursor, out var cs)
+                    ? cs : (Guid?)null;
+                var changelogDone = afterSnapshot is null ? 0 : checkpoint!.Value.ItemsDone;
+
+                // The denominator is published before the first batch rather than after it: a
+                // batch here can take a while, and a bar with no total reads as a hang.
+                run.PhaseProcessed = changelogDone;
+                run.PhaseTotal = changelogDone + await _db.RawIssueSnapshots
+                    .CountAsync(r => r.JiraProjectId == projectId
+                                     && (afterSnapshot == null || r.Id > afterSnapshot), ct);
+                run.LastProgressAt = _clock.UtcNow;
+                await _db.SaveChangesAsync(ct);
+
+                await _ingest.IngestProjectAsync(projectId, creds, afterSnapshot, changelogDone,
+                    async (done, total, lastId, token) =>
+                        await SaveCheckpointAsync(
+                            run, ResumeStage.Changelog, lastId.ToString(), done, total, token),
+                    ct);
             }
 
             await SetPhaseAsync(run, SyncPhase.Deriving, ct);
