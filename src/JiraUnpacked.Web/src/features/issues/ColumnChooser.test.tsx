@@ -161,3 +161,39 @@ describe('sortable headers', () => {
       expect(sent.at(-1)).toMatchObject({ sortBy: 'storyPoints', sortDescending: true }));
   });
 });
+
+describe('CSV export', () => {
+  it('offers a download carrying the filter, sort and columns on screen', async () => {
+    mockList();
+    const filter = encodeURIComponent('[{"field":"status","op":"Eq","value":"Backlog"}]');
+    renderList(`/projects/p1/issues?filter=${filter}&logic=Or&sortBy=storyPoints&cols=jiraKey,summary`);
+
+    const link = await screen.findByRole('link', { name: /export csv/i });
+    const href = link.getAttribute('href')!;
+
+    expect(href).toContain('/api/projects/p1/issues/export.csv');
+    expect(href).toContain('sortBy=storyPoints');
+    expect(href).toContain('logic=Or');
+    expect(href).toContain('cols=jiraKey%2Csummary');
+    expect(decodeURIComponent(href)).toContain('"field":"status"');
+  });
+
+  it('is a link, not a fetch, so the browser streams it to disk', async () => {
+    // apiFetch would hold the whole file in memory before offering it -- the same mistake the
+    // server side avoids by streaming.
+    mockList();
+    renderList();
+
+    const link = await screen.findByRole('link', { name: /export csv/i });
+    expect(link).toHaveAttribute('download');
+  });
+
+  it('omits the filter entirely when there is none, rather than sending an empty one', async () => {
+    // The server refuses an empty group rather than guessing whether it means all or nothing.
+    mockList();
+    renderList();
+
+    const href = (await screen.findByRole('link', { name: /export csv/i })).getAttribute('href')!;
+    expect(href).not.toContain('filter=');
+  });
+});
