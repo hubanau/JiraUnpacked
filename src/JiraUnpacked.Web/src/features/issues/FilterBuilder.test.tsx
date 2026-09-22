@@ -38,6 +38,17 @@ const CATALOG: FilterCatalog = {
   maxDepth: 3,
 };
 
+/**
+ * The conditions the SPA actually sent, whichever envelope carried them.
+ *
+ * The builder moved from a flat `conditions` list to a `filter` group when All/Any arrived.
+ * These tests are about the conditions themselves -- which operator, which value shape -- so
+ * they read through this rather than hard-coding the wrapper and having to change again next
+ * time it moves.
+ */
+const sentConditions = (body: Record<string, unknown>): unknown =>
+  (body.filter as { conditions?: unknown[] } | undefined)?.conditions ?? body.conditions;
+
 function mockFilterCatalog() {
   server.use(http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)));
 }
@@ -94,7 +105,7 @@ describe('FilterBuilder', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <FilterBuilder conditions={[]} onChange={() => {}} />
+        <FilterBuilder conditions={[]} onChange={() => {}} logic="And" onLogicChange={() => {}} />
       </QueryClientProvider>,
     );
 
@@ -112,7 +123,7 @@ describe('FilterBuilder', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <FilterBuilder conditions={[]} onChange={() => {}} />
+        <FilterBuilder conditions={[]} onChange={() => {}} logic="And" onLogicChange={() => {}} />
       </QueryClientProvider>,
     );
 
@@ -140,9 +151,9 @@ describe('FilterBuilder', () => {
     await user.selectOptions(screen.getByLabelText(/operator for condition 1/i), 'IsNull');
 
     await waitFor(() => {
-      expect(bodies[bodies.length - 1].conditions).toEqual([{ field: 'assignee', op: 'IsNull' }]);
+      expect(sentConditions(bodies[bodies.length - 1])).toEqual([{ field: 'assignee', op: 'IsNull' }]);
     });
-    const lastCondition = (bodies[bodies.length - 1].conditions as Record<string, unknown>[])[0];
+    const lastCondition = (sentConditions(bodies[bodies.length - 1]) as Record<string, unknown>[])[0];
     expect('value' in lastCondition).toBe(false);
     expect('values' in lastCondition).toBe(false);
   });
@@ -161,11 +172,11 @@ describe('FilterBuilder', () => {
     await user.click(screen.getByRole('button', { name: /add value/i }));
 
     await waitFor(() => {
-      expect(bodies[bodies.length - 1].conditions).toEqual([
+      expect(sentConditions(bodies[bodies.length - 1])).toEqual([
         { field: 'status', op: 'In', values: ['Done', 'In Progress'] },
       ]);
     });
-    const lastCondition = (bodies[bodies.length - 1].conditions as Record<string, unknown>[])[0];
+    const lastCondition = (sentConditions(bodies[bodies.length - 1]) as Record<string, unknown>[])[0];
     expect('value' in lastCondition).toBe(false);
   });
 
@@ -182,11 +193,11 @@ describe('FilterBuilder', () => {
     await user.type(valueInput, 'login');
 
     await waitFor(() => {
-      expect(bodies[bodies.length - 1].conditions).toEqual([
+      expect(sentConditions(bodies[bodies.length - 1])).toEqual([
         { field: 'summary', op: 'Contains', value: 'login' },
       ]);
     });
-    const lastCondition = (bodies[bodies.length - 1].conditions as Record<string, unknown>[])[0];
+    const lastCondition = (sentConditions(bodies[bodies.length - 1]) as Record<string, unknown>[])[0];
     expect('values' in lastCondition).toBe(false);
   });
 
@@ -202,11 +213,11 @@ describe('FilterBuilder', () => {
     await user.type(valueInput, '3');
 
     await waitFor(() => {
-      expect(bodies[bodies.length - 1].conditions).toEqual([
+      expect(sentConditions(bodies[bodies.length - 1])).toEqual([
         { field: 'storyPoints', op: 'Gte', value: 3 },
       ]);
     });
-    const lastCondition = (bodies[bodies.length - 1].conditions as Record<string, unknown>[])[0];
+    const lastCondition = (sentConditions(bodies[bodies.length - 1]) as Record<string, unknown>[])[0];
     expect(typeof lastCondition.value).toBe('number');
   });
 
@@ -252,6 +263,8 @@ describe('FilterBuilder', () => {
     render(
       <QueryClientProvider client={queryClient}>
         <FilterBuilder
+          logic="And"
+          onLogicChange={() => {}}
           conditions={Array.from(
             { length: CATALOG.maxConditions },
             () => ({ field: 'status', op: 'Eq' as const, value: '' }),
@@ -349,7 +362,7 @@ describe('FilterBuilder', () => {
     await user.type(screen.getByLabelText(/value for condition 2/i), 'login');
 
     await waitFor(() => {
-      expect(bodies[bodies.length - 1].conditions).toEqual([
+      expect(sentConditions(bodies[bodies.length - 1])).toEqual([
         { field: 'status', op: 'Eq', value: 'Done' },
         { field: 'summary', op: 'Contains', value: 'login' },
       ]);
@@ -363,7 +376,7 @@ describe('FilterBuilder', () => {
     expect(screen.queryByLabelText(/field for condition 2/i)).not.toBeInTheDocument();
 
     await waitFor(() => {
-      expect(bodies[bodies.length - 1].conditions).toEqual([
+      expect(sentConditions(bodies[bodies.length - 1])).toEqual([
         { field: 'summary', op: 'Contains', value: 'login' },
       ]);
     });
@@ -385,11 +398,11 @@ describe('FilterBuilder', () => {
     fireEvent.change(screen.getByLabelText(/value for condition 1/i), { target: { value: '2026-01-15' } });
 
     await waitFor(() => {
-      expect(bodies[bodies.length - 1].conditions).toEqual([
+      expect(sentConditions(bodies[bodies.length - 1])).toEqual([
         { field: 'createdAt', op: 'Lt', value: '2026-01-15' },
       ]);
     });
-    const lastCondition = (bodies[bodies.length - 1].conditions as Record<string, unknown>[])[0];
+    const lastCondition = (sentConditions(bodies[bodies.length - 1]) as Record<string, unknown>[])[0];
     expect(typeof lastCondition.value).toBe('string');
   });
 
@@ -436,5 +449,74 @@ describe('FilterBuilder', () => {
     // Its In-editor must be blank, not showing the draft typed against the
     // now-removed assignee condition.
     expect(screen.getByLabelText(/value for condition 2/i)).toHaveValue('');
+  });
+});
+
+/** Renders IssueList at an arbitrary URL, so a test can start from a filter already in place. */
+function renderIssueListAt(url: string) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[url]}>
+        <Routes>
+          <Route path="/projects/:id/issues" element={<IssueList />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+const ONE_CONDITION = encodeURIComponent('[{"field":"status","op":"Eq","value":"Backlog"}]');
+
+describe('FilterBuilder logic toggle', () => {
+  it('sends a filter group, never a bare conditions list', async () => {
+    // The server returns 400 when both are present and cannot carry logic on the flat shape, so
+    // the group is the only form that can express Any.
+    mockFilterCatalog();
+    let sent: unknown = null;
+    server.use(http.post('/api/projects/p1/issues/query', async ({ request }) => {
+      sent = await request.json();
+      return HttpResponse.json({ items: [], page: 1, pageSize: 50, totalCount: 0 });
+    }));
+
+    renderIssueListAt(`/projects/p1/issues?filter=${ONE_CONDITION}`);
+
+    await waitFor(() => {
+      expect(sent).toMatchObject({
+        filter: { logic: 'And', conditions: [{ field: 'status', op: 'Eq', value: 'Backlog' }] },
+      });
+    });
+    expect(sent).not.toHaveProperty('conditions');
+  });
+
+  it('carries Any through to the request when the toggle is switched', async () => {
+    mockFilterCatalog();
+    const sent: unknown[] = [];
+    server.use(http.post('/api/projects/p1/issues/query', async ({ request }) => {
+      sent.push(await request.json());
+      return HttpResponse.json({ items: [], page: 1, pageSize: 50, totalCount: 0 });
+    }));
+    const user = userEvent.setup();
+
+    renderIssueListAt(`/projects/p1/issues?filter=${ONE_CONDITION}`);
+    await screen.findByLabelText(/match/i);
+
+    await user.selectOptions(screen.getByLabelText(/match/i), 'Or');
+
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ filter: { logic: 'Or' } }));
+  });
+
+  it('offers no toggle while there is no filter at all', async () => {
+    // With no conditions there is nothing for All/Any to describe. It appears from the first
+    // condition onward rather than the second, so the control does not pop in and out while
+    // the filter is being built.
+    mockFilterCatalog();
+    server.use(http.post('/api/projects/p1/issues/query', () =>
+      HttpResponse.json({ items: [], page: 1, pageSize: 50, totalCount: 0 })));
+
+    renderIssueListAt('/projects/p1/issues');
+
+    await screen.findByRole('button', { name: /add condition/i });
+    expect(screen.queryByLabelText(/match/i)).not.toBeInTheDocument();
   });
 });

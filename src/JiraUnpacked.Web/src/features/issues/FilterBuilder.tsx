@@ -1,15 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
-import type { FilterCondition } from '../../api/issues';
+import type { FilterCondition, FilterLogic } from '../../api/issues';
 import { getFilterCatalog } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
 import { ApiError } from '../../api/errors';
-import { Button, ErrorState, Spinner } from '../../ui';
+import { Button, ErrorState, Field, Select, Spinner } from '../../ui';
 import { ConditionRow } from './ConditionRow';
 import { isDictionaryField } from './filterCatalogHelpers';
 
 interface FilterBuilderProps {
   conditions: FilterCondition[];
   onChange: (next: FilterCondition[]) => void;
+  logic: FilterLogic;
+  onLogicChange: (next: FilterLogic) => void;
 }
 
 /**
@@ -31,7 +33,7 @@ const NEQ_DICT_NOTE =
  * server's FilterFields.All is the sole authority, so drift between what
  * this UI offers and what the server accepts is impossible, not just tested.
  */
-export function FilterBuilder({ conditions, onChange }: FilterBuilderProps) {
+export function FilterBuilder({ conditions, onChange, logic, onLogicChange }: FilterBuilderProps) {
   const { data: catalog, isPending, error } = useQuery({
     queryKey: queryKeys.filterCatalog(),
     queryFn: getFilterCatalog,
@@ -83,6 +85,24 @@ export function FilterBuilder({ conditions, onChange }: FilterBuilderProps) {
 
   return (
     <div className="flex flex-col gap-3">
+      {/* From the FIRST condition rather than the second: appearing only once a second row is
+          added would make the control pop in and out while the filter is being built. */}
+      <Field
+        label="Match"
+        id="filter-logic"
+        hint="All: every condition must hold. Any: at least one."
+      >
+        <Select
+          id="filter-logic"
+          value={logic}
+          onChange={(e) => onLogicChange(e.target.value as FilterLogic)}
+        >
+          <option value="And">All conditions</option>
+          {/* The label is prose; the value is the wire format the server expects. */}
+          <option value="Or">Any condition</option>
+        </Select>
+      </Field>
+
       {conditions.map((condition, index) => (
         <ConditionRow
           key={index}

@@ -33,7 +33,7 @@ export default function IssueList() {
 
   // The view lives in the URL, not in component state: that makes a filtered list shareable as
   // a link and survives reload and Back, neither of which useState does.
-  const { conditions, setConditions } = useListState();
+  const { conditions, setConditions, logic, setLogic } = useListState();
 
   const [page, setPage] = useState(1);
 
@@ -51,7 +51,13 @@ export default function IssueList() {
   // server 400 for a condition that is complete but still invalid must
   // still render (see the "still shows a server 400" FilterBuilder test).
   const completeConditions = conditions.filter(isCompleteCondition);
-  const request: IssueFilterRequest = { conditions: completeConditions, page, pageSize: DEFAULT_PAGE_SIZE };
+
+  // `filter`, never `conditions`: the server rejects both together rather than merging them, and
+  // the flat list has nowhere to carry the And/Or choice. An empty filter is omitted entirely --
+  // the server refuses an empty group rather than guessing whether it means all or nothing.
+  const request: IssueFilterRequest = completeConditions.length === 0
+    ? { page, pageSize: DEFAULT_PAGE_SIZE }
+    : { filter: { logic, conditions: completeConditions }, page, pageSize: DEFAULT_PAGE_SIZE };
   const { data, isPending, error, isPlaceholderData } = useQuery({
     queryKey: queryKeys.issues(id, request),
     queryFn: () => queryIssues(id, request),
@@ -97,7 +103,12 @@ export default function IssueList() {
         </p>
       )}
 
-      <FilterBuilder conditions={conditions} onChange={setConditions} />
+      <FilterBuilder
+        conditions={conditions}
+        onChange={setConditions}
+        logic={logic}
+        onLogicChange={setLogic}
+      />
 
       {showEmpty && conditions.length === 0 && (
         <EmptyState
