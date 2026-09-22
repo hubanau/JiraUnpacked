@@ -193,6 +193,10 @@ app.MapGet("/health/ready", async (AppDbContext db, CancellationToken ct) =>
 app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
+// FR-A5: a token outlives a block or a deletion, so every authorized request re-checks that
+// the account still exists and is Active. Before the rate limiter and the tenant scope, so a
+// blocked user neither spends a sync permit nor opens a tenant scope.
+app.UseMiddleware<JiraUnpacked.Api.Security.ActiveUserMiddleware>();
 // Runs after authentication/authorization so the "sync" policy's partition key
 // (the endUserId claim) is resolved from an authenticated HttpContext.User —
 // otherwise it always sees the unauthenticated principal and silently falls

@@ -1,6 +1,7 @@
 using JiraUnpacked.Api.Contracts.Auth;
 using JiraUnpacked.Api.Security;
 using JiraUnpacked.Domain.Abstractions;
+using JiraUnpacked.Domain.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -84,6 +85,15 @@ public sealed class AuthController : ControllerBase
                 detail: string.Join(" ", result.Errors)),
             RegistrationError.EmailOrUsernameTaken => Problem(
                 statusCode: StatusCodes.Status409Conflict, title: "Email or username is already in use."),
+            RegistrationError.InvalidEmail => Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Enter a valid email address.",
+                detail: $"Use a plain address such as name@example.com, at most {AccountInputRules.EmailMaxLength} characters."),
+            RegistrationError.InvalidUsername => Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Username is not valid.",
+                detail: $"Use {AccountInputRules.UsernameMinLength}–{AccountInputRules.UsernameMaxLength} "
+                        + "letters, digits, '.', '_' or '-'. An '@' is not allowed."),
             _ => Problem(statusCode: StatusCodes.Status500InternalServerError)
         };
     }

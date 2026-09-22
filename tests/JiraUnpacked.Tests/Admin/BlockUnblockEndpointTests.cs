@@ -98,6 +98,80 @@ public sealed class BlockUnblockEndpointTests : IClassFixture<JiraUnpackedApiFac
     }
 
     [Fact]
+    public async Task Block_RejectsTheStillValidAccessToken_OnReadsAndOnSync()
+    {
+        var (endUserId, endUserEmail) = await SeedUserAsync(UserRole.EndUser);
+        var seed = await GapCheckTestData.SeedAsync(endUserId);
+
+        var endUser = _factory.CreateClient();
+        var tokens = await LoginAsync(endUser, endUserEmail);
+        endUser.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+
+        // The token works before the block, on the very project the sync below targets.
+        Assert.Equal(HttpStatusCode.OK, (await endUser.GetAsync("/api/connections")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK,
+            (await endUser.GetAsync($"/api/projects/{seed.ProjectId}/sync-runs")).StatusCode);
+
+        var admin = await AdminClientAsync();
+        Assert.Equal(HttpStatusCode.NoContent,
+            (await admin.PostAsync($"/api/admin/users/{endUserId}/block", content: null)).StatusCode);
+
+        // Same access token, well inside its lifetime: FR-A5 says it no longer authenticates.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await endUser.GetAsync("/api/connections")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await endUser.PostAsync($"/api/projects/{seed.ProjectId}/sync", content: null)).StatusCode);
+
+        // ...and "cannot trigger syncs" means nothing was queued, not merely a 401 on the way out.
+        // Read as the owner role: the app role's RLS would hide the rows and make this vacuous.
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseNpgsql(JiraUnpackedApiFactory.TestConnectionString).Options;
+        await using var db = new AppDbContext(options, new JiraUnpacked.Infrastructure.Tenancy.NullCurrentTenant());
+        Assert.False(await db.SyncRuns.IgnoreQueryFilters().AnyAsync(r => r.JiraProjectId == seed.ProjectId));
+    }
+
+    [Fact]
+    public async Task Unblock_ThenFreshLogin_WorksAgain()
+    {
+        var (endUserId, endUserEmail) = await SeedUserAsync(UserRole.EndUser);
+        var endUser = _factory.CreateClient();
+        var before = await LoginAsync(endUser, endUserEmail);
+        endUser.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", before.AccessToken);
+
+        var admin = await AdminClientAsync();
+        await admin.PostAsync($"/api/admin/users/{endUserId}/block", content: null);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await endUser.GetAsync("/api/connections")).StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent,
+            (await admin.PostAsync($"/api/admin/users/{endUserId}/unblock", content: null)).StatusCode);
+
+        var fresh = _factory.CreateClient();
+        var after = await LoginAsync(fresh, endUserEmail);
+        fresh.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", after.AccessToken);
+        Assert.Equal(HttpStatusCode.OK, (await fresh.GetAsync("/api/connections")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Block_LeavesAnonymousEndpointsReachable_WithTheStaleToken()
+    {
+        var (endUserId, endUserEmail) = await SeedUserAsync(UserRole.EndUser);
+        var endUser = _factory.CreateClient();
+        var tokens = await LoginAsync(endUser, endUserEmail);
+        endUser.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+
+        var admin = await AdminClientAsync();
+        await admin.PostAsync($"/api/admin/users/{endUserId}/block", content: null);
+
+        // A browser still holding the old token must get the login endpoint's own answer (the
+        // uniform "invalid credentials" for a blocked account), not the middleware's rejection,
+        // and health stays anonymous.
+        Assert.Equal(HttpStatusCode.OK, (await endUser.GetAsync("/health/live")).StatusCode);
+        var login = await endUser.PostAsJsonAsync("/api/auth/login",
+            new { emailOrUsername = endUserEmail, password = Password });
+        Assert.Equal(HttpStatusCode.Unauthorized, login.StatusCode);
+        Assert.Contains("Invalid credentials", await login.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task Unblock_RestoresLogin()
     {
         var (endUserId, endUserEmail) = await SeedUserAsync(UserRole.EndUser);

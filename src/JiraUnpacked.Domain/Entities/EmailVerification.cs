@@ -6,6 +6,19 @@ namespace JiraUnpacked.Domain.Entities;
 /// </summary>
 public class EmailVerification
 {
+    /// <summary>
+    /// How long a code stays redeemable. Shared by every writer: with no CreatedAt column, a
+    /// code's issue time is derived as <see cref="ExpiresAt"/> minus this, so a writer using a
+    /// different lifetime would silently skew the resend throttle.
+    /// </summary>
+    public static readonly TimeSpan CodeLifetime = TimeSpan.FromMinutes(15);
+
+    /// <summary>A resend within this long of the newest code is a silent no-op (FR-A1).</summary>
+    public static readonly TimeSpan ResendCooldown = TimeSpan.FromSeconds(60);
+
+    /// <summary>Submissions checked against one code before it stops accepting any.</summary>
+    public const int MaxAttempts = 5;
+
     public Guid Id { get; set; }
 
     public Guid UserId { get; set; }
@@ -18,7 +31,11 @@ public class EmailVerification
     /// <summary>When the code was redeemed; null until consumed.</summary>
     public DateTime? ConsumedAt { get; set; }
 
-    /// <summary>Number of incorrect code submissions; capped to throttle guessing.</summary>
+    /// <summary>
+    /// Submissions checked against this code, capped at <see cref="MaxAttempts"/> to throttle
+    /// guessing. Reserved atomically BEFORE the comparison, so concurrent guesses can never
+    /// between them get more than <see cref="MaxAttempts"/> answers.
+    /// </summary>
     public int Attempts { get; set; }
 
     /// <summary>
