@@ -110,6 +110,10 @@ public sealed class RederiveWatermarkTests : IClassFixture<JiraUnpackedApiFactor
                  issues = new object[] { new { id = "10001", key = "ACME-1", fields = new { summary = "S" } } }
              }));
 
+        // The account's zone: JQL date literals are read in it, so the clause is written in it.
+        _jira.Given(Request.Create().WithPath("/rest/api/3/myself").UsingGet())
+             .RespondWith(Response.Create().WithStatusCode(200).WithBodyAsJson(new { timeZone = "UTC" }));
+
         // The watermark is established by RUNNING a sync, not by seeding a row. A hand-seeded run
         // cannot record which SCOPE it covered, and a run whose scope is unknown is no longer
         // allowed to seed a watermark — so seeding one would leave this test proving nothing about
@@ -133,7 +137,8 @@ public sealed class RederiveWatermarkTests : IClassFixture<JiraUnpackedApiFactor
                 .RootElement.GetProperty("jql").GetString()!)
             .ToList();
 
-        var fromSync = $"updated >= \"{syncedAt:yyyy-MM-dd HH:mm}\"";
+        // Less the clock-skew margin the clause always allows for.
+        var fromSync = $"updated >= \"{syncedAt.AddMinutes(-5):yyyy-MM-dd HH:mm}\"";
         var fromRederive = $"{rederiveAt:yyyy-MM-dd HH:mm}";
         Assert.Contains(jqls, j => j.Contains(fromSync));
         Assert.DoesNotContain(jqls, j => j.Contains(fromRederive));

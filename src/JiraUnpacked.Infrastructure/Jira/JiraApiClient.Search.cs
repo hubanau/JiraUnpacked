@@ -103,4 +103,65 @@ public sealed partial class JiraApiClient
             return new SearchPage(issues, token);
         }
     }
+
+    /// <summary>
+    /// Jira's ceiling for a page that asks for ids only; pages carrying fields are capped far lower.
+    /// </summary>
+    private const int IdPageSize = 5000;
+
+    private static readonly string[] IdFields = { "id" };
+
+    public async Task<IssueIdPage> SearchIssueIdsPageAsync(
+        JiraCredentials creds, string jql, string? nextPageToken, CancellationToken ct = default)
+    {
+        using var resp = await SendWithRetryAsync(() =>
+        {
+            var req = Build(HttpMethod.Post, creds, "/rest/api/3/search/jql");
+            req.Content = JsonContent.Create(new
+            {
+                jql,
+                maxResults = IdPageSize,
+                nextPageToken,
+                fields = IdFields,
+            }, options: SearchJson);
+            return req;
+        }, ct);
+
+        await EnsureOkAsync(resp, ct);
+
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct), JiraJson.Document);
+        var root = doc.RootElement;
+
+        var ids = new List<string>();
+        if (root.TryGetProperty("issues", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            foreach (var el in arr.EnumerateArray())
+                if (el.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+                    ids.Add(id.GetString()!);
+
+        var token = root.TryGetProperty("nextPageToken", out var t) && t.ValueKind == JsonValueKind.String
+            ? t.GetString()
+            : null;
+
+        return new IssueIdPage(ids, token);
+    }
+
+    public async Task<string?> GetUserTimeZoneAsync(JiraCredentials creds, CancellationToken ct = default)
+    {
+        try
+        {
+            using var resp = await SendWithRetryAsync(() => Build(HttpMethod.Get, creds, "/rest/api/3/myself"), ct);
+            if (!resp.IsSuccessStatusCode) return null;
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct), JiraJson.Document);
+            return doc.RootElement.TryGetProperty("timeZone", out var tz) && tz.ValueKind == JsonValueKind.String
+                ? tz.GetString()
+                : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Unknown is an answer the caller plans for (it widens the window instead); a failed
+            // lookup must never fail the sync that asked.
+            return null;
+        }
+    }
 }

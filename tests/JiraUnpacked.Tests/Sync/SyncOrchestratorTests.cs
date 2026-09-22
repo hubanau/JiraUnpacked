@@ -54,6 +54,14 @@ public class SyncOrchestratorTests
         public Task<IReadOnlyList<JiraStatus>> GetStatusesAsync(JiraCredentials creds, string projectKey, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<JqlValidationResult> ParseJqlAsync(JiraCredentials creds, string jql, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<ChangelogPage> GetIssueChangelogPageAsync(JiraCredentials creds, string jiraIssueId, int startAt, CancellationToken ct = default) => throw new NotSupportedException();
+        /// <summary>The account's zone as Jira reports it. UTC keeps the watermark clause readable.</summary>
+        public string? TimeZone { get; set; } = "UTC";
+        public Task<string?> GetUserTimeZoneAsync(JiraCredentials creds, CancellationToken ct = default) => Task.FromResult(TimeZone);
+
+        /// <summary>Unanswered by default: reconciliation then skips, which is its documented fallback.</summary>
+        public Func<string, IssueIdPage>? IdListing { get; set; }
+        public Task<IssueIdPage> SearchIssueIdsPageAsync(JiraCredentials creds, string jql, string? nextPageToken, CancellationToken ct = default)
+            => IdListing is null ? throw new NotSupportedException() : Task.FromResult(IdListing(jql));
     }
 
     // These failure tests never reach the transform phase (they throw during extract), so no-op stubs suffice.
@@ -89,6 +97,7 @@ public class SyncOrchestratorTests
             Guid projectId, string? resumeStage = null, string? resumeCursor = null,
             int alreadyDone = 0, int batchSize = 10_000,
             Func<string, string, int, int, CancellationToken, Task>? onBatch = null,
+            DateTime? incrementalSince = null,
             CancellationToken ct = default)
             // Adapts the stage/cursor callback back to the (done, total) shape these older tests
             // drive; they are about progress reporting, not about where a run resumes.
@@ -101,6 +110,7 @@ public class SyncOrchestratorTests
             Guid projectId, string? resumeStage = null, string? resumeCursor = null,
             int alreadyDone = 0, int batchSize = 10_000,
             Func<string, string, int, int, CancellationToken, Task>? onBatch = null,
+            DateTime? incrementalSince = null,
             CancellationToken ct = default) => Task.CompletedTask;
     }
 
@@ -293,7 +303,7 @@ public class SyncOrchestratorTests
             await o2.RunProjectAsync(projectId);
         }
 
-        Assert.Equal(new[] { "(project = \"ACME\") AND updated >= \"2026-03-01 09:30\"" }, jira.SeenJql);
+        Assert.Equal(new[] { "(project = \"ACME\") AND updated >= \"2026-03-01 09:25\"" }, jira.SeenJql);
     }
 
     /// <summary>
@@ -381,7 +391,7 @@ public class SyncOrchestratorTests
             await o2.RunProjectAsync(projectId);
         }
 
-        Assert.Equal(new[] { "(project = ACME) AND updated >= \"2026-03-01 09:30\"" }, jira.SeenJql);
+        Assert.Equal(new[] { "(project = ACME) AND updated >= \"2026-03-01 09:25\"" }, jira.SeenJql);
     }
 
     /// <summary>
@@ -436,7 +446,7 @@ public class SyncOrchestratorTests
             await o2.RunProjectAsync(projectId);
         }
 
-        Assert.All(jira.SeenJql, j => Assert.Contains("updated >= \"2026-03-01 09:30\"", j));
+        Assert.All(jira.SeenJql, j => Assert.Contains("updated >= \"2026-03-01 09:25\"", j));
     }
 
     /// <summary>
@@ -760,7 +770,7 @@ public class SyncOrchestratorTests
             await o2.RunProjectAsync(projectId);
         }
 
-        Assert.Equal(new[] { "(project = \"ACME\") AND updated >= \"2026-03-01 09:30\"" }, jira.CountedJql);
+        Assert.Equal(new[] { "(project = \"ACME\") AND updated >= \"2026-03-01 09:25\"" }, jira.CountedJql);
         Assert.Equal(jira.SeenJql, jira.CountedJql);
     }
 

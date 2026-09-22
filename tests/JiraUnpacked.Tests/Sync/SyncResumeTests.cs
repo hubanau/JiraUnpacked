@@ -80,6 +80,14 @@ public class SyncResumeTests
                 new[] { "{\"id\":\"1\",\"created\":\"2026-01-01T00:00:00.000+0000\",\"items\":[]}" },
                 Total: 1, IsLast: true));
         }
+        /// <summary>The account's zone as Jira reports it. UTC keeps the watermark clause readable.</summary>
+        public string? TimeZone { get; set; } = "UTC";
+        public Task<string?> GetUserTimeZoneAsync(JiraCredentials creds, CancellationToken ct = default) => Task.FromResult(TimeZone);
+
+        /// <summary>Unanswered by default: reconciliation then skips, which is its documented fallback.</summary>
+        public Func<string, IssueIdPage>? IdListing { get; set; }
+        public Task<IssueIdPage> SearchIssueIdsPageAsync(JiraCredentials creds, string jql, string? nextPageToken, CancellationToken ct = default)
+            => IdListing is null ? throw new NotSupportedException() : Task.FromResult(IdListing(jql));
     }
 
     internal sealed class PassthroughProtector : ITokenProtector
@@ -103,6 +111,7 @@ public class SyncResumeTests
             Guid projectId, string? resumeStage = null, string? resumeCursor = null,
             int alreadyDone = 0, int batchSize = 10_000,
             Func<string, string, int, int, CancellationToken, Task>? onBatch = null,
+            DateTime? incrementalSince = null,
             CancellationToken ct = default) => Task.CompletedTask;
     }
 

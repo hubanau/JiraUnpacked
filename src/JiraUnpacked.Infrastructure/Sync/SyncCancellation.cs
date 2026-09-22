@@ -12,7 +12,7 @@ namespace JiraUnpacked.Infrastructure.Sync;
 /// </summary>
 public sealed class SyncCancellation : ISyncCancellation
 {
-    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _running = new();
+    private readonly ConcurrentDictionary<Guid, (Guid Owner, CancellationTokenSource Cts)> _running = new();
 
     /// <summary>
     /// Remembered separately from the token source, and NOT removed when the run ends: the
@@ -21,28 +21,49 @@ public sealed class SyncCancellation : ISyncCancellation
     /// </summary>
     private readonly ConcurrentDictionary<Guid, byte> _cancelled = new();
 
-    public IDisposable Register(Guid runId, CancellationToken linkedTo, out CancellationToken token)
+    public IDisposable Register(Guid runId, CancellationToken linkedTo, out CancellationToken token) =>
+        Register(runId, Guid.Empty, linkedTo, out token);
+
+    public IDisposable Register(Guid runId, Guid ownerId, CancellationToken linkedTo, out CancellationToken token)
     {
         // Linked, so shutting the process down still stops the work — the run then ends as
         // interrupted rather than cancelled, which is what the orchestrator distinguishes.
         var cts = CancellationTokenSource.CreateLinkedTokenSource(linkedTo);
-        _running[runId] = cts;
+        _running[runId] = (ownerId, cts);
         token = cts.Token;
         return new Registration(this, runId, cts);
     }
 
     public bool Cancel(Guid runId)
     {
-        if (!_running.TryGetValue(runId, out var cts)) return false;
+        if (!_running.TryGetValue(runId, out var entry)) return false;
+        var cts = entry.Cts;
 
         // Recorded BEFORE signalling: the worker may react on another thread the instant the
         // token trips, and it must not find this flag missing.
         _cancelled[runId] = 1;
-        cts.Cancel();
+        try
+        {
+            cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The run finished between the lookup and here: there is nothing left to stop.
+            return false;
+        }
         return true;
     }
 
     public bool WasCancelled(Guid runId) => _cancelled.ContainsKey(runId);
+
+    public int CancelAllFor(Guid ownerId)
+    {
+        if (ownerId == Guid.Empty) return 0;   // unowned registrations are never swept up
+        var count = 0;
+        foreach (var (runId, entry) in _running.ToArray())
+            if (entry.Owner == ownerId && Cancel(runId)) count++;
+        return count;
+    }
 
     private sealed class Registration : IDisposable
     {
