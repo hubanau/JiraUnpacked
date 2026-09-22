@@ -11,8 +11,6 @@ namespace JiraUnpacked.Infrastructure.Services;
 
 public sealed class RegistrationService : IRegistrationService
 {
-    private const int CodeTtlMinutes = 15;
-
     private readonly AppDbContext _db;
     private readonly IPasswordHasher _hasher;
     private readonly PasswordPolicy _policy;
@@ -33,6 +31,19 @@ public sealed class RegistrationService : IRegistrationService
         string inviteCode, string email, string username, string password, CancellationToken ct = default)
     {
         var now = _clock.UtcNow;
+
+        // Shape checks first: no database work, and nothing — least of all the invite — is
+        // touched for input that could never become an account. The username rule is also what
+        // keeps login unambiguous (a username can never contain '@').
+        if (!AccountInputRules.IsValidEmail(email))
+        {
+            return RegistrationResult.Fail(RegistrationError.InvalidEmail);
+        }
+        if (!AccountInputRules.IsValidUsername(username))
+        {
+            return RegistrationResult.Fail(RegistrationError.InvalidUsername);
+        }
+
         var normalizedEmail = User.NormalizeEmail(email);
 
         // Reject an invalid/expired/used invite before creating anything (FR-A2).
@@ -104,7 +115,7 @@ public sealed class RegistrationService : IRegistrationService
             Id = Guid.NewGuid(),
             UserId = userId,
             CodeHash = EmailVerification.HashCode(code),
-            ExpiresAt = now.AddMinutes(CodeTtlMinutes)
+            ExpiresAt = now + EmailVerification.CodeLifetime
         });
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
