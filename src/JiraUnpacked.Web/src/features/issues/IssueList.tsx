@@ -33,7 +33,10 @@ export default function IssueList() {
 
   // The view lives in the URL, not in component state: that makes a filtered list shareable as
   // a link and survives reload and Back, neither of which useState does.
-  const { conditions, setConditions, logic, setLogic, columns, setColumns } = useListState();
+  const {
+    conditions, setConditions, logic, setLogic, columns, setColumns,
+    sortBy, sortDescending, setSort,
+  } = useListState();
 
   const [page, setPage] = useState(1);
 
@@ -55,9 +58,10 @@ export default function IssueList() {
   // `filter`, never `conditions`: the server rejects both together rather than merging them, and
   // the flat list has nowhere to carry the And/Or choice. An empty filter is omitted entirely --
   // the server refuses an empty group rather than guessing whether it means all or nothing.
+  const paging = { page, pageSize: DEFAULT_PAGE_SIZE, sortBy, sortDescending };
   const request: IssueFilterRequest = completeConditions.length === 0
-    ? { page, pageSize: DEFAULT_PAGE_SIZE }
-    : { filter: { logic, conditions: completeConditions }, page, pageSize: DEFAULT_PAGE_SIZE };
+    ? paging
+    : { filter: { logic, conditions: completeConditions }, ...paging };
   const { data, isPending, error, isPlaceholderData } = useQuery({
     queryKey: queryKeys.issues(id, request),
     queryFn: () => queryIssues(id, request),
@@ -141,7 +145,29 @@ export default function IssueList() {
             <THead>
               <TR>
                 {visibleColumns.map((col) => (
-                  <TH key={col.id}>{col.header}</TH>
+                  <TH
+                    key={col.id}
+                    // "none" rather than omitted: leaving it off reads as "not sortable", which
+                    // is a different claim from "sortable, not currently sorted".
+                    aria-sort={
+                      sortBy === col.id ? (sortDescending ? 'descending' : 'ascending') : 'none'
+                    }
+                  >
+                    <button
+                      type="button"
+                      aria-label={`Sort by ${col.header}`}
+                      className="inline-flex items-center gap-1"
+                      // A column already sorted flips; a newly chosen one starts descending,
+                      // which is what people expect of Points, a date or anything ranked.
+                      onClick={() => setSort(col.id, sortBy === col.id ? !sortDescending : true)}
+                    >
+                      {col.header}
+                      {/* Decorative: aria-sort on the header already carries this. */}
+                      {sortBy === col.id && (
+                        <span aria-hidden="true">{sortDescending ? '↓' : '↑'}</span>
+                      )}
+                    </button>
+                  </TH>
                 ))}
               </TR>
             </THead>

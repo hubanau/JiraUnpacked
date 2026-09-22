@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -106,5 +106,58 @@ describe('ColumnChooser', () => {
     expect(await screen.findByRole('columnheader', { name: /priority/i })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /team/i })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: /summary/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('sortable headers', () => {
+  it('sorts by a column when its header is clicked, and flips on a second click', async () => {
+    const sent: Record<string, unknown>[] = [];
+    server.use(
+      http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)),
+      http.post('/api/projects/p1/issues/query', async ({ request }) => {
+        sent.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json({ items: [ITEM], page: 1, pageSize: 50, totalCount: 1 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderList();
+
+    await user.click(await screen.findByRole('button', { name: /sort by points/i }));
+    await waitFor(() =>
+      expect(sent.at(-1)).toMatchObject({ sortBy: 'storyPoints', sortDescending: true }));
+
+    await user.click(screen.getByRole('button', { name: /sort by points/i }));
+    await waitFor(() =>
+      expect(sent.at(-1)).toMatchObject({ sortBy: 'storyPoints', sortDescending: false }));
+  });
+
+  it('tells assistive tech which column is sorted and which way', async () => {
+    mockList();
+    renderList('/projects/p1/issues?sortBy=storyPoints&sortDesc=false');
+
+    const sorted = await screen.findByRole('columnheader', { name: /points/i });
+    expect(sorted).toHaveAttribute('aria-sort', 'ascending');
+
+    // Every other header must say "none" rather than nothing: an omitted aria-sort reads as
+    // "not sortable", which is a different claim from "sortable, not currently sorted".
+    expect(screen.getByRole('columnheader', { name: /summary/i })).toHaveAttribute('aria-sort', 'none');
+  });
+
+  it('starts a newly chosen column descending, which is what people expect of Points or a date', async () => {
+    const sent: Record<string, unknown>[] = [];
+    server.use(
+      http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)),
+      http.post('/api/projects/p1/issues/query', async ({ request }) => {
+        sent.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json({ items: [ITEM], page: 1, pageSize: 50, totalCount: 1 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary&sortDesc=false');
+
+    await user.click(await screen.findByRole('button', { name: /sort by points/i }));
+
+    await waitFor(() =>
+      expect(sent.at(-1)).toMatchObject({ sortBy: 'storyPoints', sortDescending: true }));
   });
 });
