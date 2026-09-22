@@ -192,9 +192,9 @@ closed field catalog, with values as constants and `ILIKE` wildcards escaped.
   only while no later run of that kind has succeeded. A shutdown records the run as Interrupted
   and due at once.
 - **Scheduling.** A project is due one interval after its last successful sync. After a failure
-  it waits 5, 10, 20, 40 minutes (capped at its interval); after a Stop, a full interval. Projects
-  of blocked accounts are not scheduled, and blocking or deleting an account stops its running
-  syncs.
+  it waits 5, 10, 20, 40 minutes (capped at its interval); after a Stop, a full interval. Paused
+  projects and projects of blocked accounts are not scheduled ("Sync now" still works on a paused
+  project), and blocking or deleting an account stops its running syncs.
 
 ## Upgrading
 

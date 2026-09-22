@@ -242,4 +242,28 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
 
         Assert.DoesNotContain(await Finder().GetDueProjectsAsync(), d => d.ProjectId == projId);
     }
+
+    [Fact]
+    public async Task A_paused_project_is_not_due_until_resumed()
+    {
+        var tenant = Guid.NewGuid();
+        var projId = await SeedProjectAsync(tenant, 60);
+
+        async Task SetPausedAsync(bool paused)
+        {
+            await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
+            await conn.OpenAsync();
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"UPDATE ""JiraProjects"" SET ""SyncPaused"" = @p WHERE ""Id"" = @id";
+            cmd.Parameters.AddWithValue("p", paused);
+            cmd.Parameters.AddWithValue("id", projId);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        await SetPausedAsync(true);
+        Assert.DoesNotContain(await Finder().GetDueProjectsAsync(), d => d.ProjectId == projId);
+
+        await SetPausedAsync(false);
+        Assert.Contains(await Finder().GetDueProjectsAsync(), d => d.ProjectId == projId);
+    }
 }
