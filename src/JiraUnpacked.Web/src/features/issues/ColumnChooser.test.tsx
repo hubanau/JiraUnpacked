@@ -3,8 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/setup';
+import { setAuthBridge } from '../../api/client';
 import IssueList from './IssueList';
 import type { FilterCatalog } from '../../api/issues';
 
@@ -163,37 +164,114 @@ describe('sortable headers', () => {
 });
 
 describe('CSV export', () => {
-  it('offers a download carrying the filter, sort and columns on screen', async () => {
+  const CSV = 'Key,Summary\r\nACME-1,Login fails\r\n';
+  let requests: { url: URL; auth: string | null }[];
+  let saved: { name: string; text: Promise<string> }[];
+
+  // jsdom's Blob has no text(); FileReader is what it does implement.
+  const readBlob = (blob: Blob) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob);
+  });
+
+  beforeEach(() => {
+    requests = [];
+    saved = [];
+    setAuthBridge({ getAccessToken: () => 'tok-1', refresh: async () => 'unauthenticated', onAuthFailure: () => {} });
+
+    // jsdom implements neither object URLs nor downloads. Stand in for both and record what
+    // the browser would have been asked to save.
+    const blobs = new Map<string, Blob>();
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: (blob: Blob) => { const url = `blob:test/${blobs.size}`; blobs.set(url, blob); return url; },
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => {} });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      saved.push({ name: this.download, text: readBlob(blobs.get(this.getAttribute('href')!)!) });
+    });
+  });
+
+  afterEach(() => {
+    setAuthBridge(null);
+    vi.restoreAllMocks();
+  });
+
+  function mockExport(respond: () => Response = () => new HttpResponse(CSV, {
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="ACME-issues-20260922.csv"',
+    },
+  })) {
+    server.use(http.get('/api/projects/p1/issues/export.csv', ({ request }) => {
+      requests.push({ url: new URL(request.url), auth: request.headers.get('authorization') });
+      return respond();
+    }));
+  }
+
+  it('downloads with the session token and saves under the name the server chose', async () => {
+    // The regression: this was an <a href download>. A navigation carries cookies, not the
+    // in-memory bearer token, so every export was a 401 the browser reported as
+    // "File wasn't available on site".
     mockList();
+    mockExport();
+    const user = userEvent.setup();
+    renderList();
+
+    await user.click(await screen.findByRole('button', { name: /export csv/i }));
+
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(requests[0].auth).toBe('Bearer tok-1');
+    expect(saved[0].name).toBe('ACME-issues-20260922.csv');
+    expect(await saved[0].text).toBe(CSV);
+  });
+
+  it('exports the filter, sort and columns on screen', async () => {
+    mockList();
+    mockExport();
+    // The status condition on screen asks for its value picker's choices.
+    server.use(http.get('/api/projects/p1/filter-values', () =>
+      HttpResponse.json({ field: 'status', values: ['Backlog'] })));
+    const user = userEvent.setup();
     const filter = encodeURIComponent('[{"field":"status","op":"Eq","value":"Backlog"}]');
     renderList(`/projects/p1/issues?filter=${filter}&logic=Or&sortBy=storyPoints&cols=jiraKey,summary`);
 
-    const link = await screen.findByRole('link', { name: /export csv/i });
-    const href = link.getAttribute('href')!;
+    await user.click(await screen.findByRole('button', { name: /export csv/i }));
 
-    expect(href).toContain('/api/projects/p1/issues/export.csv');
-    expect(href).toContain('sortBy=storyPoints');
-    expect(href).toContain('logic=Or');
-    expect(href).toContain('cols=jiraKey%2Csummary');
-    expect(decodeURIComponent(href)).toContain('"field":"status"');
-  });
-
-  it('is a link, not a fetch, so the browser streams it to disk', async () => {
-    // apiFetch would hold the whole file in memory before offering it -- the same mistake the
-    // server side avoids by streaming.
-    mockList();
-    renderList();
-
-    const link = await screen.findByRole('link', { name: /export csv/i });
-    expect(link).toHaveAttribute('download');
+    await waitFor(() => expect(requests).toHaveLength(1));
+    const params = requests[0].url.searchParams;
+    expect(params.get('sortBy')).toBe('storyPoints');
+    expect(params.get('logic')).toBe('Or');
+    expect(params.get('cols')).toBe('jiraKey,summary');
+    expect(JSON.parse(params.get('filter')!)).toEqual([{ field: 'status', op: 'Eq', value: 'Backlog' }]);
   });
 
   it('omits the filter entirely when there is none, rather than sending an empty one', async () => {
     // The server refuses an empty group rather than guessing whether it means all or nothing.
     mockList();
+    mockExport();
+    const user = userEvent.setup();
     renderList();
 
-    const href = (await screen.findByRole('link', { name: /export csv/i })).getAttribute('href')!;
-    expect(href).not.toContain('filter=');
+    await user.click(await screen.findByRole('button', { name: /export csv/i }));
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0].url.searchParams.has('filter')).toBe(false);
+  });
+
+  it('shows why the server refused the export, and saves nothing', async () => {
+    // Saving the error body as the CSV would hand the user a file that looks like an export.
+    mockList();
+    mockExport(() => HttpResponse.json(
+      { title: 'This view has 60000 issues; export is limited to 50000.' }, { status: 400 }));
+    const user = userEvent.setup();
+    renderList();
+
+    await user.click(await screen.findByRole('button', { name: /export csv/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/limited to 50000/);
+    expect(saved).toHaveLength(0);
   });
 });

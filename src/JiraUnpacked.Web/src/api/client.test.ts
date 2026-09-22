@@ -2,7 +2,7 @@ import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../test/setup';
 import { ApiError } from './errors';
-import { apiFetch, setAuthBridge, type RefreshOutcome } from './client';
+import { apiDownload, apiFetch, setAuthBridge, type RefreshOutcome } from './client';
 
 describe('apiFetch', () => {
   beforeEach(() => setAuthBridge(null));
@@ -145,5 +145,75 @@ describe('apiFetch', () => {
       apiFetch('/api/auth/refresh', { method: 'POST', body: {}, skipAuthRetry: true }),
     ).rejects.toBeInstanceOf(ApiError);
     expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('apiDownload', () => {
+  beforeEach(() => setAuthBridge(null));
+
+  // jsdom's Blob has no text(); FileReader is what it does implement.
+  const readBlob = (blob: Blob) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob);
+  });
+
+  const CSV = 'Key,Summary\r\nACME-1,Login fails\r\n';
+  const csvResponse = () => new HttpResponse(CSV, {
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="ACME-issues-20260922.csv"',
+    },
+  });
+
+  it('sends the bearer token and returns the file under the name the server gave it', async () => {
+    // The reason this exists: a plain <a href download> is a navigation, which carries cookies
+    // but not the in-memory bearer token, so the server answered every such link with a 401.
+    let seen: string | null = null;
+    server.use(http.get('/api/file.csv', ({ request }) => {
+      seen = request.headers.get('authorization');
+      return csvResponse();
+    }));
+    setAuthBridge({ getAccessToken: () => 'tok-1', refresh: async () => 'unauthenticated', onAuthFailure: () => {} });
+
+    const download = await apiDownload('/api/file.csv');
+
+    expect(seen).toBe('Bearer tok-1');
+    expect(download.filename).toBe('ACME-issues-20260922.csv');
+    expect(await readBlob(download.blob)).toBe(CSV);
+  });
+
+  it('returns a null filename when the server names none', async () => {
+    server.use(http.get('/api/file.csv', () => new HttpResponse('a,b')));
+    await expect(apiDownload('/api/file.csv')).resolves.toMatchObject({ filename: null });
+  });
+
+  it('refreshes once and retries after a 401, like every other call', async () => {
+    // An access token expires mid-session; an export started a minute later must not fail
+    // where the list next to it would have quietly refreshed.
+    let calls = 0;
+    server.use(http.get('/api/file.csv', ({ request }) => {
+      calls++;
+      return request.headers.get('authorization') === 'Bearer good'
+        ? csvResponse()
+        : new HttpResponse(null, { status: 401 });
+    }));
+    let token = 'stale';
+    const refresh = vi.fn(async (): Promise<RefreshOutcome> => { token = 'good'; return 'ok'; });
+    setAuthBridge({ getAccessToken: () => token, refresh, onAuthFailure: () => {} });
+
+    const download = await apiDownload('/api/file.csv');
+
+    expect(await readBlob(download.blob)).toBe(CSV);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(calls).toBe(2);
+  });
+
+  it("throws the server's error instead of handing back the error body as the file", async () => {
+    server.use(http.get('/api/file.csv', () =>
+      HttpResponse.json({ title: 'Too many rows.' }, { status: 400 })));
+
+    await expect(apiDownload('/api/file.csv')).rejects.toMatchObject({ status: 400, title: 'Too many rows.' });
   });
 });

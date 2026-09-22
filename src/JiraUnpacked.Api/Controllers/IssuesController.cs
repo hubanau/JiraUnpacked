@@ -68,8 +68,9 @@ public sealed class IssuesController : ControllerBase
     };
 
     /// <summary>
-    /// The filtered, sorted list as CSV. A GET rather than a POST because a browser can only
-    /// download from a navigation, and the whole view already lives in the query string.
+    /// The filtered, sorted list as CSV. A GET because the whole view already lives in the query
+    /// string. Like every endpoint here it needs the bearer token, so the SPA fetches it rather
+    /// than linking to it: a plain link is a navigation and carries no token.
     /// </summary>
     [HttpGet("api/projects/{projectId:guid}/issues/export.csv")]
     public async Task<IActionResult> Export(
