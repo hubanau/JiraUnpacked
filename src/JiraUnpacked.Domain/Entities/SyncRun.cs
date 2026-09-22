@@ -66,6 +66,18 @@ public sealed class SyncRun : ITenantOwned
     public string? ScopeFingerprint { get; set; }
 
     /// <summary>
+    /// The instant from which the data this run fetched is known current — the incremental
+    /// watermark the NEXT run starts from.
+    ///
+    /// Not simply StartedAt. A run that resumes another's checkpoint did not fetch what that
+    /// attempt fetched; those pages are only as fresh as the attempt that pulled them, so the
+    /// resuming run inherits the older instant. Using its own StartedAt skipped every issue
+    /// updated between the two attempts, permanently. Null on runs predating the column, which
+    /// fall back to StartedAt.
+    /// </summary>
+    public DateTime? FetchedAsOf { get; set; }
+
+    /// <summary>
     /// Which stage this run's checkpoint applies to, or null when it has none.
     ///
     /// Deliberately separate from Phase. Phase is a label for the UI and has four coarse values;

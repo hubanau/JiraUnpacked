@@ -17,13 +17,12 @@ public sealed partial class DerivationService
     /// keys it needs are exactly the ones belonging to the issues in hand.
     /// </summary>
     private async Task<int> DeriveChangeHistoryAsync(
-        Guid projectId, Guid? after, int done, int total, int batchSize,
+        Guid projectId, Guid? after, DateTime? since, int done, int total, int batchSize,
         Func<string, string, int, int, CancellationToken, Task>? onBatch, CancellationToken ct)
     {
         while (true)
         {
-            var batch = await _db.RawChangelogs
-                .Where(r => r.JiraProjectId == projectId && (after == null || r.Id > after))
+            var batch = await ChangelogsToDerive(projectId, after, since)
                 .OrderBy(r => r.Id)
                 .Take(batchSize)
                 .ToListAsync(ct);

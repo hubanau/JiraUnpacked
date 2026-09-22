@@ -808,6 +808,9 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.Property<string>("Error")
                         .HasColumnType("text");
 
+                    b.Property<DateTime?>("FetchedAsOf")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime?>("FinishedAt")
                         .HasColumnType("timestamp with time zone");
 
