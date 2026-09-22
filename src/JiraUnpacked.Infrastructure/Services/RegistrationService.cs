@@ -33,6 +33,19 @@ public sealed class RegistrationService : IRegistrationService
         string inviteCode, string email, string username, string password, CancellationToken ct = default)
     {
         var now = _clock.UtcNow;
+
+        // Shape checks first: no database work, and nothing — least of all the invite — is
+        // touched for input that could never become an account. The username rule is also what
+        // keeps login unambiguous (a username can never contain '@').
+        if (!AccountInputRules.IsValidEmail(email))
+        {
+            return RegistrationResult.Fail(RegistrationError.InvalidEmail);
+        }
+        if (!AccountInputRules.IsValidUsername(username))
+        {
+            return RegistrationResult.Fail(RegistrationError.InvalidUsername);
+        }
+
         var normalizedEmail = User.NormalizeEmail(email);
 
         // Reject an invalid/expired/used invite before creating anything (FR-A2).

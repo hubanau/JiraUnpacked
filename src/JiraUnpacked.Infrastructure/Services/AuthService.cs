@@ -29,11 +29,22 @@ public sealed class AuthService : IAuthService
 
     public async Task<LoginResult> LoginAsync(string emailOrUsername, string password, CancellationToken ct = default)
     {
-        // Email is stored normalized, so match the normalized form for the email branch
-        // (case-insensitive); username stays an exact match.
-        var normalizedEmail = User.NormalizeEmail(emailOrUsername);
-        var user = await _db.Users.FirstOrDefaultAsync(
-            u => u.Email == normalizedEmail || u.Username == emailOrUsername, ct);
+        // Exactly ONE column is matched, chosen by the input's shape. Matching either column
+        // with FirstOrDefault let a username equal to someone else's email ("alice@x.com")
+        // intermittently capture that person's email login. Usernames cannot contain '@'
+        // (AccountInputRules), so an '@' means email: matched in its normalized form
+        // (case-insensitive). Anything else is a username, matched exactly.
+        emailOrUsername ??= string.Empty;
+        User? user;
+        if (emailOrUsername.Contains('@'))
+        {
+            var normalizedEmail = User.NormalizeEmail(emailOrUsername);
+            user = await _db.Users.FirstOrDefaultAsync(u => u.Email == normalizedEmail, ct);
+        }
+        else
+        {
+            user = await _db.Users.FirstOrDefaultAsync(u => u.Username == emailOrUsername, ct);
+        }
 
         // Always perform exactly one bcrypt verification (against a dummy hash when the
         // user is absent) so response timing is uniform and login can't enumerate accounts.

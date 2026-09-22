@@ -5,6 +5,9 @@ import { AuthLayout } from '../shell/AuthLayout';
 import { ApiError } from '../api/errors';
 import { register } from '../api/auth';
 import { MIN_CLASSES, MIN_LENGTH, assessPassword } from '../auth/password';
+import {
+  EMAIL_MAX_LENGTH, USERNAME_HINT, USERNAME_MAX_LENGTH, emailProblem, usernameProblem,
+} from '../auth/accountInput';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -15,12 +18,20 @@ export default function Register() {
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A field's problem is shown once the user has left it, not on the first keystroke.
+  const [touched, setTouched] = useState({ email: false, username: false });
 
   const assessment = assessPassword(password);
+  const emailIssue = emailProblem(email);
+  const usernameIssue = usernameProblem(username);
+  const canSubmit = assessment.valid && !emailIssue && !usernameIssue;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (!assessment.valid) return;
+    if (!canSubmit) {
+      setTouched({ email: true, username: true });
+      return;
+    }
     setBusy(true);
     setError(null);
     setDetail(null);
@@ -58,13 +69,17 @@ export default function Register() {
           <input id="inviteCode" autoComplete="off" value={inviteCode}
                  onChange={(e) => setInviteCode(e.target.value)} />
         </Field>
-        <Field label="Email" id="email">
-          <input id="email" type="email" autoComplete="email" value={email}
-                 onChange={(e) => setEmail(e.target.value)} />
+        <Field label="Email" id="email"
+               error={touched.email && emailIssue ? emailIssue : undefined}>
+          <input id="email" type="email" autoComplete="email" maxLength={EMAIL_MAX_LENGTH} value={email}
+                 onChange={(e) => setEmail(e.target.value)}
+                 onBlur={() => setTouched((t) => ({ ...t, email: true }))} />
         </Field>
-        <Field label="Username" id="username">
-          <input id="username" autoComplete="username" value={username}
-                 onChange={(e) => setUsername(e.target.value)} />
+        <Field label="Username" id="username" hint={USERNAME_HINT}
+               error={touched.username && usernameIssue ? usernameIssue : undefined}>
+          <input id="username" autoComplete="username" maxLength={USERNAME_MAX_LENGTH} value={username}
+                 onChange={(e) => setUsername(e.target.value)}
+                 onBlur={() => setTouched((t) => ({ ...t, username: true }))} />
         </Field>
         <Field label="Password" id="password">
           <input id="password" type="password" autoComplete="new-password" value={password}
@@ -78,7 +93,7 @@ export default function Register() {
             {assessment.enoughClasses ? '✓' : '○'} At least {MIN_CLASSES} of: lowercase, uppercase, digit, symbol
           </li>
         </ul>
-        <Button type="submit" loading={busy} disabled={!assessment.valid} className="w-full">Create account</Button>
+        <Button type="submit" loading={busy} disabled={!canSubmit} className="w-full">Create account</Button>
       </form>
     </AuthLayout>
   );

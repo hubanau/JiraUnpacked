@@ -5,7 +5,9 @@ public enum RegistrationError
     None,
     InvalidInviteCode,
     WeakPassword,
-    EmailOrUsernameTaken
+    EmailOrUsernameTaken,
+    InvalidEmail,
+    InvalidUsername
 }
 
 public sealed record RegistrationResult(bool Succeeded, RegistrationError Error, IReadOnlyList<string> Errors)

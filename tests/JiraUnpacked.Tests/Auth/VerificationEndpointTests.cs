@@ -54,7 +54,7 @@ public sealed class VerificationEndpointTests : IClassFixture<JiraUnpackedApiFac
         const string password = "Correct-Horse-9!";
 
         var resp = await client.PostAsJsonAsync("/api/auth/register",
-            new { inviteCode = invite, email, username = $"newuser-{unique}", password });
+            new { inviteCode = invite, email, username = $"newuser-{unique[..20]}", password });
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
 
         var sender = _factory.Services.GetRequiredService<CapturingEmailSender>();
