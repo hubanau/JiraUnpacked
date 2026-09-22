@@ -1,4 +1,4 @@
-import { apiFetch } from './client';
+import { apiDownload, apiFetch, type Download } from './client';
 
 export type FilterOperator =
   | 'Eq' | 'Neq' | 'In' | 'Lt' | 'Lte' | 'Gt' | 'Gte' | 'Contains' | 'StartsWith' | 'IsNull';
@@ -139,23 +139,20 @@ export const getFilterValues = (projectId: string, field: string) =>
   apiFetch<{ field: string; values: string[] }>(
     `/api/projects/${projectId}/filter-values?field=${encodeURIComponent(field)}`);
 
+export interface ExportView {
+  conditions: FilterCondition[];
+  logic: FilterLogic;
+  sortBy: string;
+  sortDescending: boolean;
+  columns: string[];
+}
+
 /**
- * The CSV download for the view currently on screen.
- *
- * A URL rather than a fetch: the browser streams a navigation straight to disk, where apiFetch
- * would hold the whole file in memory first — the same mistake the server side is avoiding.
- * It also means the download carries the session cookie without us handling the token.
+ * The CSV of the view currently on screen. Fetched with the session rather than linked to — see
+ * apiDownload for why a link cannot work. The server caps the export's size, which is what makes
+ * holding it in memory acceptable.
  */
-export const exportUrl = (
-  projectId: string,
-  view: {
-    conditions: FilterCondition[];
-    logic: FilterLogic;
-    sortBy: string;
-    sortDescending: boolean;
-    columns: string[];
-  },
-): string => {
+export const exportIssuesCsv = (projectId: string, view: ExportView): Promise<Download> => {
   const params = new URLSearchParams();
   if (view.conditions.length > 0) {
     params.set('filter', JSON.stringify(view.conditions));
@@ -164,5 +161,5 @@ export const exportUrl = (
   params.set('sortBy', view.sortBy);
   params.set('sortDescending', String(view.sortDescending));
   params.set('cols', view.columns.join(','));
-  return `/api/projects/${projectId}/issues/export.csv?${params.toString()}`;
+  return apiDownload(`/api/projects/${projectId}/issues/export.csv?${params.toString()}`);
 };
