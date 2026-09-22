@@ -58,6 +58,14 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("ConnectionStrings:Default", TestConnectionString);
         builder.UseSetting("ConnectionStrings:Reader", TestReaderConnectionString);
 
+        // Integration tests stand in for Jira with WireMock/fake servers on http://localhost, which
+        // the production base-URL policy (https + *.atlassian.net only) rightly refuses. Relax it
+        // here, and only here; JiraBaseUrlValidatorTests pins the default policy.
+        builder.UseSetting("Jira:AllowInsecureHttp", "true");
+        builder.UseSetting("Jira:AllowedHostSuffixes:0", ".atlassian.net");
+        builder.UseSetting("Jira:AllowedHostSuffixes:1", "localhost");
+        builder.UseSetting("Jira:AllowedHostSuffixes:2", "127.0.0.1");
+
         // Override the DbContext registration to point at the test database.
         builder.ConfigureTestServices(services =>
         {

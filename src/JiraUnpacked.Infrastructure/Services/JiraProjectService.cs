@@ -50,7 +50,7 @@ public sealed class JiraProjectService : IJiraProjectService
     public async Task<IReadOnlyList<ProjectView>> ListAsync(Guid connectionId, CancellationToken ct = default) =>
         await _db.JiraProjects.Where(p => p.JiraConnectionId == connectionId)
             .OrderBy(p => p.CreatedAt)
-            .Select(p => new ProjectView(p.Id, p.JiraConnectionId, p.JiraProjectKey, p.JiraProjectId, p.SyncIntervalMinutes, p.CreatedAt))
+            .Select(p => new ProjectView(p.Id, p.JiraConnectionId, p.JiraProjectKey, p.JiraProjectId, p.SyncIntervalMinutes, p.SyncPaused, p.CreatedAt))
             .ToListAsync(ct);
 
     public async Task<ProjectView?> GetAsync(Guid projectId, CancellationToken ct = default)
@@ -59,16 +59,37 @@ public sealed class JiraProjectService : IJiraProjectService
         return p is null ? null : ToView(p);
     }
 
-    public async Task<bool?> UpdateIntervalAsync(Guid projectId, int syncIntervalMinutes, CancellationToken ct = default)
+    public async Task<UpdateProjectStatus> UpdateAsync(
+        Guid projectId, int? syncIntervalMinutes, bool? syncPaused, CancellationToken ct = default)
     {
-        if (syncIntervalMinutes < MinIntervalMinutes) return false;
+        if (syncIntervalMinutes is null && syncPaused is null) return UpdateProjectStatus.NothingToUpdate;
+        if (syncIntervalMinutes < MinIntervalMinutes) return UpdateProjectStatus.InvalidInterval;
+
         var p = await _db.JiraProjects.FirstOrDefaultAsync(x => x.Id == projectId, ct);
-        if (p is null) return null;
-        p.SyncIntervalMinutes = syncIntervalMinutes;
+        if (p is null) return UpdateProjectStatus.NotFound;
+
+        if (syncIntervalMinutes is { } interval) p.SyncIntervalMinutes = interval;
+        if (syncPaused is { } paused) p.SyncPaused = paused;
         await _db.SaveChangesAsync(ct);
-        return true;
+        return UpdateProjectStatus.Updated;
+    }
+
+    public async Task<DeleteOutcome> DeleteAsync(Guid projectId, CancellationToken ct = default)
+    {
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+
+        // Tenant-filtered: another tenant's project id is simply not found.
+        if (!await _db.JiraProjects.AnyAsync(p => p.Id == projectId, ct)) return DeleteOutcome.NotFound;
+
+        Guid[] ids = [projectId];
+        await ProjectDataEraser.LockProjectsAsync(_db, ids, ct);
+        if (await ProjectDataEraser.AnyRunningAsync(_db, ids, ct)) return DeleteOutcome.SyncRunning;
+
+        await ProjectDataEraser.DeleteProjectsAsync(_db, ids, ct);
+        await tx.CommitAsync(ct);
+        return DeleteOutcome.Deleted;
     }
 
     private static ProjectView ToView(JiraProject p) =>
-        new(p.Id, p.JiraConnectionId, p.JiraProjectKey, p.JiraProjectId, p.SyncIntervalMinutes, p.CreatedAt);
+        new(p.Id, p.JiraConnectionId, p.JiraProjectKey, p.JiraProjectId, p.SyncIntervalMinutes, p.SyncPaused, p.CreatedAt);
 }

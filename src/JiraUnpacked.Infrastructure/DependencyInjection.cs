@@ -80,6 +80,9 @@ public static class DependencyInjection
         services.AddScoped<IPasswordResetService, PasswordResetService>();
         services.AddScoped<IUserAdminService, UserAdminService>();
         services.AddScoped<IAccountDeletionService, JiraUnpacked.Infrastructure.Services.AccountDeletionService>();
+        services.Configure<JiraOptions>(configuration.GetSection(JiraOptions.SectionName));
+        services.AddSingleton(sp => new JiraBaseUrlValidator(
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<JiraOptions>>().Value));
         services.AddScoped<IJiraConnectionService, JiraConnectionService>();
         services.AddScoped<IJiraProjectService, JiraProjectService>();
         services.AddScoped<IJiraQueryService, JiraQueryService>();
