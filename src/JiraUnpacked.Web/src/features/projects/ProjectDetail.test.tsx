@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -13,6 +13,7 @@ const PROJECT = {
   jiraProjectKey: 'ACME',
   jiraProjectId: '100',
   syncIntervalMinutes: 60,
+  syncPaused: false,
   createdAtUtc: '2026-01-01T00:00:00Z',
 };
 
@@ -91,5 +92,103 @@ describe('ProjectDetail sync interval', () => {
       .toHaveAttribute('href', '/projects/p1/metrics');
     expect(screen.getByRole('link', { name: /checks/i }))
       .toHaveAttribute('href', '/projects/p1/checks');
+  });
+});
+
+function renderWithConnectionRoute() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/projects/p1']}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetail />} />
+          <Route path="/connections/:id" element={<p>Connection page</p>} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe('ProjectDetail pause / resume', () => {
+  it('pauses the scheduled sync and then offers to resume it', async () => {
+    let current = { ...PROJECT };
+    let body: unknown = null;
+    useBaseHandlers();
+    server.use(
+      http.get('/api/projects/p1', () => HttpResponse.json(current)),
+      http.patch('/api/projects/p1', async ({ request }) => {
+        body = await request.json();
+        current = { ...current, syncPaused: true };
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderProjectDetail();
+
+    expect(screen.queryByText('Paused')).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: /pause scheduled sync/i }));
+
+    expect(await screen.findByRole('button', { name: /resume scheduled sync/i })).toBeInTheDocument();
+    expect(body).toEqual({ syncPaused: true });
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+    expect(screen.getByText(/scheduled sync is paused/i)).toBeInTheDocument();
+  });
+
+  it('resumes a paused project', async () => {
+    let body: unknown = null;
+    useBaseHandlers();
+    server.use(
+      http.get('/api/projects/p1', () => HttpResponse.json({ ...PROJECT, syncPaused: true })),
+      http.patch('/api/projects/p1', async ({ request }) => {
+        body = await request.json();
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderProjectDetail();
+
+    await user.click(await screen.findByRole('button', { name: /resume scheduled sync/i }));
+
+    await waitFor(() => expect(body).toEqual({ syncPaused: false }));
+  });
+});
+
+describe('ProjectDetail delete', () => {
+  it('asks for confirmation, sends nothing on cancel, and returns to the connection on confirm', async () => {
+    let deletes = 0;
+    useBaseHandlers();
+    server.use(http.delete('/api/projects/p1', () => {
+      deletes += 1;
+      return new HttpResponse(null, { status: 204 });
+    }));
+    const user = userEvent.setup();
+    renderWithConnectionRoute();
+
+    await user.click(await screen.findByRole('button', { name: /^delete project$/i }));
+    const dialog = screen.getByRole('dialog', { name: /delete acme/i });
+    await user.click(within(dialog).getByRole('button', { name: /cancel/i }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(deletes).toBe(0);
+
+    await user.click(screen.getByRole('button', { name: /^delete project$/i }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: /yes, delete project/i }));
+
+    expect(await screen.findByText('Connection page')).toBeInTheDocument();
+    expect(deletes).toBe(1);
+  });
+
+  it('explains a 409 inside the dialog and stays on the project', async () => {
+    useBaseHandlers();
+    server.use(http.delete('/api/projects/p1', () =>
+      HttpResponse.json({ title: 'A sync is running for this project.' }, { status: 409 })));
+    const user = userEvent.setup();
+    renderWithConnectionRoute();
+
+    await user.click(await screen.findByRole('button', { name: /^delete project$/i }));
+    const dialog = screen.getByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /yes, delete project/i }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/sync is running/i);
+    expect(screen.queryByText('Connection page')).not.toBeInTheDocument();
   });
 });

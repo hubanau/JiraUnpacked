@@ -32,6 +32,8 @@ public sealed class DueProjectFinder : IDueProjectFinder
             // A blocked account's scheduled syncs are paused (FR-A5). Users is the tenant root and
             // carries no filter; the reader role may select it.
             .Where(p => db.Users.Any(u => u.Id == p.EndUserId && u.Status == UserStatus.Active))
+            // A paused project syncs only when someone asks; "Sync now" bypasses this finder.
+            .Where(p => !p.SyncPaused)
             .Select(p => new
             {
                 p.Id,

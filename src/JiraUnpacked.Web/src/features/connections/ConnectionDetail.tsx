@@ -5,7 +5,10 @@ import { ApiError } from '../../api/errors';
 import { getConnection } from '../../api/connections';
 import { listConnectionProjects } from '../../api/projects';
 import { queryKeys } from '../../api/queryKeys';
+import { PausedBadge } from '../projects/PausedBadge';
+import { DeleteConnection } from './DeleteConnection';
 import { IssueTypeClassEditor } from './IssueTypeClassEditor';
+import { UpdateApiToken } from './UpdateApiToken';
 
 export default function ConnectionDetail() {
   // Route always supplies :id here (see App.tsx); the '' fallback only
@@ -71,7 +74,10 @@ export default function ConnectionDetail() {
               <li key={project.id}>
                 <Link to={`/projects/${project.id}`}>
                   <Card>
-                    <p className="font-medium text-[var(--ju-text)]">{project.jiraProjectKey}</p>
+                    <p className="flex items-center gap-2 font-medium text-[var(--ju-text)]">
+                      {project.jiraProjectKey}
+                      <PausedBadge project={project} />
+                    </p>
                     <p className="text-xs text-[var(--ju-muted)]">
                       Syncs every {project.syncIntervalMinutes} minutes
                     </p>
@@ -84,6 +90,11 @@ export default function ConnectionDetail() {
       </section>
 
       <IssueTypeClassEditor connectionId={id} />
+
+      {/* Keyed by id so the prefilled email resets if the route moves to another connection. */}
+      <UpdateApiToken key={connection.id} connection={connection} />
+
+      <DeleteConnection connection={connection} projectCount={projectsQuery.data?.length ?? 0} />
     </div>
   );
 }

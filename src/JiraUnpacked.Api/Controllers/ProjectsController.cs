@@ -42,12 +42,28 @@ public sealed class ProjectsController : ControllerBase
     [HttpPatch("api/projects/{projectId:guid}")]
     public async Task<IActionResult> Update(Guid projectId, UpdateProjectRequest request, CancellationToken ct)
     {
-        var result = await _projects.UpdateIntervalAsync(projectId, request.SyncIntervalMinutes, ct);
+        var result = await _projects.UpdateAsync(projectId, request.SyncIntervalMinutes, request.SyncPaused, ct);
         return result switch
         {
-            null => NotFound(),
-            false => Problem(statusCode: 400, title: "Sync interval must be at least 60 minutes."),
-            _ => NoContent()
+            UpdateProjectStatus.Updated => NoContent(),
+            UpdateProjectStatus.NotFound => NotFound(),
+            UpdateProjectStatus.InvalidInterval => Problem(statusCode: 400, title: "Sync interval must be at least 60 minutes."),
+            UpdateProjectStatus.NothingToUpdate => Problem(statusCode: 400, title: "Supply syncIntervalMinutes, syncPaused, or both."),
+            _ => throw new InvalidOperationException($"Unexpected {nameof(UpdateProjectStatus)}: {result}.")
         };
     }
+
+    /// <summary>
+    /// Deletes the project and everything derived from it; the connection stays. 409 while the
+    /// project is syncing — stop the run first.
+    /// </summary>
+    [HttpDelete("api/projects/{projectId:guid}")]
+    public async Task<IActionResult> Delete(Guid projectId, CancellationToken ct) =>
+        await _projects.DeleteAsync(projectId, ct) switch
+        {
+            DeleteOutcome.Deleted => NoContent(),
+            DeleteOutcome.SyncRunning => Problem(statusCode: 409,
+                title: "A sync is running for this project. Stop it or wait for it to finish, then try again."),
+            _ => NotFound()
+        };
 }

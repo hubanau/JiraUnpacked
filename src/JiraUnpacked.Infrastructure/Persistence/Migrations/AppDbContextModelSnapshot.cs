@@ -393,6 +393,11 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.Property<int>("SyncIntervalMinutes")
                         .HasColumnType("integer");
 
+                    b.Property<bool>("SyncPaused")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.HasKey("Id");
 
                     b.HasIndex("EndUserId");

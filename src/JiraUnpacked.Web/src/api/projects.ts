@@ -6,6 +6,8 @@ export interface Project {
   jiraProjectKey: string;
   jiraProjectId: string;
   syncIntervalMinutes: number;
+  /** Scheduled syncs are skipped while true; a manual sync still runs. */
+  syncPaused: boolean;
   createdAtUtc: string;
 }
 
@@ -27,3 +29,12 @@ export const updateSyncInterval = (projectId: string, syncIntervalMinutes: numbe
   apiFetch<void>(`/api/projects/${projectId}`, {
     method: 'PATCH', body: { syncIntervalMinutes },
   });
+
+export const setSyncPaused = (projectId: string, syncPaused: boolean) =>
+  apiFetch<void>(`/api/projects/${projectId}`, {
+    method: 'PATCH', body: { syncPaused },
+  });
+
+/** Deletes the project and everything synced for it. 409 while it is syncing. */
+export const deleteProject = (projectId: string) =>
+  apiFetch<void>(`/api/projects/${projectId}`, { method: 'DELETE' });

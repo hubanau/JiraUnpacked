@@ -33,3 +33,17 @@ export const listConnectionFields = (id: string) =>
 
 export const listAvailableProjects = (id: string) =>
   apiFetch<JiraProjectSummary[]>(`/api/connections/${id}/projects-available`);
+
+/**
+ * Replaces the stored API token (and the email, when given). The server checks the new pair
+ * against Jira before storing anything, so a 400 here means Jira refused it and the old token
+ * is still in place. The token is never returned.
+ */
+export const updateConnectionCredentials = (id: string, email: string, apiToken: string) =>
+  apiFetch<Connection>(`/api/connections/${id}`, {
+    method: 'PATCH', body: { email, apiToken },
+  });
+
+/** Deletes the connection, its projects and all of their data. 409 while any of them is syncing. */
+export const deleteConnection = (id: string) =>
+  apiFetch<void>(`/api/connections/${id}`, { method: 'DELETE' });
