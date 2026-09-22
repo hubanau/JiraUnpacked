@@ -82,20 +82,17 @@ public sealed class AccountDeletionTests : IClassFixture<JiraUnpackedApiFactory>
     }
 
     [Fact]
-    public async Task The_still_valid_access_token_cannot_reach_any_tenant_data()
+    public async Task The_still_valid_access_token_is_rejected_once_the_account_is_gone()
     {
         var (client, _, _) = await AuthedEndUserAsync();
-        await client.DeleteAsync("/api/auth/me");
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/connections")).StatusCode);
 
-        // /api/auth/me is claims-only — it never queries the database, so it still answers 200.
-        // That is the documented, accepted behaviour: the token is valid until it expires.
-        var me = await client.GetAsync("/api/auth/me");
-        Assert.Equal(HttpStatusCode.OK, me.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync("/api/auth/me")).StatusCode);
 
-        // What matters is that there is no tenant data left to reach, and nothing 500s.
-        var connections = await client.GetAsync("/api/connections");
-        Assert.Equal(HttpStatusCode.OK, connections.StatusCode);
-        Assert.Equal("[]", (await connections.Content.ReadAsStringAsync()).Trim());
+        // The JWT is still inside its lifetime, but it names an account that no longer exists:
+        // every authorized endpoint answers 401 — even the claims-only /me.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/auth/me")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/connections")).StatusCode);
     }
 
     [Fact]
