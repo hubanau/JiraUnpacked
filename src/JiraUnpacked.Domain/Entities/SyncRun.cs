@@ -64,4 +64,29 @@ public sealed class SyncRun : ITenantOwned
     /// silent no-ops that fetched nothing at all, and none of them may seed a watermark.
     /// </summary>
     public string? ScopeFingerprint { get; set; }
+
+    /// <summary>
+    /// Which stage this run's checkpoint applies to, or null when it has none.
+    ///
+    /// Deliberately separate from Phase. Phase is a label for the UI and has four coarse values;
+    /// this is an internal position marker, and it splits Deriving into its three passes because
+    /// a run that died two thirds of the way through derivation should not redo the first two.
+    ///
+    /// Null on runs made before this column existed, which correctly makes them unresumable —
+    /// they were written by a build that kept no position, so there is no position to trust.
+    /// </summary>
+    public string? ResumeStage { get; set; }
+
+    /// <summary>
+    /// Opaque position within <see cref="ResumeStage"/> — a page token for the fetch, a
+    /// last-processed row id for every other stage. Internally generated, never user input, and
+    /// never interpolated into SQL.
+    /// </summary>
+    public string? ResumeCursor { get; set; }
+
+    /// <summary>
+    /// Items already completed within <see cref="ResumeStage"/>, so a resumed run's progress
+    /// continues from where the last attempt left off instead of dropping back to zero.
+    /// </summary>
+    public int? ResumeItemsDone { get; set; }
 }

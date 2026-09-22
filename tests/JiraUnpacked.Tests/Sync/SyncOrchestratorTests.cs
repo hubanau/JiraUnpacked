@@ -61,20 +61,22 @@ public class SyncOrchestratorTests
     {
         public Task IngestProjectAsync(
             Guid projectId, JiraCredentials creds,
-            Func<int, int, CancellationToken, Task>? onProgress = null,
+            Guid? afterSnapshotId = null, int alreadyDone = 0,
+            Func<int, int, Guid, CancellationToken, Task>? onBatch = null,
             CancellationToken ct = default) => Task.CompletedTask;
     }
 
     /// <summary>Ingest that hands its progress reporter to the test to drive.</summary>
     private sealed class ReportingIngest : IChangelogIngestService
     {
-        private readonly Func<Func<int, int, CancellationToken, Task>, CancellationToken, Task> _run;
-        public ReportingIngest(Func<Func<int, int, CancellationToken, Task>, CancellationToken, Task> run) => _run = run;
+        private readonly Func<Func<int, int, Guid, CancellationToken, Task>, CancellationToken, Task> _run;
+        public ReportingIngest(Func<Func<int, int, Guid, CancellationToken, Task>, CancellationToken, Task> run) => _run = run;
 
         public Task IngestProjectAsync(
             Guid projectId, JiraCredentials creds,
-            Func<int, int, CancellationToken, Task>? onProgress = null,
-            CancellationToken ct = default) => _run(onProgress!, ct);
+            Guid? afterSnapshotId = null, int alreadyDone = 0,
+            Func<int, int, Guid, CancellationToken, Task>? onBatch = null,
+            CancellationToken ct = default) => _run(onBatch!, ct);
     }
 
     /// <summary>Derivation that hands its progress reporter to the test to drive.</summary>
@@ -84,16 +86,21 @@ public class SyncOrchestratorTests
         public ReportingDerivation(Func<Func<int, int, CancellationToken, Task>, CancellationToken, Task> run) => _run = run;
 
         public Task DeriveProjectAsync(
-            Guid projectId,
-            Func<int, int, CancellationToken, Task>? onProgress = null,
-            CancellationToken ct = default) => _run(onProgress!, ct);
+            Guid projectId, string? resumeStage = null, string? resumeCursor = null,
+            int alreadyDone = 0, int batchSize = 10_000,
+            Func<string, string, int, int, CancellationToken, Task>? onBatch = null,
+            CancellationToken ct = default)
+            // Adapts the stage/cursor callback back to the (done, total) shape these older tests
+            // drive; they are about progress reporting, not about where a run resumes.
+            => _run((d, t, token) => onBatch!(ResumeStage.DeriveIssues, Guid.NewGuid().ToString(), d, t, token), ct);
     }
 
     private sealed class NoopDerivation : IDerivationService
     {
         public Task DeriveProjectAsync(
-            Guid projectId,
-            Func<int, int, CancellationToken, Task>? onProgress = null,
+            Guid projectId, string? resumeStage = null, string? resumeCursor = null,
+            int alreadyDone = 0, int batchSize = 10_000,
+            Func<string, string, int, int, CancellationToken, Task>? onBatch = null,
             CancellationToken ct = default) => Task.CompletedTask;
     }
 
@@ -140,9 +147,22 @@ public class SyncOrchestratorTests
         }
     }
 
+    /// <summary>Default scheduler options. These tests predate checkpointing and none of them
+    /// depend on the batch size, so they all take the production default.</summary>
+    private static Microsoft.Extensions.Options.IOptions<SyncSchedulerOptions> TestSyncOptions =>
+        Microsoft.Extensions.Options.Options.Create(new SyncSchedulerOptions());
+
+    /// <summary>
+    /// ONE root for the whole class. Each call still gets a unique database NAME, so tests stay
+    /// isolated — but a fresh InMemoryDatabaseRoot per call also builds a fresh EF service
+    /// provider, and EF throws once twenty exist. Passing a new root each time made the suite
+    /// fail as a whole while every test passed alone.
+    /// </summary>
+    private static readonly InMemoryDatabaseRoot Root = new();
+
     private static DbContextOptions<AppDbContext> InMemoryOptions() =>
         new DbContextOptionsBuilder<AppDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString(), new InMemoryDatabaseRoot())
+            .UseInMemoryDatabase(Guid.NewGuid().ToString(), Root)
             .Options;
 
     private static (Guid projectId, Guid connectionId) Seed(
@@ -185,7 +205,7 @@ public class SyncOrchestratorTests
 
         await using var db = new AppDbContext(options, tenant);
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
 
         var result = await orchestrator.RunProjectAsync(projectId);
 
@@ -228,7 +248,7 @@ public class SyncOrchestratorTests
 
         await using var db = new AppDbContext(options, tenant);
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
 
         await orchestrator.RunProjectAsync(projectId);
 
@@ -260,7 +280,7 @@ public class SyncOrchestratorTests
         {
             var o1 = new SyncOrchestrator(db1, jira, new PassthroughProtector(),
                 new FakeClock(new DateTime(2026, 3, 1, 9, 30, 0, DateTimeKind.Utc)),
-                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
             await o1.RunProjectAsync(projectId);
         }
 
@@ -269,7 +289,7 @@ public class SyncOrchestratorTests
         {
             var o2 = new SyncOrchestrator(db2, jira, new PassthroughProtector(),
                 new FakeClock(new DateTime(2026, 3, 2, 9, 0, 0, DateTimeKind.Utc)),
-                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
             await o2.RunProjectAsync(projectId);
         }
 
@@ -301,7 +321,7 @@ public class SyncOrchestratorTests
         {
             var o1 = new SyncOrchestrator(db1, jira, new PassthroughProtector(),
                 new FakeClock(new DateTime(2026, 3, 1, 9, 0, 0, DateTimeKind.Utc)),
-                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
             await o1.RunProjectAsync(projectId);
         }
         Assert.Equal(new[] { "project = \"ACME\"" }, jira.SeenJql);
@@ -321,7 +341,7 @@ public class SyncOrchestratorTests
         {
             var o2 = new SyncOrchestrator(db2, jira, new PassthroughProtector(),
                 new FakeClock(new DateTime(2026, 3, 2, 9, 0, 0, DateTimeKind.Utc)),
-                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
             await o2.RunProjectAsync(projectId);
         }
 
@@ -348,7 +368,7 @@ public class SyncOrchestratorTests
         {
             var o1 = new SyncOrchestrator(db1, jira, new PassthroughProtector(),
                 new FakeClock(new DateTime(2026, 3, 1, 9, 30, 0, DateTimeKind.Utc)),
-                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
             await o1.RunProjectAsync(projectId);
         }
 
@@ -357,7 +377,7 @@ public class SyncOrchestratorTests
         {
             var o2 = new SyncOrchestrator(db2, jira, new PassthroughProtector(),
                 new FakeClock(new DateTime(2026, 3, 2, 9, 0, 0, DateTimeKind.Utc)),
-                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
             await o2.RunProjectAsync(projectId);
         }
 
@@ -391,7 +411,7 @@ public class SyncOrchestratorTests
         {
             var o1 = new SyncOrchestrator(db1, jira, new PassthroughProtector(),
                 new FakeClock(new DateTime(2026, 3, 1, 9, 30, 0, DateTimeKind.Utc)),
-                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
             await o1.RunProjectAsync(projectId);
         }
 
@@ -412,7 +432,7 @@ public class SyncOrchestratorTests
         {
             var o2 = new SyncOrchestrator(db2, jira, new PassthroughProtector(),
                 new FakeClock(new DateTime(2026, 3, 2, 9, 0, 0, DateTimeKind.Utc)),
-                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
             await o2.RunProjectAsync(projectId);
         }
 
@@ -455,7 +475,7 @@ public class SyncOrchestratorTests
         { ApproximateCount = 4 };
 
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
 
         var result = await orchestrator.RunProjectAsync(projectId);
 
@@ -493,7 +513,7 @@ public class SyncOrchestratorTests
 
         await using var db = new RejectsSnapshotsDbContext(options, tenant);
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
 
         // Must not throw: the orchestrator owns its failures.
         var result = await orchestrator.RunProjectAsync(projectId);
@@ -546,7 +566,7 @@ public class SyncOrchestratorTests
         });
 
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
 
         var result = await orchestrator.RunProjectAsync(projectId);
 
@@ -584,9 +604,9 @@ public class SyncOrchestratorTests
         var observed = new List<(string? Phase, int? Done, int? Total)>();
         var ingest = new ReportingIngest(async (report, ct) =>
         {
-            await report(0, 40, ct);
+            await report(0, 40, Guid.NewGuid(), ct);
             Observe();
-            await report(20, 40, ct);
+            await report(20, 40, Guid.NewGuid(), ct);
             Observe();
         });
 
@@ -599,7 +619,7 @@ public class SyncOrchestratorTests
 
         await using var db = new AppDbContext(options, tenant);
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), ingest, new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+            new FakeClock(DateTime.UtcNow), ingest, new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
 
         var result = await orchestrator.RunProjectAsync(projectId);
 
@@ -650,7 +670,7 @@ public class SyncOrchestratorTests
 
         await using var db = new AppDbContext(options, tenant);
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), new NoopIngest(), derivation, new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), derivation, new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
 
         var result = await orchestrator.RunProjectAsync(projectId);
 
@@ -683,7 +703,7 @@ public class SyncOrchestratorTests
         {
             var runId = new AppDbContext(options, tenant).SyncRuns.Single(r => r.JiraProjectId == projectId).Id;
             Assert.True(cancellation.Cancel(runId), "the orchestrator did not register the run");
-            await report(0, 1, ct);
+            await report(0, 1, Guid.NewGuid(), ct);
         });
 
         var jira = new StubJiraClient(() =>
@@ -693,7 +713,7 @@ public class SyncOrchestratorTests
         await using var db = new AppDbContext(options, tenant);
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
             new FakeClock(DateTime.UtcNow), ingest, new NoopDerivation(), cancellation,
-            NullLogger<SyncOrchestrator>.Instance);
+            TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
 
         var result = await orchestrator.RunProjectAsync(projectId);
 
@@ -725,7 +745,7 @@ public class SyncOrchestratorTests
         {
             var o1 = new SyncOrchestrator(db1, jira, new PassthroughProtector(),
                 new FakeClock(new DateTime(2026, 3, 1, 9, 30, 0, DateTimeKind.Utc)),
-                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
             await o1.RunProjectAsync(projectId);
         }
 
@@ -736,7 +756,7 @@ public class SyncOrchestratorTests
         {
             var o2 = new SyncOrchestrator(db2, jira, new PassthroughProtector(),
                 new FakeClock(new DateTime(2026, 3, 2, 9, 0, 0, DateTimeKind.Utc)),
-                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+                new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
             await o2.RunProjectAsync(projectId);
         }
 
@@ -762,7 +782,7 @@ public class SyncOrchestratorTests
 
         await using var db = new AppDbContext(options, tenant);
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
 
         var result = await orchestrator.RunProjectAsync(projectId);
 
@@ -788,7 +808,7 @@ public class SyncOrchestratorTests
 
         await using var db = new AppDbContext(options, tenant);
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
 
         await orchestrator.RunProjectAsync(projectId);
 
@@ -809,7 +829,7 @@ public class SyncOrchestratorTests
         // throwOnCall: 2 => save #1 inserts the Running run, save #2 (the fetched page) throws the infra error.
         await using var db = new FailingSaveDbContext(options, tenant, throwOnCall: 2);
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
 
         var result = await orchestrator.RunProjectAsync(projectId);
 
@@ -834,7 +854,7 @@ public class SyncOrchestratorTests
 
         await using var db = new AppDbContext(options, tenant);
         var orchestrator = new SyncOrchestrator(db, jira, new PassthroughProtector(),
-            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), NullLogger<SyncOrchestrator>.Instance);
+            new FakeClock(DateTime.UtcNow), new NoopIngest(), new NoopDerivation(), new SyncCancellation(), TestSyncOptions, NullLogger<SyncOrchestrator>.Instance);
 
         var result = await orchestrator.RunProjectAsync(projectId);
 

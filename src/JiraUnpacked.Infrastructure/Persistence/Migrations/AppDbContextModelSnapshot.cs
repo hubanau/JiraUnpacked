@@ -838,6 +838,15 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.Property<int?>("PhaseTotal")
                         .HasColumnType("integer");
 
+                    b.Property<string>("ResumeCursor")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("ResumeItemsDone")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ResumeStage")
+                        .HasColumnType("text");
+
                     b.Property<string>("ScopeFingerprint")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");

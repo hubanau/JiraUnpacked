@@ -20,7 +20,11 @@ public sealed partial class DerivationService : IDerivationService
 
     public async Task DeriveProjectAsync(
         Guid projectId,
-        Func<int, int, CancellationToken, Task>? onProgress = null,
+        string? resumeStage = null,
+        string? resumeCursor = null,
+        int alreadyDone = 0,
+        int batchSize = 10_000,
+        Func<string, string, int, int, CancellationToken, Task>? onBatch = null,
         CancellationToken ct = default)
     {
         var project = await _db.JiraProjects.FirstOrDefaultAsync(p => p.Id == projectId, ct);
@@ -29,26 +33,62 @@ public sealed partial class DerivationService : IDerivationService
 
         var mappings = await _db.FieldMappings.Where(m => m.JiraProjectId == projectId).ToListAsync(ct);
         string FieldFor(FieldRole role, string standard) => mappings.FirstOrDefault(m => m.Role == role)?.JiraFieldId ?? standard;
-        var statusField = FieldFor(FieldRole.Status, "status");
-        var assigneeField = FieldFor(FieldRole.Assignee, "assignee");
-        var sprintField = mappings.FirstOrDefault(m => m.Role == FieldRole.Sprint)?.JiraFieldId;
-        var pointsField = mappings.FirstOrDefault(m => m.Role == FieldRole.StoryPoints)?.JiraFieldId;
-        var teamField = mappings.FirstOrDefault(m => m.Role == FieldRole.Team)?.JiraFieldId;
+        var fields = new DerivationFields(
+            FieldFor(FieldRole.Status, "status"),
+            FieldFor(FieldRole.Assignee, "assignee"),
+            mappings.FirstOrDefault(m => m.Role == FieldRole.Sprint)?.JiraFieldId,
+            mappings.FirstOrDefault(m => m.Role == FieldRole.StoryPoints)?.JiraFieldId,
+            mappings.FirstOrDefault(m => m.Role == FieldRole.Team)?.JiraFieldId);
 
-        var snapshots = await _db.RawIssueSnapshots.Where(r => r.JiraProjectId == projectId).ToListAsync(ct);
+        // Counted up front so the bar has its denominator before the first row. These are COUNTS,
+        // not payloads — the rows themselves are read a batch at a time below.
+        var total = await _db.RawIssueSnapshots.CountAsync(r => r.JiraProjectId == projectId, ct)
+                  + await _db.RawChangelogs.CountAsync(r => r.JiraProjectId == projectId, ct);
+        var done = alreadyDone;
 
-        // Counted up front so the bar has its denominator before the first row, rather than
-        // appearing only once the first chunk lands.
-        var changelogCount = await _db.RawChangelogs.CountAsync(r => r.JiraProjectId == projectId, ct);
-        var total = snapshots.Count + changelogCount;
-        var done = 0;
-        if (onProgress is not null) await onProgress(0, total, ct);
+        var start = ResumeStage.IndexOf(resumeStage);
 
-        var existingIssues = await _db.Issues
-            .Where(i => i.JiraProjectId == projectId)
-            .ToDictionaryAsync(i => i.JiraIssueId, ct);
+        if (start <= ResumeStage.IndexOf(ResumeStage.DeriveIssues))
+        {
+            var after = resumeStage == ResumeStage.DeriveIssues && Guid.TryParse(resumeCursor, out var c)
+                ? c : (Guid?)null;
+            done = await DeriveIssuesAsync(projectId, connectionId, fields, after, done, total, batchSize, onBatch, ct);
+        }
 
-        // Dictionary caches (jiraId -> surrogate Id) so we resolve each once.
+        if (start <= ResumeStage.IndexOf(ResumeStage.DeriveHistory))
+        {
+            var after = resumeStage == ResumeStage.DeriveHistory && Guid.TryParse(resumeCursor, out var c)
+                ? c : (Guid?)null;
+            done = await DeriveChangeHistoryAsync(projectId, after, done, total, batchSize, onBatch, ct);
+        }
+
+        if (start <= ResumeStage.IndexOf(ResumeStage.DeriveHierarchy))
+        {
+            var after = resumeStage == ResumeStage.DeriveHierarchy && Guid.TryParse(resumeCursor, out var c)
+                ? c : (Guid?)null;
+            await DeriveHierarchyAsync(projectId, after, total, done, batchSize, onBatch, ct);
+        }
+    }
+
+    /// <summary>The mapped field ids this project models by, resolved once per run.</summary>
+    private sealed record DerivationFields(
+        string Status, string Assignee, string? Sprint, string? Points, string? Team);
+
+    /// <summary>
+    /// Models issues from their raw snapshots, one batch at a time.
+    ///
+    /// The version this replaces loaded EVERY snapshot — payloads and all — plus every existing
+    /// Issue, before touching the first row. On a 92,000-issue project that is gigabytes resident
+    /// for the length of the stage, and it is where every long sync died. ChangelogIngestService
+    /// has always done it the bounded way and says why; this now matches it.
+    /// </summary>
+    private async Task<int> DeriveIssuesAsync(
+        Guid projectId, Guid connectionId, DerivationFields fields, Guid? after,
+        int done, int total, int batchSize,
+        Func<string, string, int, int, CancellationToken, Task>? onBatch, CancellationToken ct)
+    {
+        // Caches live across batches: resolving the same status twice is wasted work, and they
+        // hold ids rather than entities, so they stay small however many batches there are.
         var statusCache = new Dictionary<string, Guid>();
         var typeCache = new Dictionary<string, Guid>();
         var prioCache = new Dictionary<string, Guid>();
@@ -56,47 +96,62 @@ public sealed partial class DerivationService : IDerivationService
         var sprintCache = new Dictionary<string, Guid>();
         var teamCache = new Dictionary<string, Guid>();
 
-        foreach (var snap in snapshots)
+        while (true)
         {
-            using var doc = JsonDocument.Parse(snap.Payload, JiraJson.Document);
-            var root = doc.RootElement;
-            if (!root.TryGetProperty("fields", out var f) || f.ValueKind != JsonValueKind.Object) continue;
+            var batch = await _db.RawIssueSnapshots
+                .Where(r => r.JiraProjectId == projectId && (after == null || r.Id > after))
+                .OrderBy(r => r.Id)
+                .Take(batchSize)
+                .ToListAsync(ct);
 
-            existingIssues.TryGetValue(snap.JiraIssueId, out var found);
-            var issue = found ?? new Issue { Id = Guid.NewGuid(), JiraProjectId = projectId, JiraIssueId = snap.JiraIssueId };
+            if (batch.Count == 0) break;
 
-            issue.JiraKey = GetString(root, "key") ?? issue.JiraKey ?? snap.JiraIssueId;
-            issue.Summary = GetString(f, "summary");
-            issue.JiraCreatedAt = GetDate(f, "created") ?? issue.JiraCreatedAt;
-            issue.JiraUpdatedAt = GetDate(f, "updated") ?? issue.JiraUpdatedAt;
-            issue.ParentJiraIssueId = f.TryGetProperty("parent", out var par) && par.ValueKind == JsonValueKind.Object
-                ? GetString(par, "id") : null;
-            issue.LastSyncedAt = _clock.UtcNow;
+            // Scoped to the batch, not the project: the dictionary of every Issue in the project
+            // was the second unbounded load in this method.
+            var batchJiraIds = batch.Select(b => b.JiraIssueId).ToList();
+            var existingIssues = await _db.Issues
+                .Where(i => i.JiraProjectId == projectId && batchJiraIds.Contains(i.JiraIssueId))
+                .ToDictionaryAsync(i => i.JiraIssueId, ct);
 
-            issue.IssueTypeId = await ResolveTypeAsync(f, "issuetype", connectionId, typeCache, ct);
-            issue.PriorityId = await ResolvePriorityAsync(f, "priority", connectionId, prioCache, ct);
-            issue.StatusId = await ResolveStatusAsync(f, statusField, connectionId, statusCache, ct);
-            issue.AssigneeId = await ResolveUserAsync(f, assigneeField, connectionId, userCache, ct);
-            issue.SprintId = sprintField is null ? null : await ResolveSprintAsync(f, sprintField, projectId, sprintCache, ct);
-            issue.TeamId = teamField is null ? null : await ResolveTeamAsync(f, teamField, projectId, teamCache, ct);
-            issue.StoryPoints = pointsField is null ? null : GetDecimal(f, pointsField);
+            foreach (var snap in batch)
+            {
+                done++;
+                using var doc = JsonDocument.Parse(snap.Payload, JiraJson.Document);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("fields", out var f) || f.ValueKind != JsonValueKind.Object) continue;
 
-            if (_db.Entry(issue).State == EntityState.Detached) _db.Issues.Add(issue);
+                existingIssues.TryGetValue(snap.JiraIssueId, out var found);
+                var issue = found ?? new Issue { Id = Guid.NewGuid(), JiraProjectId = projectId, JiraIssueId = snap.JiraIssueId };
 
-            // Publishing mid-stage flushes the issues built so far. That is safe because
-            // derivation is idempotent — it rebuilds from raw every time — and a run that dies
-            // half way is marked Failed and re-derived, never left half-trusted.
-            if (++done % ProgressEvery == 0 && onProgress is not null) await onProgress(done, total, ct);
+                issue.JiraKey = GetString(root, "key") ?? issue.JiraKey ?? snap.JiraIssueId;
+                issue.Summary = GetString(f, "summary");
+                issue.JiraCreatedAt = GetDate(f, "created") ?? issue.JiraCreatedAt;
+                issue.JiraUpdatedAt = GetDate(f, "updated") ?? issue.JiraUpdatedAt;
+                issue.ParentJiraIssueId = f.TryGetProperty("parent", out var par) && par.ValueKind == JsonValueKind.Object
+                    ? GetString(par, "id") : null;
+                issue.LastSyncedAt = _clock.UtcNow;
+
+                issue.IssueTypeId = await ResolveTypeAsync(f, "issuetype", connectionId, typeCache, ct);
+                issue.PriorityId = await ResolvePriorityAsync(f, "priority", connectionId, prioCache, ct);
+                issue.StatusId = await ResolveStatusAsync(f, fields.Status, connectionId, statusCache, ct);
+                issue.AssigneeId = await ResolveUserAsync(f, fields.Assignee, connectionId, userCache, ct);
+                issue.SprintId = fields.Sprint is null ? null : await ResolveSprintAsync(f, fields.Sprint, projectId, sprintCache, ct);
+                issue.TeamId = fields.Team is null ? null : await ResolveTeamAsync(f, fields.Team, projectId, teamCache, ct);
+                issue.StoryPoints = fields.Points is null ? null : GetDecimal(f, fields.Points);
+
+                if (_db.Entry(issue).State == EntityState.Detached) _db.Issues.Add(issue);
+            }
+
+            after = batch[^1].Id;
+            if (onBatch is not null) await onBatch(ResumeStage.DeriveIssues, after.Value.ToString(), done, total, ct);
+            else await _db.SaveChangesAsync(ct);
+
+            // After the save, never before — detaching first discards the rows it must write.
+            foreach (var entry in _db.ChangeTracker.Entries().ToList())
+                if (entry.Entity is RawIssueSnapshot or Issue) entry.State = EntityState.Detached;
         }
-        await _db.SaveChangesAsync(ct);
-        if (onProgress is not null) await onProgress(done, total, ct);
 
-        done = await DeriveChangeHistoryAsync(projectId, done, total, onProgress, ct);
-        await DeriveHierarchyAsync(projectId, ct);
-
-        // The hierarchy pass walks issues already in memory and is quick next to the two stages
-        // above, so the bar simply completes rather than inventing a third denominator.
-        if (onProgress is not null) await onProgress(total, total, ct);
+        return done;
     }
 
     // ---- JSON helpers ----
