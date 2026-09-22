@@ -39,6 +39,40 @@ public sealed class IssueQueryService : IIssueQueryService
         _db.Teams.Where(tm => tm.Id == i.TeamId).Select(tm => tm.Name).FirstOrDefault(),
         i.StoryPoints, i.ParentJiraIssueId, i.JiraCreatedAt, i.JiraUpdatedAt);
 
+    /// <summary>
+    /// Orders by one catalogued column, then ALWAYS by JiraKey.
+    ///
+    /// Instance-level rather than a static expression table for the same reason ToListItem is:
+    /// the dictionary columns order by a display name that only a correlated subquery over _db
+    /// can reach. Ordering by the FK id instead would order by a random GUID — plausible-looking
+    /// and wrong in a way one page would never reveal.
+    ///
+    /// The JiraKey tiebreaker is not tidiness. Sorting by a column with duplicates is not a total
+    /// order, and without one Postgres may put a tied row on two pages and another on none.
+    /// </summary>
+    private IOrderedQueryable<Issue> ApplySort(IQueryable<Issue> q, string? sortBy, bool descending)
+    {
+        IOrderedQueryable<Issue> By<TKey>(System.Linq.Expressions.Expression<Func<Issue, TKey>> key) =>
+            descending ? q.OrderByDescending(key) : q.OrderBy(key);
+
+        var ordered = (sortBy ?? SortFields.Default) switch
+        {
+            "jiraKey"     => By(i => i.JiraKey),
+            "summary"     => By(i => i.Summary),
+            "status"      => By(i => _db.Statuses.Where(s => s.Id == i.StatusId).Select(s => s.Name).FirstOrDefault()),
+            "issueType"   => By(i => _db.IssueTypes.Where(t => t.Id == i.IssueTypeId).Select(t => t.Name).FirstOrDefault()),
+            "priority"    => By(i => _db.Priorities.Where(p => p.Id == i.PriorityId).Select(p => p.Name).FirstOrDefault()),
+            "assignee"    => By(i => _db.JiraUsers.Where(u => u.Id == i.AssigneeId).Select(u => u.DisplayName).FirstOrDefault()),
+            "sprint"      => By(i => _db.Sprints.Where(sp => sp.Id == i.SprintId).Select(sp => sp.Name).FirstOrDefault()),
+            "team"        => By(i => _db.Teams.Where(tm => tm.Id == i.TeamId).Select(tm => tm.Name).FirstOrDefault()),
+            "storyPoints" => By(i => i.StoryPoints),
+            "createdAt"   => By(i => i.JiraCreatedAt),
+            _             => By(i => i.JiraUpdatedAt),   // updatedAt, the default
+        };
+
+        return ordered.ThenBy(i => i.JiraKey);
+    }
+
     public async Task<PagedResult<IssueListItem>?> ListAsync(Guid projectId, int page, int pageSize, CancellationToken ct = default)
     {
         // Tenant-scoped existence check: a cross-tenant/unknown project is filtered out => null => 404.
@@ -71,19 +105,68 @@ public sealed class IssueQueryService : IIssueQueryService
         var build = await _filter.CompileAsync(new ReportFilter(request.Conditions, request.Filter), ct);
         if (build.Error is not null) return new IssueQueryResult(null, build.Error);
 
+        if (!SortFields.IsKnown(request.SortBy))
+            return new IssueQueryResult(null, SortFields.Describe(request.SortBy));
+
         var page = request.Page < 1 ? 1 : request.Page;
         var pageSize = request.PageSize < 1 ? DefaultPageSize : Math.Min(request.PageSize, MaxPageSize);
 
         var q = _db.Issues.Where(i => i.JiraProjectId == projectId).Where(build.Predicate!);
         var total = await q.CountAsync(ct);
 
-        var items = await q
-            .OrderByDescending(i => i.JiraUpdatedAt).ThenBy(i => i.JiraKey)
+        var items = await ApplySort(q, request.SortBy, request.SortDescending)
             .Skip((page - 1) * pageSize).Take(pageSize)
             .Select(ToListItem)
             .ToListAsync(ct);
 
         return new IssueQueryResult(new PagedResult<IssueListItem>(items, page, pageSize, total), null);
+    }
+
+    /// <summary>
+    /// An export bigger than this is refused. Holding a connection open while 92,000 rows stream
+    /// is a request to wait minutes for a file; narrowing the filter is the honest answer, and
+    /// the count is returned so the caller can say by how much.
+    /// </summary>
+    private const int MaxExportRows = 50_000;
+
+    public async Task<IssueExportInfo> PrepareExportAsync(
+        Guid projectId, IssueFilterRequest request, CancellationToken ct = default)
+    {
+        var key = await _db.JiraProjects
+            .Where(p => p.Id == projectId).Select(p => p.JiraProjectKey).FirstOrDefaultAsync(ct);
+        if (key is null) return new IssueExportInfo(null, 0, null);
+
+        var build = await _filter.CompileAsync(new ReportFilter(request.Conditions, request.Filter), ct);
+        if (build.Error is not null) return new IssueExportInfo(key, 0, build.Error);
+
+        if (!SortFields.IsKnown(request.SortBy))
+            return new IssueExportInfo(key, 0, SortFields.Describe(request.SortBy));
+
+        var count = await _db.Issues
+            .Where(i => i.JiraProjectId == projectId).Where(build.Predicate!).CountAsync(ct);
+
+        return count > MaxExportRows
+            ? new IssueExportInfo(key, count,
+                $"This filter matches {count:N0} issues, more than the {MaxExportRows:N0} an export "
+                + "can stream. Narrow the filter and try again.")
+            : new IssueExportInfo(key, count, null);
+    }
+
+    public async IAsyncEnumerable<IssueListItem> StreamExportAsync(
+        Guid projectId, IssueFilterRequest request,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var build = await _filter.CompileAsync(new ReportFilter(request.Conditions, request.Filter), ct);
+        if (build.Error is not null) yield break;   // PrepareExportAsync already reported it
+
+        var q = _db.Issues.Where(i => i.JiraProjectId == projectId).Where(build.Predicate!);
+
+        // AsAsyncEnumerable, never ToListAsync: rows reach the response as they are read.
+        await foreach (var item in ApplySort(q, request.SortBy, request.SortDescending)
+            .Select(ToListItem).AsAsyncEnumerable().WithCancellation(ct))
+        {
+            yield return item;
+        }
     }
 
     public async Task<IssueDetail?> GetDetailAsync(Guid projectId, string jiraIssueId, CancellationToken ct = default)

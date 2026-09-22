@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError } from '../../api/errors';
-import { DEFAULT_PAGE_SIZE, queryIssues } from '../../api/issues';
+import { DEFAULT_PAGE_SIZE, exportUrl, queryIssues } from '../../api/issues';
 import type { FilterCondition, IssueFilterRequest, IssueListItem, PagedResult } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
 import { Button, EmptyState, Spinner, Table, TBody, TD, TH, THead, TR } from '../../ui';
 import { FilterBuilder } from './FilterBuilder';
-
-const EMPTY = '—'; // '—' — never render the string "null" for a nullable field.
+import { useListState } from './useListState';
+import { ColumnChooser } from './ColumnChooser';
+import { ISSUE_COLUMNS, ALWAYS_ON } from './columns';
 
 /**
  * A condition the user has started but not finished — a single-value
@@ -30,9 +31,12 @@ export default function IssueList() {
   // covers the type, not a real navigation state.
   const { id = '' } = useParams();
 
-  // IssueList owns this state so EX3's FilterBuilder can drive it via
-  // onChange once it mounts in the slot below.
-  const [conditions, setConditions] = useState<FilterCondition[]>([]);
+  // The view lives in the URL, not in component state: that makes a filtered list shareable as
+  // a link and survives reload and Back, neither of which useState does.
+  const {
+    conditions, setConditions, logic, setLogic, columns, setColumns,
+    sortBy, sortDescending, setSort,
+  } = useListState();
 
   const [page, setPage] = useState(1);
 
@@ -50,7 +54,14 @@ export default function IssueList() {
   // server 400 for a condition that is complete but still invalid must
   // still render (see the "still shows a server 400" FilterBuilder test).
   const completeConditions = conditions.filter(isCompleteCondition);
-  const request: IssueFilterRequest = { conditions: completeConditions, page, pageSize: DEFAULT_PAGE_SIZE };
+
+  // `filter`, never `conditions`: the server rejects both together rather than merging them, and
+  // the flat list has nowhere to carry the And/Or choice. An empty filter is omitted entirely --
+  // the server refuses an empty group rather than guessing whether it means all or nothing.
+  const paging = { page, pageSize: DEFAULT_PAGE_SIZE, sortBy, sortDescending };
+  const request: IssueFilterRequest = completeConditions.length === 0
+    ? paging
+    : { filter: { logic, conditions: completeConditions }, ...paging };
   const { data, isPending, error, isPlaceholderData } = useQuery({
     queryKey: queryKeys.issues(id, request),
     queryFn: () => queryIssues(id, request),
@@ -88,6 +99,10 @@ export default function IssueList() {
   const showEmpty = !error && !isPlaceholderData && data?.items.length === 0;
   const showTable = shown && shown.items.length > 0;
 
+  // Catalog order, not URL order: the URL records WHICH columns, not how they are arranged, so
+  // re-checking one must not move it to the end of the table.
+  const visibleColumns = ISSUE_COLUMNS.filter((c) => columns.includes(c.id));
+
   return (
     <div className="flex flex-col gap-4">
       {error && (
@@ -96,7 +111,29 @@ export default function IssueList() {
         </p>
       )}
 
-      <FilterBuilder conditions={conditions} onChange={setConditions} />
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1">
+          <FilterBuilder
+            projectId={id}
+            conditions={conditions}
+            onChange={setConditions}
+            logic={logic}
+            onLogicChange={setLogic}
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <ColumnChooser selected={columns} onChange={setColumns} />
+          {/* An anchor, not a button calling fetch: the browser streams the download straight to
+              disk, where fetch would buffer the whole file in memory first. */}
+          <a
+            href={exportUrl(id, { conditions: completeConditions, logic, sortBy, sortDescending, columns })}
+            download
+            className="rounded-[var(--ju-radius)] border border-[var(--ju-border)] px-3 py-2 text-sm hover:bg-[var(--ju-surface-2)]"
+          >
+            Export CSV
+          </a>
+        </div>
+      </div>
 
       {showEmpty && conditions.length === 0 && (
         <EmptyState
@@ -118,34 +155,50 @@ export default function IssueList() {
           <Table>
             <THead>
               <TR>
-                <TH>Key</TH>
-                <TH>Summary</TH>
-                <TH>Status</TH>
-                <TH>Type</TH>
-                <TH>Assignee</TH>
-                <TH>Sprint</TH>
-                <TH>Points</TH>
-                <TH>Updated</TH>
+                {visibleColumns.map((col) => (
+                  <TH
+                    key={col.id}
+                    // "none" rather than omitted: leaving it off reads as "not sortable", which
+                    // is a different claim from "sortable, not currently sorted".
+                    aria-sort={
+                      sortBy === col.id ? (sortDescending ? 'descending' : 'ascending') : 'none'
+                    }
+                  >
+                    <button
+                      type="button"
+                      aria-label={`Sort by ${col.header}`}
+                      className="inline-flex items-center gap-1"
+                      // A column already sorted flips; a newly chosen one starts descending,
+                      // which is what people expect of Points, a date or anything ranked.
+                      onClick={() => setSort(col.id, sortBy === col.id ? !sortDescending : true)}
+                    >
+                      {col.header}
+                      {/* Decorative: aria-sort on the header already carries this. */}
+                      {sortBy === col.id && (
+                        <span aria-hidden="true">{sortDescending ? '↓' : '↑'}</span>
+                      )}
+                    </button>
+                  </TH>
+                ))}
               </TR>
             </THead>
             <TBody>
               {shown.items.map((item) => (
                 <TR key={item.jiraIssueId}>
-                  <TD>
-                    <Link
-                      to={`/projects/${id}/issues/${encodeURIComponent(item.jiraIssueId)}`}
-                      className="text-[var(--ju-primary)] hover:underline"
-                    >
-                      {item.jiraKey}
-                    </Link>
-                  </TD>
-                  <TD>{item.summary ?? EMPTY}</TD>
-                  <TD>{item.status ?? EMPTY}</TD>
-                  <TD>{item.issueType ?? EMPTY}</TD>
-                  <TD>{item.assignee ?? EMPTY}</TD>
-                  <TD>{item.sprint ?? EMPTY}</TD>
-                  <TD>{item.storyPoints ?? EMPTY}</TD>
-                  <TD>{new Date(item.jiraUpdatedAt).toLocaleDateString()}</TD>
+                  {visibleColumns.map((col) => (
+                    <TD key={col.id}>
+                      {/* Key is the only cell with behaviour of its own: it links to the issue.
+                          Everything else is the catalog's plain render. */}
+                      {col.id === ALWAYS_ON ? (
+                        <Link
+                          to={`/projects/${id}/issues/${encodeURIComponent(item.jiraIssueId)}`}
+                          className="text-[var(--ju-primary)] hover:underline"
+                        >
+                          {item.jiraKey}
+                        </Link>
+                      ) : col.render(item)}
+                    </TD>
+                  ))}
                 </TR>
               ))}
             </TBody>
