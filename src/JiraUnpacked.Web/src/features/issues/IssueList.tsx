@@ -8,8 +8,8 @@ import { queryKeys } from '../../api/queryKeys';
 import { Button, EmptyState, Spinner, Table, TBody, TD, TH, THead, TR } from '../../ui';
 import { FilterBuilder } from './FilterBuilder';
 import { useListState } from './useListState';
-
-const EMPTY = '—'; // '—' — never render the string "null" for a nullable field.
+import { ColumnChooser } from './ColumnChooser';
+import { ISSUE_COLUMNS, ALWAYS_ON } from './columns';
 
 /**
  * A condition the user has started but not finished — a single-value
@@ -33,7 +33,7 @@ export default function IssueList() {
 
   // The view lives in the URL, not in component state: that makes a filtered list shareable as
   // a link and survives reload and Back, neither of which useState does.
-  const { conditions, setConditions, logic, setLogic } = useListState();
+  const { conditions, setConditions, logic, setLogic, columns, setColumns } = useListState();
 
   const [page, setPage] = useState(1);
 
@@ -95,6 +95,10 @@ export default function IssueList() {
   const showEmpty = !error && !isPlaceholderData && data?.items.length === 0;
   const showTable = shown && shown.items.length > 0;
 
+  // Catalog order, not URL order: the URL records WHICH columns, not how they are arranged, so
+  // re-checking one must not move it to the end of the table.
+  const visibleColumns = ISSUE_COLUMNS.filter((c) => columns.includes(c.id));
+
   return (
     <div className="flex flex-col gap-4">
       {error && (
@@ -103,12 +107,17 @@ export default function IssueList() {
         </p>
       )}
 
-      <FilterBuilder
-        conditions={conditions}
-        onChange={setConditions}
-        logic={logic}
-        onLogicChange={setLogic}
-      />
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1">
+          <FilterBuilder
+            conditions={conditions}
+            onChange={setConditions}
+            logic={logic}
+            onLogicChange={setLogic}
+          />
+        </div>
+        <ColumnChooser selected={columns} onChange={setColumns} />
+      </div>
 
       {showEmpty && conditions.length === 0 && (
         <EmptyState
@@ -130,34 +139,28 @@ export default function IssueList() {
           <Table>
             <THead>
               <TR>
-                <TH>Key</TH>
-                <TH>Summary</TH>
-                <TH>Status</TH>
-                <TH>Type</TH>
-                <TH>Assignee</TH>
-                <TH>Sprint</TH>
-                <TH>Points</TH>
-                <TH>Updated</TH>
+                {visibleColumns.map((col) => (
+                  <TH key={col.id}>{col.header}</TH>
+                ))}
               </TR>
             </THead>
             <TBody>
               {shown.items.map((item) => (
                 <TR key={item.jiraIssueId}>
-                  <TD>
-                    <Link
-                      to={`/projects/${id}/issues/${encodeURIComponent(item.jiraIssueId)}`}
-                      className="text-[var(--ju-primary)] hover:underline"
-                    >
-                      {item.jiraKey}
-                    </Link>
-                  </TD>
-                  <TD>{item.summary ?? EMPTY}</TD>
-                  <TD>{item.status ?? EMPTY}</TD>
-                  <TD>{item.issueType ?? EMPTY}</TD>
-                  <TD>{item.assignee ?? EMPTY}</TD>
-                  <TD>{item.sprint ?? EMPTY}</TD>
-                  <TD>{item.storyPoints ?? EMPTY}</TD>
-                  <TD>{new Date(item.jiraUpdatedAt).toLocaleDateString()}</TD>
+                  {visibleColumns.map((col) => (
+                    <TD key={col.id}>
+                      {/* Key is the only cell with behaviour of its own: it links to the issue.
+                          Everything else is the catalog's plain render. */}
+                      {col.id === ALWAYS_ON ? (
+                        <Link
+                          to={`/projects/${id}/issues/${encodeURIComponent(item.jiraIssueId)}`}
+                          className="text-[var(--ju-primary)] hover:underline"
+                        >
+                          {item.jiraKey}
+                        </Link>
+                      ) : col.render(item)}
+                    </TD>
+                  ))}
                 </TR>
               ))}
             </TBody>
