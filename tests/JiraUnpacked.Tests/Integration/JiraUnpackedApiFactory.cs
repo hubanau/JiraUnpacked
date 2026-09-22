@@ -18,16 +18,25 @@ namespace JiraUnpacked.Tests.Integration;
 /// </summary>
 public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
 {
-    public const string TestConnectionString =
-        "Host=localhost;Port=5432;Database=jiraunpacked_test;Username=jiraunpacked;Password=localdev";
+    /// <summary>
+    /// The test database's name. Overridable through JU_TEST_DATABASE so two branches can run
+    /// their integration suites at the same time without sharing rows or a migration history —
+    /// the suite never truncates, so a shared database is exactly where parallel runs collide.
+    /// MigrateAsync creates the database on first use; the roles are cluster-wide.
+    /// </summary>
+    public static readonly string TestDatabase =
+        Environment.GetEnvironmentVariable("JU_TEST_DATABASE") is { Length: > 0 } name ? name : "jiraunpacked_test";
+
+    public static readonly string TestConnectionString =
+        $"Host=localhost;Port=5432;Database={TestDatabase};Username=jiraunpacked;Password=localdev";
 
     // Runtime role: RLS-enforced (set up by the AddTenantRls migration).
-    public const string TestAppConnectionString =
-        "Host=localhost;Port=5432;Database=jiraunpacked_test;Username=jiraunpacked_app;Password=localapp";
+    public static readonly string TestAppConnectionString =
+        $"Host=localhost;Port=5432;Database={TestDatabase};Username=jiraunpacked_app;Password=localapp";
 
     // Background-reader role: read-only and BYPASSRLS (set up by the AddReaderRole migration).
-    public const string TestReaderConnectionString =
-        "Host=localhost;Port=5432;Database=jiraunpacked_test;Username=jiraunpacked_reader;Password=localreader";
+    public static readonly string TestReaderConnectionString =
+        $"Host=localhost;Port=5432;Database={TestDatabase};Username=jiraunpacked_reader;Password=localreader";
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
