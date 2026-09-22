@@ -128,6 +128,7 @@ public sealed class VerificationEndpointTests : IClassFixture<JiraUnpackedApiFac
     {
         var client = _factory.CreateClient();
         var (email, _, oldCode) = await RegisterAsync(client);
+        await AgeCodesAsync(email, TimeSpan.FromSeconds(61)); // past the resend cooldown
 
         var resend = await client.PostAsJsonAsync("/api/auth/verify/resend", new { email });
         Assert.Equal(HttpStatusCode.Accepted, resend.StatusCode);
@@ -150,5 +151,93 @@ public sealed class VerificationEndpointTests : IClassFixture<JiraUnpackedApiFac
         var resend = await client.PostAsJsonAsync("/api/auth/verify/resend",
             new { email = $"nobody-{Guid.NewGuid():N}@example.com" });
         Assert.Equal(HttpStatusCode.Accepted, resend.StatusCode);
+    }
+
+    [Fact]
+    public async Task Resend_WithinTheCooldown_IsASilentNoOp()
+    {
+        var client = _factory.CreateClient();
+        var (email, _, code) = await RegisterAsync(client);
+
+        // Same 202 as always — the throttle must not reveal that the account is pending...
+        var resend = await client.PostAsJsonAsync("/api/auth/verify/resend", new { email });
+        Assert.Equal(HttpStatusCode.Accepted, resend.StatusCode);
+
+        // ...but no new code was issued or mailed, and the original one still works.
+        var sender = _factory.Services.GetRequiredService<CapturingEmailSender>();
+        Assert.Equal(code, sender.LastCodeFor(email));
+        Assert.Equal(1, await CodeCountAsync(email));
+
+        var verify = await client.PostAsJsonAsync("/api/auth/verify", new { email, code });
+        Assert.Equal(HttpStatusCode.OK, verify.StatusCode);
+    }
+
+    [Fact]
+    public async Task Resend_AfterTheCooldown_IssuesOneCode_AndRestartsTheCooldown()
+    {
+        var client = _factory.CreateClient();
+        var (email, _, oldCode) = await RegisterAsync(client);
+        await AgeCodesAsync(email, TimeSpan.FromSeconds(61));
+
+        await client.PostAsJsonAsync("/api/auth/verify/resend", new { email });
+        var sender = _factory.Services.GetRequiredService<CapturingEmailSender>();
+        var newCode = sender.LastCodeFor(email)!;
+        Assert.NotEqual(oldCode, newCode);
+        Assert.Equal(2, await CodeCountAsync(email));
+
+        // The fresh code is itself the newest one now, so an immediate second resend is throttled.
+        await client.PostAsJsonAsync("/api/auth/verify/resend", new { email });
+        Assert.Equal(newCode, sender.LastCodeFor(email));
+        Assert.Equal(2, await CodeCountAsync(email));
+    }
+
+    [Fact]
+    public async Task Concurrent_wrong_codes_are_capped_at_the_attempt_limit()
+    {
+        var client = _factory.CreateClient();
+        var (email, _, code) = await RegisterAsync(client);
+        var wrong = code == "000000" ? "111111" : "000000";
+
+        // A burst of simultaneous guesses. With a read-modify-write counter they all read the
+        // same count and all get checked; the conditional increment lets exactly MaxAttempts
+        // through and refuses the rest.
+        var responses = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ =>
+            _factory.CreateClient().PostAsJsonAsync("/api/auth/verify", new { email, code = wrong })));
+
+        Assert.Equal(EmailVerification.MaxAttempts, responses.Count(r => r.StatusCode == HttpStatusCode.BadRequest));
+        Assert.Equal(20 - EmailVerification.MaxAttempts,
+            responses.Count(r => r.StatusCode == HttpStatusCode.TooManyRequests));
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var userId = (await db.Users.SingleAsync(u => u.Email == email)).Id;
+        var attempts = await db.EmailVerifications.Where(v => v.UserId == userId).Select(v => v.Attempts).SingleAsync();
+        Assert.Equal(EmailVerification.MaxAttempts, attempts);
+
+        // The right code is refused too once the budget is spent.
+        var right = await client.PostAsJsonAsync("/api/auth/verify", new { email, code });
+        Assert.Equal(HttpStatusCode.TooManyRequests, right.StatusCode);
+    }
+
+    /// <summary>
+    /// Moves the account's codes into the past. There is no CreatedAt column: issue time is
+    /// derived from ExpiresAt, so shifting ExpiresAt is exactly "this code is older".
+    /// </summary>
+    private async Task AgeCodesAsync(string email, TimeSpan by)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var userId = (await db.Users.SingleAsync(u => u.Email == email)).Id;
+        await db.EmailVerifications
+            .Where(v => v.UserId == userId)
+            .ExecuteUpdateAsync(s => s.SetProperty(v => v.ExpiresAt, v => v.ExpiresAt - by));
+    }
+
+    private async Task<int> CodeCountAsync(string email)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var userId = (await db.Users.SingleAsync(u => u.Email == email)).Id;
+        return await db.EmailVerifications.CountAsync(v => v.UserId == userId);
     }
 }
