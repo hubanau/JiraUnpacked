@@ -150,6 +150,12 @@ path stays a JSON 404 rather than becoming HTML with a 200.
 | Filters | `GET filter-catalog`, and saved per-project filters (CRUD) |
 | Reports | four metrics and the gap-checks, each with a `GET` (whole project) and a `POST` that takes a filter |
 
+Every authorized request re-checks the account: a **blocked or deleted** user's access token
+answers **401** at once rather than working until it expires. `login` matches an input
+containing `@` against emails only and anything else against usernames only; usernames are
+3–32 of `A–Z a–z 0–9 . _ -`, so the two can never collide. `verify/resend` is a silent no-op
+within 60 seconds of the last code.
+
 `password/forgot` answers **202 for every address**, so it cannot be used to discover which addresses are registered; a completed reset revokes every refresh token for that account.
 
 A rejected **Jira** credential is **502**, never 401 — 401 means only that your own session
