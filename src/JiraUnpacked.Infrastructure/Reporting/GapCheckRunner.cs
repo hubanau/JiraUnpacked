@@ -121,14 +121,18 @@ public sealed class GapCheckRunner : IGapCheckService
 
         // The Epic classification lives on the connection and is edited independently of both,
         // so it belongs in the fingerprint too — otherwise classifying a type as Epic would
-        // leave a cached NotConfigured in place.
-        var epicTypes = await _db.IssueTypes
+        // leave a cached NotConfigured in place. WHICH types are Epic, not how many: swapping the
+        // classification from one type to another keeps the count and changes every answer.
+        var epicTypeIds = await _db.IssueTypes
             .Where(t => t.Class == IssueTypeClass.Epic
                         && _db.JiraProjects.Any(p => p.Id == projectId && p.JiraConnectionId == t.JiraConnectionId))
-            .CountAsync(ct);
+            .Select(t => t.Id)
+            .OrderBy(id => id)
+            .ToListAsync(ct);
 
         var fingerprint =
-            $"{watermark:O}#{string.Join("|", semanticRows.Select(r => $"{r.StatusName}={r.Class}"))}#{epicTypes}";
+            $"{watermark:O}#{string.Join("|", semanticRows.Select(r => $"{r.StatusName}={r.Class}"))}" +
+            $"#{string.Join(",", epicTypeIds)}";
 
         return await _cache.GetOrCreateAsync(
             "gap-check-context", projectId, fingerprint,
