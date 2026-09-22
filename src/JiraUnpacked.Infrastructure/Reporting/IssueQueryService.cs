@@ -122,6 +122,53 @@ public sealed class IssueQueryService : IIssueQueryService
         return new IssueQueryResult(new PagedResult<IssueListItem>(items, page, pageSize, total), null);
     }
 
+    /// <summary>
+    /// An export bigger than this is refused. Holding a connection open while 92,000 rows stream
+    /// is a request to wait minutes for a file; narrowing the filter is the honest answer, and
+    /// the count is returned so the caller can say by how much.
+    /// </summary>
+    private const int MaxExportRows = 50_000;
+
+    public async Task<IssueExportInfo> PrepareExportAsync(
+        Guid projectId, IssueFilterRequest request, CancellationToken ct = default)
+    {
+        var key = await _db.JiraProjects
+            .Where(p => p.Id == projectId).Select(p => p.JiraProjectKey).FirstOrDefaultAsync(ct);
+        if (key is null) return new IssueExportInfo(null, 0, null);
+
+        var build = await _filter.CompileAsync(new ReportFilter(request.Conditions, request.Filter), ct);
+        if (build.Error is not null) return new IssueExportInfo(key, 0, build.Error);
+
+        if (!SortFields.IsKnown(request.SortBy))
+            return new IssueExportInfo(key, 0, SortFields.Describe(request.SortBy));
+
+        var count = await _db.Issues
+            .Where(i => i.JiraProjectId == projectId).Where(build.Predicate!).CountAsync(ct);
+
+        return count > MaxExportRows
+            ? new IssueExportInfo(key, count,
+                $"This filter matches {count:N0} issues, more than the {MaxExportRows:N0} an export "
+                + "can stream. Narrow the filter and try again.")
+            : new IssueExportInfo(key, count, null);
+    }
+
+    public async IAsyncEnumerable<IssueListItem> StreamExportAsync(
+        Guid projectId, IssueFilterRequest request,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var build = await _filter.CompileAsync(new ReportFilter(request.Conditions, request.Filter), ct);
+        if (build.Error is not null) yield break;   // PrepareExportAsync already reported it
+
+        var q = _db.Issues.Where(i => i.JiraProjectId == projectId).Where(build.Predicate!);
+
+        // AsAsyncEnumerable, never ToListAsync: rows reach the response as they are read.
+        await foreach (var item in ApplySort(q, request.SortBy, request.SortDescending)
+            .Select(ToListItem).AsAsyncEnumerable().WithCancellation(ct))
+        {
+            yield return item;
+        }
+    }
+
     public async Task<IssueDetail?> GetDetailAsync(Guid projectId, string jiraIssueId, CancellationToken ct = default)
     {
         var issue = await _db.Issues
