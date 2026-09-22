@@ -20,6 +20,18 @@ public interface ISyncCancellation
     IDisposable Register(Guid runId, CancellationToken linkedTo, out CancellationToken token);
 
     /// <summary>
+    /// As <see cref="Register(Guid, CancellationToken, out CancellationToken)"/>, remembering which
+    /// tenant owns the run so <see cref="CancelAllFor"/> can reach it.
+    /// </summary>
+    IDisposable Register(Guid runId, Guid ownerId, CancellationToken linkedTo, out CancellationToken token);
+
+    /// <summary>
+    /// Stops every run this process is executing for one tenant — used when an account is blocked
+    /// or deleted, which must not leave a sync writing on its behalf. Returns how many it signalled.
+    /// </summary>
+    int CancelAllFor(Guid ownerId);
+
+    /// <summary>
     /// Signals the run to stop. False when this process is not the one running it — after a
     /// restart, say — in which case there is nothing here to cancel and the run is already
     /// orphaned for the reaper.

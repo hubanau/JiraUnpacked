@@ -175,6 +175,27 @@ A rejected **Jira** credential is **502**, never 401 — 401 means only that you
 ended. Filter input never reaches a SQL string: it is compiled to an expression tree over a
 closed field catalog, with values as constants and `ILIKE` wildcards escaped.
 
+## How a sync behaves
+
+- **Incremental.** After a project's first successful pull, each sync asks Jira only for issues
+  `updated >=` the last run's data instant, written in the **Jira account's own time zone** (JQL
+  reads date literals that way) less a 5-minute skew margin. If Jira will not say which zone,
+  the window widens by 14 hours instead. Changing a project's queries forces a full pull.
+- **Only what changed is re-modelled.** Changelog ingest and derivation touch just the issues the
+  run fetched. A changed **field mapping** therefore reaches existing issues only through
+  **Re-derive**, which rebuilds every issue from the stored raw data without calling Jira.
+- **Removed issues are removed.** Issues deleted or moved in Jira, or no longer matched by the
+  queries, are purged: exactly on a full pull, and on incremental syncs by comparing against an
+  id-only listing of the scope. An incremental sync refuses to purge more than 10% of a project
+  (at least 50 issues) at once and logs a warning instead.
+- **Resumable.** An interrupted run leaves a checkpoint and the next run continues from it, but
+  only while no later run of that kind has succeeded. A shutdown records the run as Interrupted
+  and due at once.
+- **Scheduling.** A project is due one interval after its last successful sync. After a failure
+  it waits 5, 10, 20, 40 minutes (capped at its interval); after a Stop, a full interval. Projects
+  of blocked accounts are not scheduled, and blocking or deleting an account stops its running
+  syncs.
+
 ## Upgrading
 
 **Refresh tokens moved to an httpOnly cookie.** The token is no longer in any response body and
