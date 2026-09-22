@@ -82,6 +82,9 @@ Account creation order: email → username → strong password → email verific
 **FR-C1 — Connection model**
 Credentials are per Jira **instance**, not per project. Model is **Connection (base URL + email + API token) → one or more Projects**.
 - *Given* an End User, *when* they add a connection with valid credentials, *then* it is validated against Jira and the token is stored envelope-encrypted (per-token data key, AES-256-GCM, wrapped by the master key).
+- *Given* a base URL that is not `https` on a Jira Cloud host (configurable suffix list, default `.atlassian.net`), or that carries a user name/password, *when* a connection is added, *then* it is rejected before any request is sent.
+- *Given* an existing connection, *when* the End User supplies a new API token (and optionally email), *then* it is validated against Jira and replaces the stored token only if Jira accepts it.
+- *Given* an existing connection or project, *when* the End User deletes it, *then* it and every row derived from it are removed in one transaction; deletion is refused while an affected project has a sync running.
 
 **FR-C2 — Projects under a connection**
 - An End User can register several Jira Projects per connection.
@@ -91,6 +94,7 @@ Credentials are per Jira **instance**, not per project. Model is **Connection (b
 
 **FR-C4 — Sync frequency per project**
 - Configurable per project; minimum interval = hourly.
+- A project's scheduled sync can be paused and resumed; a manual sync is still allowed while paused.
 
 **FR-C5 — Field semantics mapping (the keystone)**
 Per project, the End User maps which field means team / assignee / sprint / story points / status, and which statuses are **active** vs **done**.
@@ -187,7 +191,7 @@ Tenant-scoped tables carry `EndUserId`; data tables also carry `JiraProjectId`.
 
 **Jira configuration / semantic layer**
 - `JiraConnections` (Id, EndUserId, BaseUrl, Email, ApiTokenEncrypted)
-- `JiraProjects` (Id, EndUserId, JiraConnectionId, JiraProjectKey, SyncFrequency)
+- `JiraProjects` (Id, EndUserId, JiraConnectionId, JiraProjectKey, SyncFrequency, SyncPaused)
 - `JiraQueries` (Id, EndUserId, JiraProjectId, Jql)
 - `FieldMappings` (Id, EndUserId, JiraProjectId, Role[team/assignee/sprint/storypoints/status], JiraFieldId)
 - `StatusSemantics` (Id, EndUserId, JiraProjectId, StatusId, Class[active/done/other])

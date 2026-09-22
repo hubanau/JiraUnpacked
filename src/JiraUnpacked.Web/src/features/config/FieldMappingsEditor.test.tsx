@@ -108,4 +108,26 @@ describe('FieldMappingsEditor', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/jira did not respond as expected/i);
   });
+
+  it('offers a re-derive after a save, because a sync only re-models what it fetched', async () => {
+    let rederived = false;
+    useDefaultHandlers(() => {});
+    server.use(
+      http.post('/api/projects/p1/rederive', () => {
+        rederived = true;
+        return HttpResponse.json({ id: 'r1', status: 'Running' }, { status: 202 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderEditor();
+
+    await user.selectOptions(await screen.findByLabelText('StoryPoints'), 'cf_10001');
+    await user.click(screen.getByRole('button', { name: /save field mappings/i }));
+
+    expect(await screen.findByText(/keep their old mapping until you re-derive/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /re-derive now/i }));
+
+    await waitFor(() => expect(rederived).toBe(true));
+    await waitFor(() => expect(screen.queryByRole('button', { name: /re-derive now/i })).not.toBeInTheDocument());
+  });
 });

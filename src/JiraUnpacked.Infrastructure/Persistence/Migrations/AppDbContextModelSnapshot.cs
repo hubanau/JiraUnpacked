@@ -393,6 +393,11 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.Property<int>("SyncIntervalMinutes")
                         .HasColumnType("integer");
 
+                    b.Property<bool>("SyncPaused")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.HasKey("Id");
 
                     b.HasIndex("EndUserId");
@@ -807,6 +812,9 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("Error")
                         .HasColumnType("text");
+
+                    b.Property<DateTime?>("FetchedAsOf")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime?>("FinishedAt")
                         .HasColumnType("timestamp with time zone");

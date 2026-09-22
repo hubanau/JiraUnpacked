@@ -23,4 +23,17 @@ public interface IJiraApiClient
     /// </summary>
     Task<int?> ApproximateCountAsync(JiraCredentials creds, string jql, CancellationToken ct = default);
     Task<ChangelogPage> GetIssueChangelogPageAsync(JiraCredentials creds, string jiraIssueId, int startAt, CancellationToken ct = default);
+
+    /// <summary>
+    /// The IANA time zone of the account the credentials belong to, or null when Jira will not
+    /// say. JQL date literals are read in THAT zone, not UTC, so an incremental clause written in
+    /// UTC is hours late for any account west of Greenwich. Never throws except on cancellation.
+    /// </summary>
+    Task<string?> GetUserTimeZoneAsync(JiraCredentials creds, CancellationToken ct = default);
+
+    /// <summary>
+    /// One page of the ids a JQL matches — no fields, so pages are large and cheap. Used to find
+    /// stored issues that have left the scope (deleted or moved in Jira).
+    /// </summary>
+    Task<IssueIdPage> SearchIssueIdsPageAsync(JiraCredentials creds, string jql, string? nextPageToken, CancellationToken ct = default);
 }

@@ -25,6 +25,7 @@ public sealed partial class DerivationService : IDerivationService
         int alreadyDone = 0,
         int batchSize = 10_000,
         Func<string, string, int, int, CancellationToken, Task>? onBatch = null,
+        DateTime? incrementalSince = null,
         CancellationToken ct = default)
     {
         var project = await _db.JiraProjects.FirstOrDefaultAsync(p => p.Id == projectId, ct);
@@ -42,8 +43,9 @@ public sealed partial class DerivationService : IDerivationService
 
         // Counted up front so the bar has its denominator before the first row. These are COUNTS,
         // not payloads — the rows themselves are read a batch at a time below.
-        var total = await _db.RawIssueSnapshots.CountAsync(r => r.JiraProjectId == projectId, ct)
-                  + await _db.RawChangelogs.CountAsync(r => r.JiraProjectId == projectId, ct);
+        var incremental = incrementalSince is not null;
+        var total = await SnapshotsToDerive(projectId, null, incremental).CountAsync(ct)
+                  + await ChangelogsToDerive(projectId, null, incrementalSince).CountAsync(ct);
         var done = alreadyDone;
 
         var start = ResumeStage.IndexOf(resumeStage);
@@ -52,14 +54,14 @@ public sealed partial class DerivationService : IDerivationService
         {
             var after = resumeStage == ResumeStage.DeriveIssues && Guid.TryParse(resumeCursor, out var c)
                 ? c : (Guid?)null;
-            done = await DeriveIssuesAsync(projectId, connectionId, fields, after, done, total, batchSize, onBatch, ct);
+            done = await DeriveIssuesAsync(projectId, connectionId, fields, after, incremental, done, total, batchSize, onBatch, ct);
         }
 
         if (start <= ResumeStage.IndexOf(ResumeStage.DeriveHistory))
         {
             var after = resumeStage == ResumeStage.DeriveHistory && Guid.TryParse(resumeCursor, out var c)
                 ? c : (Guid?)null;
-            done = await DeriveChangeHistoryAsync(projectId, after, done, total, batchSize, onBatch, ct);
+            done = await DeriveChangeHistoryAsync(projectId, after, incrementalSince, done, total, batchSize, onBatch, ct);
         }
 
         if (start <= ResumeStage.IndexOf(ResumeStage.DeriveHierarchy))
@@ -69,6 +71,24 @@ public sealed partial class DerivationService : IDerivationService
             await DeriveHierarchyAsync(projectId, after, total, done, batchSize, onBatch, ct);
         }
     }
+
+    /// <summary>
+    /// Snapshots to model. Incrementally, only those newer than their modelled issue — a snapshot
+    /// changes only when it is fetched, so that is exactly "fetched since last derived", and it
+    /// heals by itself: one a failed run fetched but never derived still qualifies next time.
+    /// </summary>
+    private IQueryable<RawIssueSnapshot> SnapshotsToDerive(Guid projectId, Guid? after, bool incremental) =>
+        _db.RawIssueSnapshots.Where(r => r.JiraProjectId == projectId
+            && (after == null || r.Id > after)
+            && (!incremental || !_db.Issues.Any(i => i.JiraProjectId == projectId
+                                                     && i.JiraIssueId == r.JiraIssueId
+                                                     && i.LastSyncedAt > r.FetchedAt)));
+
+    /// <summary>Changelogs to fold into history: all of them, or those ingested since the run's data instant.</summary>
+    private IQueryable<RawChangelog> ChangelogsToDerive(Guid projectId, Guid? after, DateTime? since) =>
+        _db.RawChangelogs.Where(r => r.JiraProjectId == projectId
+            && (after == null || r.Id > after)
+            && (since == null || r.FetchedAt >= since));
 
     /// <summary>The mapped field ids this project models by, resolved once per run.</summary>
     private sealed record DerivationFields(
@@ -83,7 +103,7 @@ public sealed partial class DerivationService : IDerivationService
     /// has always done it the bounded way and says why; this now matches it.
     /// </summary>
     private async Task<int> DeriveIssuesAsync(
-        Guid projectId, Guid connectionId, DerivationFields fields, Guid? after,
+        Guid projectId, Guid connectionId, DerivationFields fields, Guid? after, bool incremental,
         int done, int total, int batchSize,
         Func<string, string, int, int, CancellationToken, Task>? onBatch, CancellationToken ct)
     {
@@ -98,8 +118,7 @@ public sealed partial class DerivationService : IDerivationService
 
         while (true)
         {
-            var batch = await _db.RawIssueSnapshots
-                .Where(r => r.JiraProjectId == projectId && (after == null || r.Id > after))
+            var batch = await SnapshotsToDerive(projectId, after, incremental)
                 .OrderBy(r => r.Id)
                 .Take(batchSize)
                 .ToListAsync(ct);

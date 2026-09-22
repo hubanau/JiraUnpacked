@@ -83,9 +83,16 @@ public sealed partial class JiraApiClient
                 using var req = build();
                 resp = await _http.SendAsync(req, ct);
             }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            // A cancellation the CALLER asked for is not a Jira fault and must surface as one.
+            // Translating it into "Jira is unreachable" hid a deliberate Stop from the
+            // orchestrator, which then recorded a failure through the already-cancelled token,
+            // threw again, and left the run Running until the reaper — two hours of a blocked
+            // project for pressing a button. A TaskCanceledException with ct NOT cancelled is
+            // HttpClient's own timeout, which is transient and retried like any other.
+            catch (Exception ex) when ((ex is HttpRequestException or TaskCanceledException)
+                                       && !ct.IsCancellationRequested)
             {
-                if (ct.IsCancellationRequested || attempt >= MaxTransientRetries)
+                if (attempt >= MaxTransientRetries)
                     throw new JiraApiException(JiraErrorKind.Upstream, "Jira is unreachable.");
 
                 await Task.Delay(Backoff(attempt), ct);

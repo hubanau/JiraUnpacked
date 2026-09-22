@@ -18,16 +18,25 @@ namespace JiraUnpacked.Tests.Integration;
 /// </summary>
 public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
 {
-    public const string TestConnectionString =
-        "Host=localhost;Port=5432;Database=jiraunpacked_test;Username=jiraunpacked;Password=localdev";
+    /// <summary>
+    /// The test database's name. Overridable through JU_TEST_DATABASE so two branches can run
+    /// their integration suites at the same time without sharing rows or a migration history —
+    /// the suite never truncates, so a shared database is exactly where parallel runs collide.
+    /// MigrateAsync creates the database on first use; the roles are cluster-wide.
+    /// </summary>
+    public static readonly string TestDatabase =
+        Environment.GetEnvironmentVariable("JU_TEST_DATABASE") is { Length: > 0 } name ? name : "jiraunpacked_test";
+
+    public static readonly string TestConnectionString =
+        $"Host=localhost;Port=5432;Database={TestDatabase};Username=jiraunpacked;Password=localdev";
 
     // Runtime role: RLS-enforced (set up by the AddTenantRls migration).
-    public const string TestAppConnectionString =
-        "Host=localhost;Port=5432;Database=jiraunpacked_test;Username=jiraunpacked_app;Password=localapp";
+    public static readonly string TestAppConnectionString =
+        $"Host=localhost;Port=5432;Database={TestDatabase};Username=jiraunpacked_app;Password=localapp";
 
     // Background-reader role: read-only and BYPASSRLS (set up by the AddReaderRole migration).
-    public const string TestReaderConnectionString =
-        "Host=localhost;Port=5432;Database=jiraunpacked_test;Username=jiraunpacked_reader;Password=localreader";
+    public static readonly string TestReaderConnectionString =
+        $"Host=localhost;Port=5432;Database={TestDatabase};Username=jiraunpacked_reader;Password=localreader";
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -48,6 +57,14 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
         // would connect to the unmigrated "jiraunpacked" dev database instead of the test one.
         builder.UseSetting("ConnectionStrings:Default", TestConnectionString);
         builder.UseSetting("ConnectionStrings:Reader", TestReaderConnectionString);
+
+        // Integration tests stand in for Jira with WireMock/fake servers on http://localhost, which
+        // the production base-URL policy (https + *.atlassian.net only) rightly refuses. Relax it
+        // here, and only here; JiraBaseUrlValidatorTests pins the default policy.
+        builder.UseSetting("Jira:AllowInsecureHttp", "true");
+        builder.UseSetting("Jira:AllowedHostSuffixes:0", ".atlassian.net");
+        builder.UseSetting("Jira:AllowedHostSuffixes:1", "localhost");
+        builder.UseSetting("Jira:AllowedHostSuffixes:2", "127.0.0.1");
 
         // Override the DbContext registration to point at the test database.
         builder.ConfigureTestServices(services =>

@@ -21,9 +21,9 @@ function renderHome() {
 const CONNECTION_1 = { id: 'c1', baseUrl: 'https://a.atlassian.net', email: 'a@b.c', createdAtUtc: '2026-01-01T00:00:00Z' };
 const CONNECTION_2 = { id: 'c2', baseUrl: 'https://b.atlassian.net', email: 'd@e.f', createdAtUtc: '2026-01-01T00:00:00Z' };
 
-const project = (id: string, connId: string, key: string) => ({
+const project = (id: string, connId: string, key: string, syncPaused = false) => ({
   id, jiraConnectionId: connId, jiraProjectKey: key, jiraProjectId: '1',
-  syncIntervalMinutes: 60, createdAtUtc: '2026-01-01T00:00:00Z',
+  syncIntervalMinutes: 60, syncPaused, createdAtUtc: '2026-01-01T00:00:00Z',
 });
 
 describe('Home', () => {
@@ -116,5 +116,21 @@ describe('Home', () => {
 
     expect(await screen.findByRole('link', { name: /issues/i }))
       .toHaveAttribute('href', '/projects/p1/issues');
+  });
+
+  it('marks projects whose scheduled sync is paused', async () => {
+    server.use(
+      http.get('/api/connections', () => HttpResponse.json([CONNECTION_1])),
+      http.get('/api/connections/c1/projects', () => HttpResponse.json([
+        project('p1', 'c1', 'ACME', true),
+        project('p2', 'c1', 'BETA'),
+      ])),
+    );
+
+    renderHome();
+
+    const paused = await screen.findByText('ACME');
+    expect(paused.closest('tr')).toHaveTextContent(/paused/i);
+    expect(screen.getByText('BETA').closest('tr')).not.toHaveTextContent(/paused/i);
   });
 });

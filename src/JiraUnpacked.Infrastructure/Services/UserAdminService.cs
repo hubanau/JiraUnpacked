@@ -11,11 +11,13 @@ public sealed class UserAdminService : IUserAdminService
     private const int DefaultPageSize = 50;
     private readonly AppDbContext _db;
     private readonly IClock _clock;
+    private readonly ISyncCancellation _syncs;
 
-    public UserAdminService(AppDbContext db, IClock clock)
+    public UserAdminService(AppDbContext db, IClock clock, ISyncCancellation syncs)
     {
         _db = db;
         _clock = clock;
+        _syncs = syncs;
     }
 
     public async Task<BlockResult> BlockAsync(Guid userId, CancellationToken ct = default)
@@ -39,6 +41,11 @@ public sealed class UserAdminService : IUserAdminService
             .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now), ct);
 
         await _db.SaveChangesAsync(ct);
+
+        // A blocked account "can no longer trigger syncs" (FR-A5) - so neither may one it
+        // triggered before the block keep writing on its behalf. Stopped runs resume from their
+        // checkpoint after an unblock.
+        _syncs.CancelAllFor(userId);
         return BlockResult.Ok();
     }
 

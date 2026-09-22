@@ -110,6 +110,29 @@ public sealed class GapCheckGuaranteesTests : IClassFixture<JiraUnpackedApiFacto
     }
 
     [Fact]
+    public async Task Swapping_which_type_is_epic_is_not_served_from_a_stale_cache()
+    {
+        var (client, tenant) = await GapCheckTestData.AuthedTenantAsync(_factory);
+        var seed = await GapCheckTestData.SeedAsync(tenant);
+        await GapCheckTestData.SetIssueTypeClassAsync(seed, "1", "Epic");
+
+        // Epic ACME-1 (type "1") sits in "To Do"; its only child ACME-2 (type "2") is Done.
+        await GapCheckTestData.SeedIssueAsync(seed, "10001", "ACME-1", "epic", seed.EpicTypeId, seed.ToDoStatusId, null);
+        await GapCheckTestData.SeedIssueAsync(seed, "10002", "ACME-2", "child", seed.StoryTypeId, seed.DoneStatusId, "10001");
+
+        // Warm the cached context.
+        Assert.Equal(1, (await RunFlagshipAsync(client, seed.ProjectId)).Violations.TotalCount);
+
+        // Move the Epic classification from type "1" to type "2". Still exactly ONE Epic type,
+        // so a count-based fingerprint would not change — but now ACME-2 (Done, no children) is
+        // the only epic and ACME-1 is not one at all, so nothing can fire.
+        await GapCheckTestData.SetIssueTypeClassAsync(seed, "1", "Other");
+        await GapCheckTestData.SetIssueTypeClassAsync(seed, "2", "Epic");
+
+        Assert.Equal(0, (await RunFlagshipAsync(client, seed.ProjectId)).Violations.TotalCount);
+    }
+
+    [Fact]
     public async Task Newly_discovered_issue_types_default_to_other()
     {
         // The EF creation path in DerivationService.ResolveTypeAsync must not silently default

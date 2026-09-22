@@ -113,6 +113,8 @@ Outside Development the app **refuses to start** with those values, or with emai
 | `Security:TrustProxyHeaders` | `Security__TrustProxyHeaders` | no | **Default false.** See below. |
 | `Security:SecureCookiesEnabled` | `Security__SecureCookiesEnabled` | no | Default true. Off only for plain HTTP that is not on a network — see the deployment section. |
 | `Security:ForwardLimit` | `Security__ForwardLimit` | no | Proxy hops to unwind. Default 1. |
+| `Jira:AllowedHostSuffixes` | `Jira__AllowedHostSuffixes__0`, `__1`, … | no | Hosts a connection's base URL may name. Default `.atlassian.net` (Jira Cloud only). A leading dot requires a subdomain. Setting it **replaces** the default. |
+| `Jira:AllowInsecureHttp` | `Jira__AllowInsecureHttp` | no | **Default false.** Permits `http://` base URLs — the API token would then cross the network in clear text. |
 
 ### Running behind a reverse proxy
 
@@ -143,18 +145,62 @@ path stays a JSON 404 rather than becoming HTML with a 200.
 |---|---|
 | Auth | `POST register · verify · verify/resend · login · refresh · logout · password/forgot · password/reset` (anonymous), `GET/DELETE me` |
 | Admin | `GET users`, `POST users/{id}/block · unblock`, `DELETE users/{id}`, `POST invite-codes` |
-| Connections | CRUD, plus live Jira reads for fields, projects and statuses |
-| Projects | CRUD, field mappings, status semantics, issue-type classes, queries |
+| Connections | `POST`, `GET` (list and one), `PATCH {id}` (rotate the API token, optionally the email), `DELETE {id}`, plus live Jira reads for fields, projects and statuses |
+| Projects | `POST connections/{id}/projects`, `GET` (per connection and one), `PATCH {id}` (`syncIntervalMinutes` and/or `syncPaused`), `DELETE {id}`; field mappings, status semantics, issue-type classes, queries |
 | Sync | `POST sync · rederive`, `GET sync-runs` |
 | Issues | `GET issues`, `GET issues/{id}`, `POST issues/query` (the filter builder) |
 | Filters | `GET filter-catalog`, and saved per-project filters (CRUD) |
 | Reports | four metrics and the gap-checks, each with a `GET` (whole project) and a `POST` that takes a filter |
+
+**Deleting** a connection removes its projects, everything synced for them and the connection's
+dictionaries; deleting a project removes its data and keeps the connection. Both are one
+transaction, answer **409** while an affected project has a sync `Running` (stop it first), and
+**404** for anything that is not yours. Nothing in Jira is touched.
+
+**Rotating a token** (`PATCH connections/{id}` with `apiToken` and optional `email`) checks the new
+pair against Jira *before* storing it — 400 when Jira refuses it, 502 when Jira is unreachable —
+so a mistyped token never replaces a working one. The token is never returned.
+
+**Pausing** a project (`syncPaused: true`) takes it off the schedule; **Sync now** still works.
+
+**Jira base URLs** must be `https` on a host ending in one of `Jira:AllowedHostSuffixes` (default
+`.atlassian.net`), with no user name or password in the URL; a trailing slash is dropped. The base
+URL is where the server sends the user's credentials, so this is checked before any request
+leaves. `Jira:AllowInsecureHttp` (default false) permits `http`; both exist for tests and
+non-standard deployments, not for pointing at internal hosts.
+
+Every authorized request re-checks the account: a **blocked or deleted** user's access token
+answers **401** at once rather than working until it expires. `login` matches an input
+containing `@` against emails only and anything else against usernames only; usernames are
+3–32 of `A–Z a–z 0–9 . _ -`, so the two can never collide. `verify/resend` is a silent no-op
+within 60 seconds of the last code.
 
 `password/forgot` answers **202 for every address**, so it cannot be used to discover which addresses are registered; a completed reset revokes every refresh token for that account.
 
 A rejected **Jira** credential is **502**, never 401 — 401 means only that your own session
 ended. Filter input never reaches a SQL string: it is compiled to an expression tree over a
 closed field catalog, with values as constants and `ILIKE` wildcards escaped.
+
+## How a sync behaves
+
+- **Incremental.** After a project's first successful pull, each sync asks Jira only for issues
+  `updated >=` the last run's data instant, written in the **Jira account's own time zone** (JQL
+  reads date literals that way) less a 5-minute skew margin. If Jira will not say which zone,
+  the window widens by 14 hours instead. Changing a project's queries forces a full pull.
+- **Only what changed is re-modelled.** Changelog ingest and derivation touch just the issues the
+  run fetched. A changed **field mapping** therefore reaches existing issues only through
+  **Re-derive**, which rebuilds every issue from the stored raw data without calling Jira.
+- **Removed issues are removed.** Issues deleted or moved in Jira, or no longer matched by the
+  queries, are purged: exactly on a full pull, and on incremental syncs by comparing against an
+  id-only listing of the scope. An incremental sync refuses to purge more than 10% of a project
+  (at least 50 issues) at once and logs a warning instead.
+- **Resumable.** An interrupted run leaves a checkpoint and the next run continues from it, but
+  only while no later run of that kind has succeeded. A shutdown records the run as Interrupted
+  and due at once.
+- **Scheduling.** A project is due one interval after its last successful sync. After a failure
+  it waits 5, 10, 20, 40 minutes (capped at its interval); after a Stop, a full interval. Paused
+  projects and projects of blocked accounts are not scheduled ("Sync now" still works on a paused
+  project), and blocking or deleting an account stops its running syncs.
 
 ## Upgrading
 

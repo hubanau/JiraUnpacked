@@ -5,6 +5,7 @@ import { ApiError } from '../../api/errors';
 import { listConnectionFields } from '../../api/connections';
 import { FIELD_ROLES, getFieldMappings, putFieldMappings, type FieldRole } from '../../api/mappings';
 import { queryKeys } from '../../api/queryKeys';
+import { runRederive } from '../../api/sync';
 
 export function FieldMappingsEditor({ projectId, connectionId }: { projectId: string; connectionId: string }) {
   const queryClient = useQueryClient();
@@ -21,6 +22,10 @@ export function FieldMappingsEditor({ projectId, connectionId }: { projectId: st
   // Local edits keyed by role; the submit merges them back over the full
   // saved set so untouched roles are still sent (the PUT is replace-all).
   const [chosen, setChosen] = useState<Partial<Record<FieldRole, string>>>({});
+  // A sync only re-models the issues it fetched, so a new mapping reaches existing issues only
+  // through a re-derive. Saying so after a save is the difference between "the mapping works"
+  // and "the mapping works on the dozen issues that changed today".
+  const [needsRederive, setNeedsRederive] = useState(false);
 
   const current = (role: FieldRole) =>
     chosen[role] ?? saved.data?.find((m) => m.role === role)?.jiraFieldId ?? '';
@@ -39,7 +44,16 @@ export function FieldMappingsEditor({ projectId, connectionId }: { projectId: st
     ),
     onSuccess: () => {
       setChosen({});
+      setNeedsRederive(true);
       void queryClient.invalidateQueries({ queryKey: queryKeys.fieldMappings(projectId) });
+    },
+  });
+
+  const rederive = useMutation({
+    mutationFn: () => runRederive(projectId),
+    onSuccess: () => {
+      setNeedsRederive(false);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.syncRuns(projectId) });
     },
   });
 
@@ -86,6 +100,19 @@ export function FieldMappingsEditor({ projectId, connectionId }: { projectId: st
         </Field>
       ))}
       <Button loading={save.isPending} onClick={() => save.mutate()}>Save field mappings</Button>
+      {needsRederive && (
+        <div role="status">
+          <p>Saved. Issues already stored keep their old mapping until you re-derive; new syncs use it.</p>
+          {rederive.error && (
+            <p role="alert">
+              {rederive.error instanceof ApiError ? rederive.error.title : 'Could not start the re-derive.'}
+            </p>
+          )}
+          <Button variant="secondary" loading={rederive.isPending} onClick={() => rederive.mutate()}>
+            Re-derive now
+          </Button>
+        </div>
+      )}
     </section>
   );
 }

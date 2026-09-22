@@ -92,14 +92,15 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
     }
 
     private static async Task SeedSyncRunAsync(Guid tenant, Guid projId, string status,
-        DateTime startedAt, DateTime? finishedAt = null, int issuesProcessed = 0, string kind = "Sync")
+        DateTime startedAt, DateTime? finishedAt = null, int issuesProcessed = 0, string kind = "Sync",
+        DateTime? nextRunAt = null)
     {
         await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
         await conn.OpenAsync();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = @"INSERT INTO ""SyncRuns""
-            (""Id"",""EndUserId"",""JiraProjectId"",""StartedAt"",""FinishedAt"",""Status"",""IssuesProcessed"",""Kind"")
-            VALUES (@id,@t,@proj,@started,@finished,@status,@issues,@kind)";
+            (""Id"",""EndUserId"",""JiraProjectId"",""StartedAt"",""FinishedAt"",""Status"",""IssuesProcessed"",""Kind"",""NextRunAt"")
+            VALUES (@id,@t,@proj,@started,@finished,@status,@issues,@kind,@next)";
         cmd.Parameters.AddWithValue("id", Guid.NewGuid());
         cmd.Parameters.AddWithValue("t", tenant);
         cmd.Parameters.AddWithValue("proj", projId);
@@ -108,6 +109,7 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
         cmd.Parameters.AddWithValue("status", status);
         cmd.Parameters.AddWithValue("issues", issuesProcessed);
         cmd.Parameters.AddWithValue("kind", kind);
+        cmd.Parameters.AddWithValue("next", nextRunAt.HasValue ? (object)nextRunAt.Value : DBNull.Value);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -174,5 +176,94 @@ public sealed class DueProjectFinderTests : IClassFixture<JiraUnpackedApiFactory
 
         var due = await Finder().GetDueProjectsAsync();
         Assert.Contains(due, d => d.ProjectId == projId && d.EndUserId == tenant);
+    }
+
+    private static async Task SetUserStatusAsync(Guid userId, string status)
+    {
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"UPDATE ""Users"" SET ""Status"" = @s WHERE ""Id"" = @id";
+        cmd.Parameters.AddWithValue("s", status);
+        cmd.Parameters.AddWithValue("id", userId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>FR-A5: a blocked End User's scheduled syncs are paused, and resume on unblock.</summary>
+    [Fact]
+    public async Task A_blocked_users_projects_are_not_due_until_unblocked()
+    {
+        var tenant = Guid.NewGuid();
+        var projId = await SeedProjectAsync(tenant, 60);
+        await SetUserStatusAsync(tenant, "Blocked");
+
+        Assert.DoesNotContain(await Finder().GetDueProjectsAsync(), d => d.ProjectId == projId);
+
+        await SetUserStatusAsync(tenant, "Active");
+        Assert.Contains(await Finder().GetDueProjectsAsync(), d => d.ProjectId == projId);
+    }
+
+    /// <summary>
+    /// A failed run records when to try again. The finder used to look only at the last success,
+    /// so a failing project was retried every minute for as long as the fault lasted.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_project_waits_for_its_backoff()
+    {
+        var tenant = Guid.NewGuid();
+        var projId = await SeedProjectAsync(tenant, 60);
+        var failedAt = DateTime.UtcNow.AddMinutes(-2);
+        await SeedSyncRunAsync(tenant, projId, "Failed", failedAt, failedAt, nextRunAt: DateTime.UtcNow.AddMinutes(3));
+
+        Assert.DoesNotContain(await Finder().GetDueProjectsAsync(), d => d.ProjectId == projId);
+    }
+
+    [Fact]
+    public async Task A_failed_project_is_due_once_its_backoff_has_passed()
+    {
+        var tenant = Guid.NewGuid();
+        var projId = await SeedProjectAsync(tenant, 60);
+        var failedAt = DateTime.UtcNow.AddMinutes(-10);
+        await SeedSyncRunAsync(tenant, projId, "Failed", failedAt, failedAt, nextRunAt: DateTime.UtcNow.AddMinutes(-5));
+
+        Assert.Contains(await Finder().GetDueProjectsAsync(), d => d.ProjectId == projId);
+    }
+
+    /// <summary>Pressing Stop must not be undone by the next tick a minute later.</summary>
+    [Fact]
+    public async Task A_stopped_project_is_not_restarted_before_its_next_run()
+    {
+        var tenant = Guid.NewGuid();
+        var projId = await SeedProjectAsync(tenant, 60);
+        // Last success long ago, so the old rule would have called it due at once.
+        await SeedSyncRunAsync(tenant, projId, "Succeeded", DateTime.UtcNow.AddHours(-5), DateTime.UtcNow.AddHours(-5));
+        var stoppedAt = DateTime.UtcNow.AddMinutes(-1);
+        await SeedSyncRunAsync(tenant, projId, "Cancelled", stoppedAt, stoppedAt, nextRunAt: stoppedAt.AddMinutes(60));
+
+        Assert.DoesNotContain(await Finder().GetDueProjectsAsync(), d => d.ProjectId == projId);
+    }
+
+    [Fact]
+    public async Task A_paused_project_is_not_due_until_resumed()
+    {
+        var tenant = Guid.NewGuid();
+        var projId = await SeedProjectAsync(tenant, 60);
+
+        async Task SetPausedAsync(bool paused)
+        {
+            await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
+            await conn.OpenAsync();
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"UPDATE ""JiraProjects"" SET ""SyncPaused"" = @p WHERE ""Id"" = @id";
+            cmd.Parameters.AddWithValue("p", paused);
+            cmd.Parameters.AddWithValue("id", projId);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        await SetPausedAsync(true);
+        Assert.DoesNotContain(await Finder().GetDueProjectsAsync(), d => d.ProjectId == projId);
+
+        await SetPausedAsync(false);
+        Assert.Contains(await Finder().GetDueProjectsAsync(), d => d.ProjectId == projId);
     }
 }

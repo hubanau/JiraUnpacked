@@ -6,6 +6,7 @@ import { ApiError } from '../api/errors';
 import { listConnections } from '../api/connections';
 import { listConnectionProjects } from '../api/projects';
 import { queryKeys } from '../api/queryKeys';
+import { PausedBadge } from '../features/projects/PausedBadge';
 
 // There is no GET /api/projects — the only project reads are scoped to a
 // connection or a single project — so the all-projects landing fans out:
@@ -86,9 +87,12 @@ export default function Home() {
             {projects.map((project) => (
               <TR key={project.id}>
                 <TD>
-                  <Link to={`/projects/${project.id}`} className="font-medium text-[var(--ju-primary)] hover:underline">
-                    {project.jiraProjectKey}
-                  </Link>
+                  <span className="flex items-center gap-2">
+                    <Link to={`/projects/${project.id}`} className="font-medium text-[var(--ju-primary)] hover:underline">
+                      {project.jiraProjectKey}
+                    </Link>
+                    <PausedBadge project={project} />
+                  </span>
                 </TD>
                 <TD>{project.syncIntervalMinutes} minutes</TD>
                 <TD>

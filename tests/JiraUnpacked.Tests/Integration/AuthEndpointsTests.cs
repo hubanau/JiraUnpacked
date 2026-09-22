@@ -208,4 +208,60 @@ public sealed class AuthEndpointsTests : IClassFixture<JiraUnpackedApiFactory>, 
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
+
+    private async Task SeedRawUserAsync(string email, string username, string password)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
+        db.Users.Add(new User
+        {
+            Id = Guid.NewGuid(), Email = email, Username = username,
+            PasswordHash = hasher.Hash(password), Role = UserRole.EndUser,
+            Status = UserStatus.Active, CreatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task Login_WithAnEmail_NeverMatchesAUsernameThatLooksLikeThatEmail()
+    {
+        // Registration now refuses an '@' in a username, so this collision can only come from
+        // data written before that rule: seed it directly. Alice's email login must reach Alice's
+        // account every time, never the squatter's — whichever row Postgres happens to return
+        // first, which is exactly what the old OR-match left to chance.
+        var unique = Guid.NewGuid().ToString("N");
+        var aliceEmail = $"alice-{unique}@example.com";
+        await SeedRawUserAsync($"squatter-{unique}@example.com", aliceEmail, "Squatter-Pass-9!");
+        await SeedRawUserAsync(aliceEmail, $"alice-{unique[..20]}", "Alice-Password-9!");
+
+        var client = _factory.CreateClient();
+        for (var i = 0; i < 3; i++)
+        {
+            var alice = await client.PostAsJsonAsync("/api/auth/login",
+                new { emailOrUsername = aliceEmail, password = "Alice-Password-9!" });
+            Assert.Equal(HttpStatusCode.OK, alice.StatusCode);
+        }
+
+        var squatter = await client.PostAsJsonAsync("/api/auth/login",
+            new { emailOrUsername = aliceEmail, password = "Squatter-Pass-9!" });
+        Assert.Equal(HttpStatusCode.Unauthorized, squatter.StatusCode);
+    }
+
+    [Fact]
+    public async Task Login_WithAUsername_MatchesTheUsernameExactly()
+    {
+        var unique = Guid.NewGuid().ToString("N");
+        var username = $"Bob-{unique[..20]}";
+        await SeedRawUserAsync($"bob-{unique}@example.com", username, "Bob-Password-9!");
+        var client = _factory.CreateClient();
+
+        var exact = await client.PostAsJsonAsync("/api/auth/login",
+            new { emailOrUsername = username, password = "Bob-Password-9!" });
+        Assert.Equal(HttpStatusCode.OK, exact.StatusCode);
+
+        var otherCase = await client.PostAsJsonAsync("/api/auth/login",
+            new { emailOrUsername = username.ToLowerInvariant(), password = "Bob-Password-9!" });
+        Assert.Equal(HttpStatusCode.Unauthorized, otherCase.StatusCode);
+    }
 }
