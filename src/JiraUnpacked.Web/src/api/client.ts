@@ -63,6 +63,42 @@ async function parseOk<T>(response: Response): Promise<T> {
 }
 
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
+  return parseOk<T>(await sendAuthorized(path, options));
+}
+
+export interface Download {
+  blob: Blob;
+  /** The name the server gave the file, or null when it named none. */
+  filename: string | null;
+}
+
+/**
+ * A file the user asked for that needs the session to fetch. Downloads cannot be a plain
+ * `<a href download>`: a navigation carries cookies but not the in-memory bearer token, so the
+ * server answers every such link with a 401. The price is that the file is held in memory
+ * before the browser is handed it, which is why whatever serves one must cap its size.
+ */
+export async function apiDownload(
+  path: string,
+  options: Pick<ApiFetchOptions, 'signal'> = {},
+): Promise<Download> {
+  const response = await sendAuthorized(path, options);
+  return {
+    blob: await response.blob(),
+    filename: filenameFrom(response.headers.get('Content-Disposition')),
+  };
+}
+
+function filenameFrom(contentDisposition: string | null): string | null {
+  const match = contentDisposition && /filename="?([^";]+)"?/i.exec(contentDisposition);
+  return match ? match[1] : null;
+}
+
+/**
+ * Sends with the session's token, refreshing once on a 401. Resolves only with a 2xx response;
+ * every other outcome throws, so a caller can never mistake an error body for its result.
+ */
+async function sendAuthorized(path: string, options: ApiFetchOptions): Promise<Response> {
   const response = await send(path, options);
 
   if (response.status === 401 && !options.skipAuthRetry && bridge) {
@@ -88,11 +124,11 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
       throw await toApiError(retry);
     }
     if (!retry.ok) throw await toApiError(retry);
-    return parseOk<T>(retry);
+    return retry;
   }
 
   if (!response.ok) throw await toApiError(response);
-  return parseOk<T>(response);
+  return response;
 }
 
 export { ApiError };

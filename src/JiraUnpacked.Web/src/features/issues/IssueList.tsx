@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { ApiError } from '../../api/errors';
-import { DEFAULT_PAGE_SIZE, exportUrl, queryIssues } from '../../api/issues';
+import { DEFAULT_PAGE_SIZE, exportIssuesCsv, queryIssues } from '../../api/issues';
 import type { FilterCondition, IssueFilterRequest, IssueListItem, PagedResult } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
 import { Button, EmptyState, Spinner, Table, TBody, TD, TH, THead, TR } from '../../ui';
@@ -10,6 +10,7 @@ import { FilterBuilder } from './FilterBuilder';
 import { useListState } from './useListState';
 import { ColumnChooser } from './ColumnChooser';
 import { ISSUE_COLUMNS, ALWAYS_ON } from './columns';
+import { saveBlob } from './saveBlob';
 
 /**
  * A condition the user has started but not finished — a single-value
@@ -83,6 +84,12 @@ export default function IssueList() {
 
   const shown = data ?? lastGoodData;
 
+  const exportCsv = useMutation({
+    mutationFn: () =>
+      exportIssuesCsv(id, { conditions: completeConditions, logic, sortBy, sortDescending, columns }),
+    onSuccess: ({ blob, filename }) => saveBlob(blob, filename ?? 'issues.csv'),
+  });
+
   if (isPending && !shown) {
     return <Spinner aria-label="Loading issues" />;
   }
@@ -111,6 +118,12 @@ export default function IssueList() {
         </p>
       )}
 
+      {exportCsv.error && (
+        <p role="alert" className="text-sm text-[var(--ju-danger)]">
+          {exportCsv.error instanceof ApiError ? exportCsv.error.title : 'Could not export issues.'}
+        </p>
+      )}
+
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1">
           <FilterBuilder
@@ -123,15 +136,13 @@ export default function IssueList() {
         </div>
         <div className="flex items-center gap-2">
           <ColumnChooser selected={columns} onChange={setColumns} />
-          {/* An anchor, not a button calling fetch: the browser streams the download straight to
-              disk, where fetch would buffer the whole file in memory first. */}
-          <a
-            href={exportUrl(id, { conditions: completeConditions, logic, sortBy, sortDescending, columns })}
-            download
-            className="rounded-[var(--ju-radius)] border border-[var(--ju-border)] px-3 py-2 text-sm hover:bg-[var(--ju-surface-2)]"
+          <Button
+            variant="secondary"
+            loading={exportCsv.isPending}
+            onClick={() => exportCsv.mutate()}
           >
             Export CSV
-          </a>
+          </Button>
         </div>
       </div>
 
