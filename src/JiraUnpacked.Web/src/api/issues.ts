@@ -133,3 +133,36 @@ export const getIssueDetail = (projectId: string, jiraIssueId: string) =>
   apiFetch<IssueDetail>(`/api/projects/${projectId}/issues/${encodeURIComponent(jiraIssueId)}`);
 
 export const getFilterCatalog = () => apiFetch<FilterCatalog>('/api/filter-catalog');
+
+/** The values a dictionary field actually takes in this project. 400 for any other field. */
+export const getFilterValues = (projectId: string, field: string) =>
+  apiFetch<{ field: string; values: string[] }>(
+    `/api/projects/${projectId}/filter-values?field=${encodeURIComponent(field)}`);
+
+/**
+ * The CSV download for the view currently on screen.
+ *
+ * A URL rather than a fetch: the browser streams a navigation straight to disk, where apiFetch
+ * would hold the whole file in memory first — the same mistake the server side is avoiding.
+ * It also means the download carries the session cookie without us handling the token.
+ */
+export const exportUrl = (
+  projectId: string,
+  view: {
+    conditions: FilterCondition[];
+    logic: FilterLogic;
+    sortBy: string;
+    sortDescending: boolean;
+    columns: string[];
+  },
+): string => {
+  const params = new URLSearchParams();
+  if (view.conditions.length > 0) {
+    params.set('filter', JSON.stringify(view.conditions));
+    if (view.logic === 'Or') params.set('logic', 'Or');
+  }
+  params.set('sortBy', view.sortBy);
+  params.set('sortDescending', String(view.sortDescending));
+  params.set('cols', view.columns.join(','));
+  return `/api/projects/${projectId}/issues/export.csv?${params.toString()}`;
+};

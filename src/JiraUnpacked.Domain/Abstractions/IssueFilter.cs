@@ -24,5 +24,11 @@ public sealed record FilterGroup(
 /// SPA sends) or a boolean tree under <see cref="Filter"/>. Both populated is an error, not a
 /// merge. Neither populated = unfiltered.
 /// </summary>
+/// <param name="SortBy">
+/// A column from the closed sort catalog. Null means the default (newest updated first). An
+/// unknown name is a 400, never a silent fallback: plausible rows in the wrong order, with
+/// nothing on screen saying so, is worse than an error.
+/// </param>
 public sealed record IssueFilterRequest(
-    List<FilterCondition>? Conditions, FilterGroup? Filter, int Page = 1, int PageSize = 50);
+    List<FilterCondition>? Conditions, FilterGroup? Filter, int Page = 1, int PageSize = 50,
+    string? SortBy = null, bool SortDescending = true);

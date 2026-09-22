@@ -147,8 +147,12 @@ describe('IssueList', () => {
     // the same as a real project the user is filtering for the first time.
     server.use(
       http.post('/api/projects/p1/issues/query', async ({ request }) => {
-        const body = (await request.json()) as { conditions?: unknown[] };
-        if (body.conditions && body.conditions.length > 0) {
+        // Reads either envelope. The SPA sends a `filter` group now that All/Any exists, but the
+        // question this handler asks -- "was this request filtered?" -- is the same either way.
+        const body = (await request.json()) as
+          { conditions?: unknown[]; filter?: { conditions?: unknown[] } };
+        const sent = body.filter?.conditions ?? body.conditions;
+        if (sent && sent.length > 0) {
           return HttpResponse.json({ items: [], page: 1, pageSize: 50, totalCount: 0 });
         }
         // Delayed so the pending/placeholder phase of the unfiltered

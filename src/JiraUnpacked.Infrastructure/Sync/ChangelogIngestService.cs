@@ -25,28 +25,44 @@ public sealed class ChangelogIngestService : IChangelogIngestService
 
     public async Task IngestProjectAsync(
         Guid projectId, JiraCredentials creds,
-        Func<int, int, CancellationToken, Task>? onProgress = null,
+        Guid? afterSnapshotId = null,
+        int alreadyDone = 0,
+        Func<int, int, Guid, CancellationToken, Task>? onBatch = null,
         CancellationToken ct = default)
     {
         // Ids only. Loading the snapshot ENTITIES for a whole project pulls every issue payload
         // into memory at once — hundreds of megabytes on a large project, on top of whatever the
         // extract phase just did — so the payloads are fetched a batch at a time below.
+        //
+        // Ordered, and filtered past the resume point: the cursor is a snapshot Id, so it only
+        // means anything if this walk is in that same order every time.
         var snapshotIds = await _db.RawIssueSnapshots
-            .Where(r => r.JiraProjectId == projectId)
+            .Where(r => r.JiraProjectId == projectId
+                        && (afterSnapshotId == null || r.Id > afterSnapshotId))
+            .OrderBy(r => r.Id)
             .Select(r => r.Id)
             .ToListAsync(ct);
 
-        // Reported before the first batch as well as after each one, so a watcher sees the
-        // denominator immediately rather than a blank bar until the first batch lands — and a
-        // batch here can take a while, because issues with long histories are paged from Jira.
-        if (onProgress is not null) await onProgress(0, snapshotIds.Count, ct);
+        var total = alreadyDone + snapshotIds.Count;
+        var done = alreadyDone;
 
-        var done = 0;
         foreach (var batch in snapshotIds.Chunk(BatchSize))
         {
             await IngestBatchAsync(projectId, batch, creds, ct);
             done += batch.Length;
-            if (onProgress is not null) await onProgress(done, snapshotIds.Count, ct);
+
+            // The cursor advances at the batch's own commit point, which already existed. This
+            // batch is deliberately smaller than the 10,000 used elsewhere: every item here costs
+            // a Jira round trip, so 250 is already seconds of work, and a smaller batch loses less
+            // when a run dies — which is the whole point.
+            if (onBatch is not null) await onBatch(done, total, batch[^1], ct);
+            else await _db.SaveChangesAsync(ct);
+
+            // After the save, never before: detaching first would discard the very rows the save
+            // is meant to write.
+            foreach (var entry in _db.ChangeTracker.Entries().ToList())
+                if (entry.Entity is RawIssueSnapshot or RawChangelog)
+                    entry.State = EntityState.Detached;
         }
     }
 
@@ -86,11 +102,8 @@ public sealed class ChangelogIngestService : IChangelogIngestService
             }
         }
 
-        await _db.SaveChangesAsync(ct);   // one save per batch
-
-        foreach (var entry in _db.ChangeTracker.Entries().ToList())
-            if (entry.Entity is RawIssueSnapshot or RawChangelog)
-                entry.State = EntityState.Detached;
+        // No save here: the caller commits this batch and its cursor in one go, so that a cursor
+        // can never outlive the rows it points past.
     }
 
     // Returns each history entry as a raw JSON string, from the embedded changelog if complete, else by paging.
