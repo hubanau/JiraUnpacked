@@ -22,4 +22,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- The scheduling and watermark rules are pure functions worth pinning directly. -->
+    <InternalsVisibleTo Include="JiraUnpacked.Tests" />
+  </ItemGroup>
+
 </Project>

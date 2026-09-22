@@ -11,12 +11,14 @@ public sealed class AccountDeletionService : IAccountDeletionService
     private readonly AppDbContext _db;
     private readonly ITenantScope _tenantScope;
     private readonly IClock _clock;
+    private readonly ISyncCancellation _syncs;
 
-    public AccountDeletionService(AppDbContext db, ITenantScope tenantScope, IClock clock)
+    public AccountDeletionService(AppDbContext db, ITenantScope tenantScope, IClock clock, ISyncCancellation syncs)
     {
         _db = db;
         _tenantScope = tenantScope;
         _clock = clock;
+        _syncs = syncs;
     }
 
     public async Task<AccountDeletionResult> DeleteAsync(
@@ -36,6 +38,10 @@ public sealed class AccountDeletionService : IAccountDeletionService
         // deleting one is meaningless.
         if (user.Role != UserRole.EndUser)
             return new AccountDeletionResult(AccountDeletionOutcome.NotAnEndUser);
+
+        // Stop anything still syncing for the account first: a run writing rows while the cascade
+        // removes them either fails on a vanished FK or recreates data the user asked to erase.
+        _syncs.CancelAllFor(userId);
 
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
 

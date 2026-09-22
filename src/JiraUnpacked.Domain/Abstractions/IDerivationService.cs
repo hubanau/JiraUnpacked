@@ -25,6 +25,12 @@ public interface IDerivationService
     /// per row, so counting rows across them keeps a single bar moving through the whole phase
     /// instead of stalling at the seam between them.
     /// </param>
+    /// <param name="incrementalSince">
+    /// Null rebuilds everything — a rederive, which exists to apply a changed mapping to every
+    /// issue. Otherwise only issues whose snapshot is newer than their modelled row, and changelogs
+    /// ingested at or after this instant, are rebuilt: a sync that fetched 700 issues must not
+    /// re-parse 92,000.
+    /// </param>
     Task DeriveProjectAsync(
         Guid projectId,
         string? resumeStage = null,
@@ -32,5 +38,6 @@ public interface IDerivationService
         int alreadyDone = 0,
         int batchSize = 10_000,
         Func<string, string, int, int, CancellationToken, Task>? onBatch = null,
+        DateTime? incrementalSince = null,
         CancellationToken ct = default);
 }

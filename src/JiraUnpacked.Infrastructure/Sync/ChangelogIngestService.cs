@@ -36,9 +36,7 @@ public sealed class ChangelogIngestService : IChangelogIngestService
         //
         // Ordered, and filtered past the resume point: the cursor is a snapshot Id, so it only
         // means anything if this walk is in that same order every time.
-        var snapshotIds = await _db.RawIssueSnapshots
-            .Where(r => r.JiraProjectId == projectId
-                        && (afterSnapshotId == null || r.Id > afterSnapshotId))
+        var snapshotIds = await Pending(_db, projectId, afterSnapshotId)
             .OrderBy(r => r.Id)
             .Select(r => r.Id)
             .ToListAsync(ct);
@@ -65,6 +63,26 @@ public sealed class ChangelogIngestService : IChangelogIngestService
                     entry.State = EntityState.Detached;
         }
     }
+
+    /// <summary>
+    /// The snapshots whose changelog is missing or older than the snapshot itself — the only ones
+    /// with anything new to ingest.
+    ///
+    /// This walked EVERY snapshot in the project on every sync, calling Jira again for each issue
+    /// with a long history: a 691-issue incremental sync of a 92,000-issue project took seventy
+    /// minutes, most of it re-reading changelogs nothing had touched. A snapshot is rewritten only
+    /// when it is fetched, so "changelog older than snapshot" is exactly "fetched since last
+    /// ingested" — and it heals by itself: a snapshot a failed run fetched but never ingested
+    /// still qualifies next time, whatever the checkpoints say.
+    ///
+    /// Public so the orchestrator can size its progress bar with the same predicate it will walk.
+    /// </summary>
+    public static IQueryable<RawIssueSnapshot> Pending(AppDbContext db, Guid projectId, Guid? afterSnapshotId = null) =>
+        db.RawIssueSnapshots.Where(r => r.JiraProjectId == projectId
+            && (afterSnapshotId == null || r.Id > afterSnapshotId)
+            && !db.RawChangelogs.Any(c => c.JiraProjectId == projectId
+                                         && c.JiraIssueId == r.JiraIssueId
+                                         && c.FetchedAt > r.FetchedAt));
 
     /// <summary>
     /// One batch, end to end: load the payloads, write their changelogs, save, then let the whole

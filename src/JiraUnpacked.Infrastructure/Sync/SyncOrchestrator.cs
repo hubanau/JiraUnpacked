@@ -11,7 +11,7 @@ using Npgsql;
 
 namespace JiraUnpacked.Infrastructure.Sync;
 
-public sealed class SyncOrchestrator : ISyncOrchestrator
+public sealed partial class SyncOrchestrator : ISyncOrchestrator
 {
     private readonly AppDbContext _db;
     private readonly IJiraApiClient _jira;
@@ -91,7 +91,23 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         if (run is null || run.Status != SyncRunStatus.Running) return null;
 
         var project = await _db.JiraProjects.FirstOrDefaultAsync(p => p.Id == run.JiraProjectId, ct);
-        return project is null ? null : (run, project);
+        if (project is null) return null;
+
+        // A run queued or scheduled before its owner was blocked (or deleted) must not start: a
+        // blocked account "can no longer trigger syncs" (FR-A5), and a queued run is exactly a
+        // sync it triggered. Closed as Cancelled rather than Failed - nothing went wrong.
+        // (A DELETED account needs no check: the cascade already took the project, answered above.)
+        if (await _db.Users.AnyAsync(u => u.Id == run.EndUserId && u.Status != UserStatus.Active, ct))
+        {
+            run.Status = SyncRunStatus.Cancelled;
+            run.Error = "Not started: the account is not active.";
+            run.Phase = null;
+            run.FinishedAt = _clock.UtcNow;
+            await _db.SaveChangesAsync(CancellationToken.None);
+            return null;
+        }
+
+        return (run, project);
     }
 
     public async Task<SyncRunResult> ExecuteProjectAsync(Guid runId, CancellationToken ct = default)
@@ -109,7 +125,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         //
         // Reassigning ct is deliberate: everything below then uses the cancellable token, with no
         // chance of one stray call still holding the original and ignoring a stop.
-        using var registration = _cancellation.Register(run.Id, ct, out var runToken);
+        using var registration = _cancellation.Register(run.Id, run.EndUserId, ct, out var runToken);
+        var hostToken = ct;
         ct = runToken;
 
         var projectId = project.Id;
@@ -149,7 +166,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                             && r.Status == SyncRunStatus.Succeeded
                             && r.Kind == SyncRunKind.Sync
                             && r.ScopeFingerprint == fingerprint)
-                .MaxAsync(r => (DateTime?)r.StartedAt, ct);
+                .MaxAsync(r => r.FetchedAsOf ?? (DateTime?)r.StartedAt, ct);
 
             // Belt and braces for a scope whose data went away underneath it — retention, an
             // erasure, a manual delete. There is then no baseline to be incremental from, whatever
@@ -170,6 +187,9 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             var checkpoint = await FindResumePointAsync(projectId, SyncRunKind.Sync, fingerprint, ct);
             var startStage = ResumeStage.IndexOf(checkpoint?.Stage);
             _committed = (checkpoint?.Stage, checkpoint?.Cursor, checkpoint?.ItemsDone);
+
+            // Whatever this run inherits is only as fresh as the attempt that fetched it.
+            run.FetchedAsOf = checkpoint?.DataAsOf ?? run.StartedAt;
             if (checkpoint is not null)
                 _logger.LogInformation(
                     "Sync {ProjectKey}: resuming at stage {Stage} with {Done} item(s) already done.",
@@ -181,11 +201,14 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                 project.JiraProjectKey, projectId, queries.Count, wholeProject, fingerprint,
                 watermark?.ToString("o") ?? "none (full pull of this scope)");
 
+            // JQL reads a date literal in the Jira ACCOUNT's time zone, not UTC.
+            var since = watermark is null
+                ? null
+                : JqlSince(watermark.Value, await _jira.GetUserTimeZoneAsync(creds, ct));
+
             // The JQL actually sent, resolved once so the count and the fetch cannot disagree.
             var effective = queries
-                .Select(q => watermark is null
-                    ? q
-                    : $"({q}) AND updated >= \"{watermark.Value:yyyy-MM-dd HH:mm}\"")
+                .Select(q => since is null ? q : $"({q}) AND updated >= \"{since}\"")
                 .ToList();
 
             // A checkpoint past the fetch means a previous attempt already pulled this scope in
@@ -324,6 +347,11 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                     project.JiraProjectKey, jql, fetched, pages);
             }
 
+            // Issues that left the scope - deleted or moved in Jira, or no longer matched by a
+            // narrowed query - would otherwise stay in every report forever.
+            if (!skipFetch)
+                await ReconcileScopeAsync(run, project, creds, queries, fullPull: watermark is null, ct);
+
             // Transform: ingest the full changelog to raw, then derive the modeled tables (Jira-free).
             // Both are phases of their own because they can outlast the fetch on a large project,
             // and a bar that sat at 100% through them would read as a hang.
@@ -339,9 +367,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                 // The denominator is published before the first batch rather than after it: a
                 // batch here can take a while, and a bar with no total reads as a hang.
                 run.PhaseProcessed = changelogDone;
-                run.PhaseTotal = changelogDone + await _db.RawIssueSnapshots
-                    .CountAsync(r => r.JiraProjectId == projectId
-                                     && (afterSnapshot == null || r.Id > afterSnapshot), ct);
+                run.PhaseTotal = changelogDone
+                    + await ChangelogIngestService.Pending(_db, projectId, afterSnapshot).CountAsync(ct);
                 run.LastProgressAt = _clock.UtcNow;
                 await _db.SaveChangesAsync(ct);
 
@@ -369,7 +396,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                     _options.CheckpointBatchSize,
                     async (stage, cursor, d, t, token) =>
                         await SaveCheckpointAsync(run, stage, cursor, d, t, token),
-                    ct);
+                    incrementalSince: run.FetchedAsOf,
+                    ct: ct);
             }
 
             // Counted AFTER derivation, because "raw arrived but nothing was modelled" is a second,
@@ -404,6 +432,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             // Someone pressed stop. Recorded as Cancelled rather than Failed: a deliberate stop is
             // not a fault, and colouring it red would bury the real failures among decisions.
             DiscardPendingChangesExcept(run);
+            RevertCheckpointToLastCommitted(run);   // a save the stop interrupted committed nothing
             run.Status = SyncRunStatus.Cancelled;
             run.Error = "Stopped on request.";
             run.Phase = null;
@@ -420,6 +449,13 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                 "Sync {ProjectKey} ({ProjectId}) stopped on request after {Processed} issue(s).",
                 project.JiraProjectKey, projectId, run.IssuesProcessed);
         }
+        catch (OperationCanceledException) when (hostToken.IsCancellationRequested)
+        {
+            // The process is stopping. Recorded now, checkpoint intact and due at once, so the
+            // next process resumes it immediately instead of waiting hours for the reaper.
+            RecordInterrupted(run);
+            await _db.SaveChangesAsync(CancellationToken.None);
+        }
         catch (Exception ex)
         {
             // The pending changes are WHY we are here. They have to go before the failure can be
@@ -430,8 +466,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             DiscardPendingChangesExcept(run);
             RevertCheckpointToLastCommitted(run);
             SetFailure(run, ex, projectId);
-            run.NextRunAt = _clock.UtcNow.AddMinutes(project.SyncIntervalMinutes);
-            await _db.SaveChangesAsync(ct);
+            run.NextRunAt = _clock.UtcNow + await FailureBackoffAsync(projectId, project.SyncIntervalMinutes);
+
+            // CancellationToken.None: whatever failed, recording it must not be skipped because
+            // the token happens to be tripped too. Saving through a cancelled ct is how a stop
+            // landing mid-request used to leave the run Running for the reaper.
+            await _db.SaveChangesAsync(CancellationToken.None);
         }
 
         return new SyncRunResult(SyncOutcome.Completed, ToView(run));
@@ -452,7 +492,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         //
         // Reassigning ct is deliberate: everything below then uses the cancellable token, with no
         // chance of one stray call still holding the original and ignoring a stop.
-        using var registration = _cancellation.Register(run.Id, ct, out var runToken);
+        using var registration = _cancellation.Register(run.Id, run.EndUserId, ct, out var runToken);
+        var hostToken = ct;
         ct = runToken;
 
         var projectId = project.Id;
@@ -468,12 +509,14 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                 _logger.LogInformation(
                     "Rederive {ProjectKey}: resuming at stage {Stage} with {Done} row(s) already done.",
                     project.JiraProjectKey, rederiveCheckpoint.Value.Stage, rederiveCheckpoint.Value.ItemsDone);
+            // incrementalSince: null - a rederive exists to re-apply a changed mapping to EVERY issue.
             await _derivation.DeriveProjectAsync(
                 projectId, rederiveCheckpoint?.Stage, rederiveCheckpoint?.Cursor,
                 rederiveCheckpoint?.ItemsDone ?? 0, _options.CheckpointBatchSize,
                 async (stage, cursor, d, t, token) =>
                     await SaveCheckpointAsync(run, stage, cursor, d, t, token),
-                ct);
+                incrementalSince: null,
+                ct: ct);
             run.Status = SyncRunStatus.Succeeded; ClearCheckpoint(run); run.Phase = null; run.FinishedAt = _clock.UtcNow;
             await _db.SaveChangesAsync(ct);
 
@@ -482,12 +525,31 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
                 "Rederive {ProjectKey} ({ProjectId}) finished: {Modeled} modelled issue(s).",
                 project.JiraProjectKey, projectId, modeled);
         }
+        catch (OperationCanceledException) when (_cancellation.WasCancelled(run.Id))
+        {
+            // A rederive had no stop handler at all: the cancellation fell into the failure path,
+            // whose save used the cancelled token, threw, and left the run Running.
+            DiscardPendingChangesExcept(run);
+            RevertCheckpointToLastCommitted(run);
+            run.Status = SyncRunStatus.Cancelled;
+            run.Error = "Stopped on request.";
+            run.Phase = null;
+            run.PhaseProcessed = null;
+            run.PhaseTotal = null;
+            run.FinishedAt = _clock.UtcNow;
+            await _db.SaveChangesAsync(CancellationToken.None);
+        }
+        catch (OperationCanceledException) when (hostToken.IsCancellationRequested)
+        {
+            RecordInterrupted(run);
+            await _db.SaveChangesAsync(CancellationToken.None);
+        }
         catch (Exception ex)
         {
             DiscardPendingChangesExcept(run);   // see ExecuteProjectAsync
             RevertCheckpointToLastCommitted(run);
             SetFailure(run, ex, projectId);
-            await _db.SaveChangesAsync(ct);
+            await _db.SaveChangesAsync(CancellationToken.None);
         }
         return new SyncRunResult(SyncOutcome.Completed, ToView(run));
     }
@@ -502,7 +564,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
     /// </summary>
     /// <summary>Where a previous attempt stopped: a stage, a position within it, and how much of
     /// that stage was already done.</summary>
-    private readonly record struct SyncCheckpoint(string Stage, string? Cursor, int ItemsDone);
+    private readonly record struct SyncCheckpoint(string Stage, string? Cursor, int ItemsDone, DateTime DataAsOf);
 
     /// <summary>
     /// Commits a batch: whatever entities the caller has already added or modified, the cursor,
@@ -547,9 +609,20 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         if (fingerprint is not null)
             candidates = candidates.Where(r => r.ScopeFingerprint == fingerprint);
 
+        // Only a checkpoint NEWER than the last success of this kind is still unfinished work.
+        // Nothing clears a failed run's checkpoint once a later run has taken it over, so without
+        // this every run after one resumed success resumed from the same stale point again: a
+        // sync past its fetch never called Jira again, and a rederive re-entered derivation
+        // part-way and left every issue before the cursor on the old mapping.
+        var lastSuccess = await _db.SyncRuns
+            .Where(r => r.JiraProjectId == projectId && r.Kind == kind && r.Status == SyncRunStatus.Succeeded)
+            .MaxAsync(r => (DateTime?)r.StartedAt, ct);
+        if (lastSuccess is not null)
+            candidates = candidates.Where(r => r.StartedAt > lastSuccess);
+
         var prior = await candidates
             .OrderByDescending(r => r.StartedAt)
-            .Select(r => new { r.ResumeStage, r.ResumeCursor, r.ResumeItemsDone })
+            .Select(r => new { r.ResumeStage, r.ResumeCursor, r.ResumeItemsDone, AsOf = r.FetchedAsOf ?? r.StartedAt })
             .FirstOrDefaultAsync(ct);
 
         if (prior?.ResumeStage is null) return null;
@@ -565,7 +638,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
             return null;
         }
 
-        return new SyncCheckpoint(prior.ResumeStage, prior.ResumeCursor, prior.ResumeItemsDone ?? 0);
+        return new SyncCheckpoint(prior.ResumeStage, prior.ResumeCursor, prior.ResumeItemsDone ?? 0, prior.AsOf);
     }
 
     /// <summary>
@@ -615,6 +688,88 @@ public sealed class SyncOrchestrator : ISyncOrchestrator
         run.ResumeStage = null;
         run.ResumeCursor = null;
         run.ResumeItemsDone = null;
+    }
+
+    /// <summary>Allowance for the gap between this clock and Jira's.</summary>
+    internal static readonly TimeSpan ClockSkewMargin = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Used when the account's zone is unknown: the widest offset west of UTC is 12 hours, plus
+    /// daylight saving. Over-fetching re-upserts rows harmlessly; under-fetching loses them.
+    /// </summary>
+    internal static readonly TimeSpan UnknownZoneMargin = TimeSpan.FromHours(14);
+
+    /// <summary>
+    /// The watermark as a JQL literal ("yyyy-MM-dd HH:mm") in the Jira account's own zone.
+    ///
+    /// Jira reads a date literal in the searching user's time zone. The watermark is UTC, so the
+    /// clause used to be hours LATE for any account west of Greenwich and silently skipped every
+    /// issue updated in between. An ambiguous local time (the hour repeated when daylight saving
+    /// ends) is stepped back an hour, and minutes are floored by the format - both err early.
+    /// </summary>
+    internal static string JqlSince(DateTime watermarkUtc, string? timeZoneId)
+    {
+        var floor = DateTime.SpecifyKind(watermarkUtc, DateTimeKind.Utc) - ClockSkewMargin;
+
+        TimeZoneInfo? zone = null;
+        if (!string.IsNullOrWhiteSpace(timeZoneId))
+        {
+            try { zone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId); }
+            catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException) { }
+        }
+
+        if (zone is null)
+        {
+            zone = TimeZoneInfo.Utc;
+            floor -= UnknownZoneMargin;
+        }
+
+        var local = TimeZoneInfo.ConvertTimeFromUtc(floor, zone);
+        if (zone.IsAmbiguousTime(local)) local = local.AddHours(-1);
+        return local.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// How long a failed project waits before the scheduler tries again: 5, 10, 20, 40 minutes,
+    /// doubling per consecutive failure, never longer than its own interval.
+    ///
+    /// Without it the tick retried a failing project every minute - the database shows one
+    /// "Jira is unreachable" row a minute for as long as Jira was down, each costing the account
+    /// rate-limit budget. The count includes the run being recorded, whose row is not yet saved.
+    /// </summary>
+    private async Task<TimeSpan> FailureBackoffAsync(Guid projectId, int intervalMinutes)
+    {
+        var lastSuccess = await _db.SyncRuns
+            .Where(r => r.JiraProjectId == projectId && r.Kind == SyncRunKind.Sync && r.Status == SyncRunStatus.Succeeded)
+            .MaxAsync(r => (DateTime?)r.StartedAt, CancellationToken.None);
+        var priorFailures = await _db.SyncRuns
+            .CountAsync(r => r.JiraProjectId == projectId && r.Kind == SyncRunKind.Sync
+                             && r.Status == SyncRunStatus.Failed
+                             && (lastSuccess == null || r.StartedAt > lastSuccess), CancellationToken.None);
+        return Backoff(priorFailures + 1, intervalMinutes);
+    }
+
+    internal static TimeSpan Backoff(int consecutiveFailures, int intervalMinutes)
+    {
+        var minutes = 5.0 * Math.Pow(2, Math.Clamp(consecutiveFailures - 1, 0, 20));
+        return TimeSpan.FromMinutes(Math.Min(minutes, Math.Max(intervalMinutes, 5)));
+    }
+
+    /// <summary>
+    /// The process stopped under the run. Failed, so nothing reads it as current; its committed
+    /// checkpoint kept, so the next process resumes rather than restarts; and due immediately.
+    /// </summary>
+    private void RecordInterrupted(SyncRun run)
+    {
+        DiscardPendingChangesExcept(run);
+        RevertCheckpointToLastCommitted(run);
+        run.Status = SyncRunStatus.Failed;
+        run.Error = "Interrupted: the service stopped mid-run. The next run resumes where this one left off.";
+        run.Phase = null;
+        run.PhaseProcessed = null;
+        run.PhaseTotal = null;
+        run.FinishedAt = _clock.UtcNow;
+        run.NextRunAt = _clock.UtcNow;
     }
 
     private static string ScopeFingerprint(IEnumerable<string> effectiveJql)
