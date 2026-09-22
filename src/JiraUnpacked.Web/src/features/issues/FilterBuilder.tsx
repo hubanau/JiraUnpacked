@@ -8,6 +8,8 @@ import { ConditionRow } from './ConditionRow';
 import { isDictionaryField } from './filterCatalogHelpers';
 
 interface FilterBuilderProps {
+  /** Needed only to fetch this project's filter values; the builder holds no other project state. */
+  projectId: string;
   conditions: FilterCondition[];
   onChange: (next: FilterCondition[]) => void;
   logic: FilterLogic;
@@ -33,7 +35,7 @@ const NEQ_DICT_NOTE =
  * server's FilterFields.All is the sole authority, so drift between what
  * this UI offers and what the server accepts is impossible, not just tested.
  */
-export function FilterBuilder({ conditions, onChange, logic, onLogicChange }: FilterBuilderProps) {
+export function FilterBuilder({ projectId, conditions, onChange, logic, onLogicChange }: FilterBuilderProps) {
   const { data: catalog, isPending, error } = useQuery({
     queryKey: queryKeys.filterCatalog(),
     queryFn: getFilterCatalog,
@@ -107,6 +109,7 @@ export function FilterBuilder({ conditions, onChange, logic, onLogicChange }: Fi
         <ConditionRow
           key={index}
           index={index}
+          projectId={projectId}
           condition={condition}
           catalog={catalog}
           onChange={(next) => handleRowChange(index, next)}

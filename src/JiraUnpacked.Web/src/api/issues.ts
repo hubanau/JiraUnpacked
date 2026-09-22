@@ -133,3 +133,8 @@ export const getIssueDetail = (projectId: string, jiraIssueId: string) =>
   apiFetch<IssueDetail>(`/api/projects/${projectId}/issues/${encodeURIComponent(jiraIssueId)}`);
 
 export const getFilterCatalog = () => apiFetch<FilterCatalog>('/api/filter-catalog');
+
+/** The values a dictionary field actually takes in this project. 400 for any other field. */
+export const getFilterValues = (projectId: string, field: string) =>
+  apiFetch<{ field: string; values: string[] }>(
+    `/api/projects/${projectId}/filter-values?field=${encodeURIComponent(field)}`);

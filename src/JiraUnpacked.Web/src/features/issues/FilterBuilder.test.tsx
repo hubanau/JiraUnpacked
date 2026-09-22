@@ -105,7 +105,7 @@ describe('FilterBuilder', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <FilterBuilder conditions={[]} onChange={() => {}} logic="And" onLogicChange={() => {}} />
+        <FilterBuilder projectId="p1" conditions={[]} onChange={() => {}} logic="And" onLogicChange={() => {}} />
       </QueryClientProvider>,
     );
 
@@ -123,7 +123,7 @@ describe('FilterBuilder', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <FilterBuilder conditions={[]} onChange={() => {}} logic="And" onLogicChange={() => {}} />
+        <FilterBuilder projectId="p1" conditions={[]} onChange={() => {}} logic="And" onLogicChange={() => {}} />
       </QueryClientProvider>,
     );
 
@@ -263,6 +263,7 @@ describe('FilterBuilder', () => {
     render(
       <QueryClientProvider client={queryClient}>
         <FilterBuilder
+          projectId="p1"
           logic="And"
           onLogicChange={() => {}}
           conditions={Array.from(
@@ -291,7 +292,9 @@ describe('FilterBuilder', () => {
       values: Array.from({ length: CATALOG.maxInValues }, (_, i) => `v${i}`),
     };
     render(
-      <ConditionRow condition={condition} catalog={CATALOG} onChange={() => {}} onRemove={() => {}} index={0} />,
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ConditionRow projectId="p1" condition={condition} catalog={CATALOG} onChange={() => {}} onRemove={() => {}} index={0} />
+      </QueryClientProvider>,
     );
 
     expect(screen.getByRole('button', { name: /add value/i })).toBeDisabled();
@@ -518,5 +521,75 @@ describe('FilterBuilder logic toggle', () => {
 
     await screen.findByRole('button', { name: /add condition/i });
     expect(screen.queryByLabelText(/match/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('value picker', () => {
+  const STATUS_CONDITION = encodeURIComponent('[{"field":"status","op":"Eq","value":"Backlog"}]');
+  const SUMMARY_CONDITION = encodeURIComponent('[{"field":"summary","op":"Contains","value":"login"}]');
+
+  function mockValues(values: string[]) {
+    server.use(http.get('/api/projects/p1/filter-values', () =>
+      HttpResponse.json({ field: 'status', values })));
+  }
+
+  function mockEmptyPage() {
+    server.use(http.post('/api/projects/p1/issues/query', () =>
+      HttpResponse.json({ items: [], page: 1, pageSize: 50, totalCount: 0 })));
+  }
+
+  it('offers the values from this project as a dropdown for a dictionary field', async () => {
+    mockFilterCatalog();
+    mockEmptyPage();
+    mockValues(['Backlog', 'In Progress']);
+
+    renderIssueListAt(`/projects/p1/issues?filter=${STATUS_CONDITION}`);
+
+    // Re-queried inside waitFor: the control is REPLACED when the list arrives, so a node
+    // captured beforehand stays an <input> however long the test waits.
+    await waitFor(() =>
+      expect(screen.getByLabelText(/value for condition 1/i).tagName).toBe('SELECT'));
+    const control = screen.getByLabelText(/value for condition 1/i);
+    expect(within(control).getByRole('option', { name: 'In Progress' })).toBeInTheDocument();
+  });
+
+  it('keeps a free text box for a field that has no value list', async () => {
+    mockFilterCatalog();
+    mockEmptyPage();
+
+    renderIssueListAt(`/projects/p1/issues?filter=${SUMMARY_CONDITION}`);
+
+    const control = await screen.findByLabelText(/value for condition 1/i);
+    expect(control.tagName).toBe('INPUT');
+  });
+
+  it('falls back to the text box when the value list cannot be loaded', async () => {
+    // A broken picker must not make an otherwise working filter unusable: the value can still
+    // be typed, which is exactly what the field did before the picker existed.
+    mockFilterCatalog();
+    mockEmptyPage();
+    server.use(http.get('/api/projects/p1/filter-values', () => new HttpResponse(null, { status: 500 })));
+
+    renderIssueListAt(`/projects/p1/issues?filter=${STATUS_CONDITION}`);
+
+    const control = await screen.findByLabelText(/value for condition 1/i);
+    expect(control.tagName).toBe('INPUT');
+  });
+
+  it('does not ask for a value list when the operator takes no value', async () => {
+    // IsNull needs nothing to compare against; fetching a list for it is a wasted round trip.
+    mockFilterCatalog();
+    mockEmptyPage();
+    let asked = 0;
+    server.use(http.get('/api/projects/p1/filter-values', () => {
+      asked += 1;
+      return HttpResponse.json({ field: 'status', values: ['Backlog'] });
+    }));
+
+    const isNull = encodeURIComponent('[{"field":"status","op":"IsNull"}]');
+    renderIssueListAt(`/projects/p1/issues?filter=${isNull}`);
+
+    await screen.findByLabelText(/field for condition 1/i);
+    expect(asked).toBe(0);
   });
 });

@@ -1,6 +1,9 @@
 import { useState, type ChangeEvent } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import type { FilterCatalog, FilterCondition, FilterOperator } from '../../api/issues';
-import { fieldNames, operatorsFor, resetOperatorIfDisallowed, typeFor } from './filterCatalogHelpers';
+import { getFilterValues } from '../../api/issues';
+import { queryKeys } from '../../api/queryKeys';
+import { fieldNames, isDictionaryField, operatorsFor, resetOperatorIfDisallowed, typeFor } from './filterCatalogHelpers';
 import { Badge, Button, Field, Select } from '../../ui';
 
 const INPUT_CLASS =
@@ -8,6 +11,8 @@ const INPUT_CLASS =
   'focus:outline-none focus:ring-2 focus:ring-[var(--ju-primary)] disabled:cursor-not-allowed disabled:opacity-60';
 
 interface ConditionRowProps {
+  /** Only used to fetch this project's values for the picker. */
+  projectId: string;
   condition: FilterCondition;
   catalog: FilterCatalog;
   onChange: (next: FilterCondition) => void;
@@ -22,7 +27,8 @@ interface ConditionRowProps {
  * in ../../api/issues for why a leftover key of the wrong shape is a runtime
  * 400 that nothing here would otherwise catch.
  */
-export function ConditionRow({ condition, catalog, onChange, onRemove, index }: ConditionRowProps) {
+export function ConditionRow({
+  projectId, condition, catalog, onChange, onRemove, index }: ConditionRowProps) {
   // Draft text for the "In" multi-value editor's add box. Local because it
   // is not part of the submitted condition until "Add value" commits it.
   const [inDraft, setInDraft] = useState('');
@@ -70,6 +76,11 @@ export function ConditionRow({ condition, catalog, onChange, onRemove, index }: 
     onChange({ field: condition.field, op: condition.op, value: event.target.value });
   };
 
+  /** Same write, different element: a <select> is not an <input> as far as the types go. */
+  const handlePickedChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    onChange({ field: condition.field, op: condition.op, value: event.target.value });
+  };
+
   const handleNumberChange = (event: ChangeEvent<HTMLInputElement>) => {
     const raw = event.target.value;
     onChange({ field: condition.field, op: condition.op, value: raw === '' ? '' : Number(raw) });
@@ -91,6 +102,22 @@ export function ConditionRow({ condition, catalog, onChange, onRemove, index }: 
       values: current.filter((_, i) => i !== removeIndex),
     });
   };
+
+  // Only dictionary fields have a value list, and only operators that take a value need one --
+  // IsNull compares against nothing, so fetching for it is a wasted round trip.
+  const wantsValueList = isDictionaryField(catalog, condition.field) && condition.op !== 'IsNull';
+  const valueList = useQuery({
+    queryKey: queryKeys.filterValues(projectId, condition.field),
+    queryFn: () => getFilterValues(projectId, condition.field),
+    enabled: wantsValueList,
+    // A project's set of values changes only when a sync runs.
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // The list is an affordance, not a gate. If it is missing or failed, every control below falls
+  // back to the text box it replaced, which is exactly what the field did before the picker
+  // existed -- a broken picker must not make a working filter unusable.
+  const pickable = wantsValueList && valueList.data ? valueList.data.values : null;
 
   const valueFieldId = `condition-${index}-value`;
   const valueLabel = `Value for condition ${rowNumber}`;
@@ -139,6 +166,23 @@ export function ConditionRow({ condition, catalog, onChange, onRemove, index }: 
             </div>
           )}
         </div>
+      );
+    }
+
+    if (pickable) {
+      return (
+        <Field label={valueLabel} id={valueFieldId}>
+          <Select
+            id={valueFieldId}
+            value={(condition.value as string | undefined) ?? ''}
+            onChange={handlePickedChange}
+          >
+            <option value="">— choose —</option>
+            {pickable.map((v) => (
+              <option key={v} value={v}>{v}</option>
+            ))}
+          </Select>
+        </Field>
       );
     }
 

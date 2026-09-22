@@ -110,6 +110,7 @@ export default function IssueList() {
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1">
           <FilterBuilder
+            projectId={id}
             conditions={conditions}
             onChange={setConditions}
             logic={logic}
