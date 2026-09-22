@@ -7,6 +7,7 @@ import type { FilterCondition, IssueFilterRequest, IssueListItem, PagedResult } 
 import { queryKeys } from '../../api/queryKeys';
 import { Button, EmptyState, Spinner, Table, TBody, TD, TH, THead, TR } from '../../ui';
 import { FilterBuilder } from './FilterBuilder';
+import { useListState } from './useListState';
 
 const EMPTY = '—'; // '—' — never render the string "null" for a nullable field.
 
@@ -30,9 +31,9 @@ export default function IssueList() {
   // covers the type, not a real navigation state.
   const { id = '' } = useParams();
 
-  // IssueList owns this state so EX3's FilterBuilder can drive it via
-  // onChange once it mounts in the slot below.
-  const [conditions, setConditions] = useState<FilterCondition[]>([]);
+  // The view lives in the URL, not in component state: that makes a filtered list shareable as
+  // a link and survives reload and Back, neither of which useState does.
+  const { conditions, setConditions } = useListState();
 
   const [page, setPage] = useState(1);
 
