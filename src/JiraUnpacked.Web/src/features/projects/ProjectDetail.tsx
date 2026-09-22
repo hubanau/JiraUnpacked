@@ -13,6 +13,8 @@ import { QueriesEditor } from '../config/QueriesEditor';
 import { StatusSemanticsEditor } from '../config/StatusSemanticsEditor';
 import { SyncControls } from '../sync/SyncControls';
 import { SyncRunTable } from '../sync/SyncRunTable';
+import { PausedBadge } from './PausedBadge';
+import { DeleteProject, PauseToggle } from './ProjectLifecycle';
 import { SyncIntervalField } from './SyncIntervalField';
 
 type TabKey = 'overview' | 'queries' | 'fields' | 'statuses';
@@ -91,9 +93,14 @@ export default function ProjectDetail() {
         </Link>
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-xl font-medium tracking-tight text-[var(--ju-text)]">{project.jiraProjectKey}</h1>
+            <h1 className="flex items-center gap-2 text-xl font-medium tracking-tight text-[var(--ju-text)]">
+              {project.jiraProjectKey}
+              <PausedBadge project={project} />
+            </h1>
             <p className="text-sm text-[var(--ju-muted)]">
-              Syncs every {project.syncIntervalMinutes} minutes
+              {project.syncPaused
+                ? 'Scheduled sync is paused. Sync now still works.'
+                : `Syncs every ${project.syncIntervalMinutes} minutes`}
             </p>
           </div>
           <div className="flex items-center gap-4">
@@ -136,6 +143,8 @@ export default function ProjectDetail() {
           <Button loading={save.isPending} disabled={tooLow} onClick={() => save.mutate(interval)}>
             Save interval
           </Button>
+          <PauseToggle project={project} />
+          <DeleteProject project={project} />
         </Card>
       </header>
 

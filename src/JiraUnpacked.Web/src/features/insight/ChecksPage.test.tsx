@@ -15,6 +15,7 @@ const DEFAULT_PROJECT: Project = {
   jiraProjectKey: 'ACME',
   jiraProjectId: '10000',
   syncIntervalMinutes: 60,
+  syncPaused: false,
   createdAtUtc: '2026-01-01T00:00:00Z',
 };
 
