@@ -1,4 +1,5 @@
 using JiraUnpacked.Domain.Abstractions;
+using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -30,31 +31,43 @@ public sealed class FilterValueService : IFilterValueService
         // Tenant-scoped existence check FIRST: an unknown or cross-tenant project is a 404
         // whatever the field, so a caller cannot probe field names against someone else's project.
         if (!await _db.JiraProjects.AnyAsync(p => p.Id == projectId, ct))
-            return new FilterValuesResult(null, null);
+            return new FilterValuesResult(null, 0, null);
 
         var issues = _db.Issues.Where(i => i.JiraProjectId == projectId);
 
         // This switch over literal names IS the closed catalog: no caller-supplied string ever
-        // reaches a query. Each arm selects the dictionary rows some issue in this project points
-        // at, which is both the correct answer and an indexed lookup on the FK.
-        IQueryable<string>? names = field switch
+        // reaches a query. Each arm pairs one name per issue that points at a dictionary row (an
+        // inner join on the FK) with the issues that point at nothing.
+        (IQueryable<string> Names, IQueryable<Issue> Empty)? source = field switch
         {
-            "status"    => _db.Statuses.Where(s => issues.Any(i => i.StatusId == s.Id)).Select(s => s.Name),
-            "issueType" => _db.IssueTypes.Where(t => issues.Any(i => i.IssueTypeId == t.Id)).Select(t => t.Name),
-            "priority"  => _db.Priorities.Where(p => issues.Any(i => i.PriorityId == p.Id)).Select(p => p.Name),
-            "assignee"  => _db.JiraUsers.Where(u => issues.Any(i => i.AssigneeId == u.Id)).Select(u => u.DisplayName),
-            "sprint"    => _db.Sprints.Where(sp => issues.Any(i => i.SprintId == sp.Id)).Select(sp => sp.Name),
-            "team"      => _db.Teams.Where(tm => issues.Any(i => i.TeamId == tm.Id)).Select(tm => tm.Name),
+            "status"    => (issues.Join(_db.Statuses,   i => i.StatusId,    d => (Guid?)d.Id, (_, d) => d.Name),        issues.Where(i => i.StatusId == null)),
+            "issueType" => (issues.Join(_db.IssueTypes, i => i.IssueTypeId, d => (Guid?)d.Id, (_, d) => d.Name),        issues.Where(i => i.IssueTypeId == null)),
+            "priority"  => (issues.Join(_db.Priorities, i => i.PriorityId,  d => (Guid?)d.Id, (_, d) => d.Name),        issues.Where(i => i.PriorityId == null)),
+            "assignee"  => (issues.Join(_db.JiraUsers,  i => i.AssigneeId,  d => (Guid?)d.Id, (_, d) => d.DisplayName), issues.Where(i => i.AssigneeId == null)),
+            "sprint"    => (issues.Join(_db.Sprints,    i => i.SprintId,    d => (Guid?)d.Id, (_, d) => d.Name),        issues.Where(i => i.SprintId == null)),
+            "team"      => (issues.Join(_db.Teams,      i => i.TeamId,      d => (Guid?)d.Id, (_, d) => d.Name),        issues.Where(i => i.TeamId == null)),
             _           => null,
         };
 
-        if (names is null)
+        if (source is null)
             return new FilterValuesResult(
-                null,
+                null, 0,
                 $"'{field}' has no value list. Only dictionary fields can be picked from: "
                 + "status, issueType, priority, assignee, sprint, team.");
 
-        var values = await names.Distinct().OrderBy(n => n).Take(MaxValues).ToListAsync(ct);
-        return new FilterValuesResult(values, null);
+        var (names, empty) = source.Value;
+
+        // Grouped by NAME, not by row: the filter resolves names, so two dictionary rows that
+        // share a name are one choice, and its count is their sum.
+        var rows = await names
+            .GroupBy(n => n)
+            .Select(g => new { Name = g.Key, Count = g.Count() })
+            .OrderBy(x => x.Name)
+            .Take(MaxValues)
+            .ToListAsync(ct);
+        var emptyCount = await empty.CountAsync(ct);
+
+        return new FilterValuesResult(
+            rows.Select(r => new FilterValueCount(r.Name, r.Count)).ToList(), emptyCount, null);
     }
 }

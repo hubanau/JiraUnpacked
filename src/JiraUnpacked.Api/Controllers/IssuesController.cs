@@ -58,7 +58,9 @@ public sealed class IssuesController : ControllerBase
         var result = await _filterValues.GetAsync(projectId, field ?? "", ct);
         if (result.Error is not null)
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: result.Error);
-        return result.Values is null ? NotFound() : Ok(new { field, values = result.Values });
+        return result.Values is null
+            ? NotFound()
+            : Ok(new { field, values = result.Values, emptyCount = result.EmptyCount });
     }
 
     /// <summary>Matches the SPA's own filter encoding, including its string enum names.</summary>
