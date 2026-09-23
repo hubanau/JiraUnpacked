@@ -1,7 +1,8 @@
 import { apiDownload, apiFetch, type Download } from './client';
 
 export type FilterOperator =
-  | 'Eq' | 'Neq' | 'In' | 'Lt' | 'Lte' | 'Gt' | 'Gte' | 'Contains' | 'StartsWith' | 'IsNull';
+  | 'Eq' | 'Neq' | 'In' | 'NotIn' | 'Lt' | 'Lte' | 'Gt' | 'Gte'
+  | 'Contains' | 'NotContains' | 'StartsWith' | 'IsNull' | 'IsNotNull';
 
 export type FieldType = 'DictName' | 'Decimal' | 'DateTime' | 'Text' | 'ParentRef';
 
@@ -23,13 +24,7 @@ export interface FilterCatalog {
   fields: FilterFieldInfo[];
   maxConditions: number;
   maxInValues: number;
-  /**
-   * Guards on the boolean-group shape (`filter`). The builder below sends flat
-   * `conditions`, which the server still accepts unchanged, so nothing here is
-   * read yet — they are typed so a future tree editor sizes itself from the
-   * server rather than re-introducing the hand-maintained mirror this endpoint
-   * exists to have deleted.
-   */
+  /** Guards on the boolean-group shape; the tree editor sizes itself from these. */
   maxGroups: number;
   maxDepth: number;
 }
@@ -39,27 +34,31 @@ export type FilterLogic = 'And' | 'Or';
 
 /**
  * Mirrors the API's FilterCondition. `value` and `values` are mutually
- * exclusive: single-value operators send `value`, `In` sends `values`, and
- * `IsNull` sends neither. Sending the wrong one is accepted by TypeScript
- * and rejected by the server at runtime, so the builder must get it right.
+ * exclusive: single-value operators send `value`, `In`/`NotIn` send `values`,
+ * and `IsNull`/`IsNotNull` send neither. Inside `values`, `null` is (Empty).
+ * A `value` of null exists only in the editor (Eq/Neq on (Empty)); pruneTree
+ * turns it into IsNull/IsNotNull before anything is sent. `disabled` parts are
+ * kept in the URL and skipped by the server.
  */
 export interface FilterCondition {
   field: string;
   op: FilterOperator;
-  value?: string | number;
-  values?: (string | number)[];
+  value?: string | number | null;
+  values?: (string | number | null)[];
+  disabled?: boolean;
 }
 
 /**
  * A boolean group, sent as `filter` instead of `conditions` (never both — the
- * server returns 400 rather than merging them). A group must contain at least
- * one part: an empty And matches everything and an empty Or matches nothing,
- * so the server refuses both rather than guessing.
+ * server returns 400 rather than merging them). A group must be written with
+ * at least one part; parts switched off with `disabled` are skipped, and a
+ * group whose every part is off is treated as absent.
  */
 export interface FilterGroup {
   logic: FilterLogic;
   conditions?: FilterCondition[];
   groups?: FilterGroup[];
+  disabled?: boolean;
 }
 
 /** `conditions` (flat AND) or `filter` (boolean tree) — never both. */
@@ -134,14 +133,27 @@ export const getIssueDetail = (projectId: string, jiraIssueId: string) =>
 
 export const getFilterCatalog = () => apiFetch<FilterCatalog>('/api/filter-catalog');
 
-/** The values a dictionary field actually takes in this project. 400 for any other field. */
+export interface FilterValueOption {
+  name: string;
+  /** Issues in this project carrying the value — over the whole project, not the current filter. */
+  count: number;
+}
+
+export interface FilterValues {
+  field: string;
+  values: FilterValueOption[];
+  /** Issues in this project with no value for the field: the count behind (Empty). */
+  emptyCount: number;
+}
+
+/** The values a dictionary field actually takes in this project, with counts. 400 for any other field. */
 export const getFilterValues = (projectId: string, field: string) =>
-  apiFetch<{ field: string; values: string[] }>(
+  apiFetch<FilterValues>(
     `/api/projects/${projectId}/filter-values?field=${encodeURIComponent(field)}`);
 
 export interface ExportView {
-  conditions: FilterCondition[];
-  logic: FilterLogic;
+  /** The pruned tree the list was queried with; undefined = no filter. */
+  filter?: FilterGroup;
   sortBy: string;
   sortDescending: boolean;
   columns: string[];
@@ -150,14 +162,12 @@ export interface ExportView {
 /**
  * The CSV of the view currently on screen. Fetched with the session rather than linked to — see
  * apiDownload for why a link cannot work. The server caps the export's size, which is what makes
- * holding it in memory acceptable.
+ * holding it in memory acceptable. `filter` is always the tree: the server reads a JSON object as
+ * a FilterGroup with its own logic, so no `logic` param is sent.
  */
 export const exportIssuesCsv = (projectId: string, view: ExportView): Promise<Download> => {
   const params = new URLSearchParams();
-  if (view.conditions.length > 0) {
-    params.set('filter', JSON.stringify(view.conditions));
-    if (view.logic === 'Or') params.set('logic', 'Or');
-  }
+  if (view.filter) params.set('filter', JSON.stringify(view.filter));
   params.set('sortBy', view.sortBy);
   params.set('sortDescending', String(view.sortDescending));
   params.set('cols', view.columns.join(','));

@@ -1,50 +1,37 @@
 import { useQuery } from '@tanstack/react-query';
-import type { FilterCondition, FilterLogic } from '../../api/issues';
 import { getFilterCatalog } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
 import { ApiError } from '../../api/errors';
-import { Button, ErrorState, Field, Select, Spinner } from '../../ui';
-import { ConditionRow } from './ConditionRow';
-import { isDictionaryField } from './filterCatalogHelpers';
+import { Button, ErrorState, Spinner } from '../../ui';
+import { GroupEditor } from './GroupEditor';
+import { blankCondition, blankGroup, countEnabled, emptyRoot, isEmptyTree, type EditorGroup } from './filterTree';
+
+/**
+ * The server's filter-field allow-list and guards. Static and tenant-independent, hence
+ * `staleTime: Infinity`: fetched once per page load and shared through the query cache by every
+ * caller (FilterBuilder renders from it; IssueList prunes retired fields with it).
+ */
+export function useFilterCatalog() {
+  return useQuery({
+    queryKey: queryKeys.filterCatalog(),
+    queryFn: getFilterCatalog,
+    staleTime: Infinity,
+  });
+}
 
 interface FilterBuilderProps {
   /** Needed only to fetch this project's filter values; the builder holds no other project state. */
   projectId: string;
-  conditions: FilterCondition[];
-  onChange: (next: FilterCondition[]) => void;
-  logic: FilterLogic;
-  onLogicChange: (next: FilterLogic) => void;
+  tree: EditorGroup;
+  onChange: (next: EditorGroup) => void;
 }
 
 /**
- * FR-E4 defines `Neq` on a dictionary field to also match issues where the
- * field is empty (`status != Done` includes issues with no status). That
- * reading is deliberate but not the only plausible one, so the UI states it
- * rather than letting a user infer the wrong thing from silence (Spec §4).
+ * Holds no state of its own — every change flows up through `onChange`, so the caller
+ * (IssueList, via the URL) is the single owner of the tree that drives its query.
  */
-const NEQ_DICT_NOTE =
-  "Neq on status, type, priority, assignee, sprint, or team also matches issues where the field is empty.";
-
-/**
- * Holds no server state of its own — every change flows up through
- * `onChange` so the caller (IssueList) remains the single owner of the
- * conditions that drive its query.
- *
- * The field/operator/type allow-list is fetched from GET /api/filter-catalog
- * rather than mirrored client-side (see filterCatalogHelpers.ts) — the
- * server's FilterFields.All is the sole authority, so drift between what
- * this UI offers and what the server accepts is impossible, not just tested.
- */
-export function FilterBuilder({ projectId, conditions, onChange, logic, onLogicChange }: FilterBuilderProps) {
-  const { data: catalog, isPending, error } = useQuery({
-    queryKey: queryKeys.filterCatalog(),
-    queryFn: getFilterCatalog,
-    // The catalog is static and tenant-independent (see issues.ts) — without
-    // this, the default staleTime of 0 refetches it on every IssueList
-    // mount, which is pure waste for data that cannot change during a
-    // session.
-    staleTime: Infinity,
-  });
+export function FilterBuilder({ projectId, tree, onChange }: FilterBuilderProps) {
+  const { data: catalog, isPending, error } = useFilterCatalog();
 
   if (isPending) return <Spinner aria-label="Loading filter catalog" />;
   if (error) {
@@ -55,84 +42,48 @@ export function FilterBuilder({ projectId, conditions, onChange, logic, onLogicC
     );
   }
 
-  const atConditionLimit = conditions.length >= catalog.maxConditions;
-
-  const handleAdd = () => {
-    if (atConditionLimit) return;
-    onChange([...conditions, { field: 'status', op: 'Eq', value: '' }]);
-  };
-
-  const handleRowChange = (index: number, next: FilterCondition) => {
-    onChange(conditions.map((c, i) => (i === index ? next : c)));
-  };
-
-  const handleRemove = (index: number) => {
-    onChange(conditions.filter((_, i) => i !== index));
-  };
-
-  const handleClearAll = () => onChange([]);
-
-  if (conditions.length === 0) {
+  if (isEmptyTree(tree)) {
     return (
       <div className="flex items-center justify-between gap-4">
         <p className="text-sm text-[var(--ju-muted)]">No filter — showing all issues</p>
-        <Button type="button" variant="secondary" onClick={handleAdd} disabled={atConditionLimit}>
-          Add condition
-        </Button>
+        <div className="flex gap-2">
+          <Button type="button" variant="secondary" onClick={() => onChange({ ...emptyRoot(), conditions: [blankCondition()] })}>
+            Add condition
+          </Button>
+          {catalog.maxDepth > 1 && (
+            <Button type="button" variant="secondary" onClick={() => onChange({ ...emptyRoot(), groups: [blankGroup()] })}>
+              Add group
+            </Button>
+          )}
+        </div>
       </div>
     );
   }
 
-  const showsNeqDictNote = conditions.some((c) => c.op === 'Neq' && isDictionaryField(catalog, c.field));
+  const counts = countEnabled(tree);
 
   return (
     <div className="flex flex-col gap-3">
-      {/* From the FIRST condition rather than the second: appearing only once a second row is
-          added would make the control pop in and out while the filter is being built. */}
-      <Field
-        label="Match"
-        id="filter-logic"
-        hint="All: every condition must hold. Any: at least one."
-      >
-        <Select
-          id="filter-logic"
-          value={logic}
-          onChange={(e) => onLogicChange(e.target.value as FilterLogic)}
-        >
-          <option value="And">All conditions</option>
-          {/* The label is prose; the value is the wire format the server expects. */}
-          <option value="Or">Any condition</option>
-        </Select>
-      </Field>
-
-      {conditions.map((condition, index) => (
-        <ConditionRow
-          key={index}
-          index={index}
-          projectId={projectId}
-          condition={condition}
-          catalog={catalog}
-          onChange={(next) => handleRowChange(index, next)}
-          onRemove={() => handleRemove(index)}
-        />
-      ))}
-
-      <div className="flex items-center gap-2">
-        <Button type="button" variant="secondary" onClick={handleAdd} disabled={atConditionLimit}>
-          Add condition
-        </Button>
-        <Button type="button" variant="secondary" onClick={handleClearAll}>
+      <GroupEditor
+        group={tree}
+        onChange={onChange}
+        catalog={catalog}
+        projectId={projectId}
+        counts={counts}
+        depth={1}
+        label=""
+      />
+      <div>
+        <Button type="button" variant="secondary" size="sm" onClick={() => onChange(emptyRoot())}>
           Clear all
         </Button>
       </div>
-
-      {atConditionLimit && (
-        <p className="text-xs text-[var(--ju-muted)]">
-          You can add at most {catalog.maxConditions} conditions.
-        </p>
+      {counts.conditions >= catalog.maxConditions && (
+        <p className="text-xs text-[var(--ju-muted)]">You can add at most {catalog.maxConditions} conditions.</p>
       )}
-
-      {showsNeqDictNote && <p className="text-xs text-[var(--ju-muted)]">{NEQ_DICT_NOTE}</p>}
+      {counts.groups >= catalog.maxGroups && (
+        <p className="text-xs text-[var(--ju-muted)]">You can add at most {catalog.maxGroups} groups.</p>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { delay, http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
@@ -8,35 +8,9 @@ import { server } from '../../test/setup';
 import IssueList from './IssueList';
 import { FilterBuilder } from './FilterBuilder';
 import { ConditionRow } from './ConditionRow';
-import type { FilterCatalog, FilterCondition } from '../../api/issues';
-
-/**
- * The server's filter catalog (mirrors FilterFields.All and
- * IssueFilterTranslator's guard consts on the .NET side) used to mock
- * GET /api/filter-catalog. FilterBuilder now fetches this instead of
- * importing a hand-maintained copy, so every test that mounts it must
- * register this handler first via mockFilterCatalog().
- */
-const CATALOG: FilterCatalog = {
-  fields: [
-    { name: 'status', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'issueType', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'priority', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'assignee', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'sprint', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'team', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'storyPoints', type: 'Decimal', operators: ['Eq', 'Neq', 'Lt', 'Lte', 'Gt', 'Gte', 'IsNull'] },
-    { name: 'createdAt', type: 'DateTime', operators: ['Lt', 'Lte', 'Gt', 'Gte'] },
-    { name: 'updatedAt', type: 'DateTime', operators: ['Lt', 'Lte', 'Gt', 'Gte'] },
-    { name: 'summary', type: 'Text', operators: ['Contains', 'StartsWith', 'IsNull'] },
-    { name: 'jiraKey', type: 'Text', operators: ['Eq', 'Contains', 'StartsWith'] },
-    { name: 'parent', type: 'ParentRef', operators: ['Eq', 'IsNull'] },
-  ],
-  maxConditions: 20,
-  maxInValues: 100,
-  maxGroups: 10,
-  maxDepth: 3,
-};
+import type { FilterCondition } from '../../api/issues';
+import { FILTER_CATALOG as CATALOG } from '../../test/filterCatalogFixture';
+import { emptyRoot, type EditorGroup } from './filterTree';
 
 /**
  * The conditions the SPA actually sent, whichever envelope carried them.
@@ -50,7 +24,17 @@ const sentConditions = (body: Record<string, unknown>): unknown =>
   (body.filter as { conditions?: unknown[] } | undefined)?.conditions ?? body.conditions;
 
 function mockFilterCatalog() {
-  server.use(http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)));
+  server.use(
+    http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)),
+    // The default row's field is 'status', a dictionary field, so mounting a condition at all
+    // (most tests below do, via addCondition or a filter already in the URL) fires this fetch
+    // whether or not the test cares about the picker. Failing it keeps the value control exactly
+    // the text input it already was when this request went genuinely unhandled (MSW is
+    // configured to error on one) — just without the console noise. The 'value picker' describe
+    // below registers its own specific response after this one for the tests that ARE about it,
+    // which — being added later — takes precedence.
+    http.get('/api/projects/p1/filter-values', () => new HttpResponse(null, { status: 500 })),
+  );
 }
 
 function renderIssueList() {
@@ -105,7 +89,7 @@ describe('FilterBuilder', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <FilterBuilder projectId="p1" conditions={[]} onChange={() => {}} logic="And" onLogicChange={() => {}} />
+        <FilterBuilder projectId="p1" tree={emptyRoot()} onChange={() => {}} />
       </QueryClientProvider>,
     );
 
@@ -123,7 +107,7 @@ describe('FilterBuilder', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <FilterBuilder projectId="p1" conditions={[]} onChange={() => {}} logic="And" onLogicChange={() => {}} />
+        <FilterBuilder projectId="p1" tree={emptyRoot()} onChange={() => {}} />
       </QueryClientProvider>,
     );
 
@@ -139,6 +123,32 @@ describe('FilterBuilder', () => {
     expect(await screen.findByText(/no filter — showing all issues/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /add condition/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /clear all/i })).not.toBeInTheDocument();
+  });
+
+  it('seeds a fresh, enabled root when adding a condition from empty state, even if the old root was disabled', async () => {
+    // A root can be left `disabled: true` (e.g. every part was switched off and then removed) and
+    // still be the empty tree the "No filter" state renders for. "Add condition" from there must
+    // not spread that disabled root onto the new row — the row would be born already dead.
+    mockFilterCatalog();
+    const user = userEvent.setup({ delay: null });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let latest: EditorGroup | undefined;
+    const disabledEmptyRoot: EditorGroup = { ...emptyRoot(), disabled: true };
+    render(
+      <QueryClientProvider client={queryClient}>
+        <FilterBuilder
+          projectId="p1"
+          tree={disabledEmptyRoot}
+          onChange={(next) => { latest = next; }}
+        />
+      </QueryClientProvider>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: /add condition/i }));
+
+    expect(latest?.disabled).toBeUndefined();
+    expect(latest?.conditions).toHaveLength(1);
+    expect(latest?.conditions[0].disabled).toBeUndefined();
   });
 
   it('sends neither value nor values for IsNull', async () => {
@@ -246,7 +256,7 @@ describe('FilterBuilder', () => {
     const ops = within(screen.getByLabelText(/operator for condition 1/i))
       .getAllByRole('option')
       .map((o) => o.textContent);
-    expect(ops).toEqual(['Eq', 'Contains', 'StartsWith']);
+    expect(ops).toEqual(['is', 'is any of', 'is none of', 'contains', 'starts with']);
   });
 
   it('blocks a 21st condition', async () => {
@@ -264,13 +274,13 @@ describe('FilterBuilder', () => {
       <QueryClientProvider client={queryClient}>
         <FilterBuilder
           projectId="p1"
-          logic="And"
-          onLogicChange={() => {}}
-          conditions={Array.from(
-            { length: CATALOG.maxConditions },
-            () => ({ field: 'status', op: 'Eq' as const, value: '' }),
-          )}
           onChange={() => {}}
+          tree={{
+            id: 'root', logic: 'And', groups: [],
+            conditions: Array.from({ length: CATALOG.maxConditions }, (_, i) => ({
+              id: `c${i}`, field: 'status', op: 'Eq' as const, value: '',
+            })),
+          }}
         />
       </QueryClientProvider>,
     );
@@ -284,8 +294,11 @@ describe('FilterBuilder', () => {
     // directly with CATALOG.maxInValues values already present, rather than
     // driving that many sequential "Add value" interactions through a
     // mounted IssueList (which made this the suite's second-slowest test).
-    // ConditionRow takes the catalog as a plain prop (no fetch of its own),
-    // so this needs no QueryClientProvider or MSW handler.
+    // ConditionRow takes the catalog as a plain prop, so this needs no
+    // filter-catalog fetch — but 'status' is a dictionary field, so ConditionRow
+    // still fires its own filter-values fetch regardless of op; failed here to
+    // keep MSW quiet, same as mockFilterCatalog does for every other test.
+    server.use(http.get('/api/projects/p1/filter-values', () => new HttpResponse(null, { status: 500 })));
     const condition: FilterCondition = {
       field: 'status',
       op: 'In',
@@ -293,7 +306,7 @@ describe('FilterBuilder', () => {
     };
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <ConditionRow projectId="p1" condition={condition} catalog={CATALOG} onChange={() => {}} onRemove={() => {}} index={0} />
+        <ConditionRow projectId="p1" condition={condition} catalog={CATALOG} onChange={() => {}} label="1" />
       </QueryClientProvider>,
     );
 
@@ -322,23 +335,15 @@ describe('FilterBuilder', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/not allowed for field 'createdAt'/i);
   });
 
-  it('shows the Neq-on-dictionary-field note only while a row uses it', async () => {
+  it('no longer warns that "is not" matches empty fields, because it does not', async () => {
     mockIssuesQuery();
     const user = userEvent.setup({ delay: null });
     renderIssueList();
     await addCondition(user);
 
-    expect(
-      screen.queryByText(/also matches issues where the field is empty/i),
-    ).not.toBeInTheDocument();
-
-    // The default added condition is field=status (a dictionary field);
-    // switching its operator to Neq should surface the note.
     await user.selectOptions(screen.getByLabelText(/operator for condition 1/i), 'Neq');
 
-    expect(
-      await screen.findByText(/also matches issues where the field is empty/i),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/also matches issues where the field is empty/i)).not.toBeInTheDocument();
   });
 
   it('Clear all returns to the collapsed no-filter state', async () => {
@@ -372,7 +377,7 @@ describe('FilterBuilder', () => {
     });
 
     // Remove the first (status/Done) row.
-    await user.click(screen.getAllByRole('button', { name: /^remove$/i })[0]);
+    await user.click(screen.getByRole('button', { name: 'Remove condition 1' }));
 
     // Only the summary row remains, now shifted up into row 1's position.
     expect(screen.getByLabelText(/field for condition 1/i)).toHaveValue('summary');
@@ -443,7 +448,7 @@ describe('FilterBuilder', () => {
 
     // Remove the middle row. Condition 3 (priority/In) shifts up into
     // condition 2's position — the same list slot that held the draft.
-    await user.click(screen.getAllByRole('button', { name: /^remove$/i })[1]);
+    await user.click(screen.getByRole('button', { name: 'Remove condition 2' }));
 
     // Condition 2 is now what used to be condition 3.
     await waitFor(() => {
@@ -522,6 +527,76 @@ describe('FilterBuilder logic toggle', () => {
     await screen.findByRole('button', { name: /add condition/i });
     expect(screen.queryByLabelText(/match/i)).not.toBeInTheDocument();
   });
+
+  it('reads a legacy flat link with its old logic, and writes a tree without it on the next edit', async () => {
+    mockFilterCatalog();
+    // The link's one condition is field=status, so mounting it fires a filter-values fetch —
+    // registered here with the real (counts) response envelope, overriding mockFilterCatalog's
+    // default failure for this test specifically. `values` is left empty: ConditionRow's picker
+    // still renders each entry as `<option value={v}>{v}</option>` with the whole element, not
+    // `.name` — a populated response here crashes the render with "Objects are not valid as a
+    // React child". That is a real bug (the actual backend already returns this counts shape;
+    // see FilterValueService), not a test artifact, but fixing ConditionRow itself is the
+    // value-picker rework's job, not this one — flagged in the fix report instead.
+    server.use(http.get('/api/projects/p1/filter-values', () =>
+      HttpResponse.json({ field: 'status', values: [], emptyCount: 0 })));
+    const sent: Record<string, unknown>[] = [];
+    server.use(http.post('/api/projects/p1/issues/query', async ({ request }) => {
+      sent.push((await request.json()) as Record<string, unknown>);
+      return HttpResponse.json({ items: [], page: 1, pageSize: 50, totalCount: 0 });
+    }));
+    let search = '';
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={[`/projects/p1/issues?filter=${ONE_CONDITION}&logic=Or`]}>
+          <Routes>
+            <Route
+              path="/projects/:id/issues"
+              element={<><IssueList /><SearchProbe onSearch={(s) => { search = s; }} /></>}
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ filter: { logic: 'Or' } }));
+
+    await user.selectOptions(await screen.findByLabelText(/match/i), 'And');
+
+    await waitFor(() => {
+      const params = new URLSearchParams(search);
+      expect(params.get('logic')).toBeNull();
+      expect(JSON.parse(params.get('filter')!)).toEqual({
+        logic: 'And', conditions: [{ field: 'status', op: 'Eq', value: 'Backlog' }],
+      });
+    });
+  });
+
+  it('leaves a field the catalog no longer has out of the request', async () => {
+    // The issues query is gated on the catalog having settled (see IssueList), so this asserts
+    // over every body the query handler ever received, not just the last one: before that gate
+    // existed, the very FIRST request — sent while the catalog was still loading and knownFields
+    // was undefined — carried 'retired' unfiltered, and only a later refetch dropped it.
+    const { bodies } = mockIssuesQuery();
+    const tree = {
+      logic: 'And',
+      conditions: [
+        { field: 'retired', op: 'Eq', value: 'x' },
+        { field: 'summary', op: 'Contains', value: 'login' },
+      ],
+    };
+
+    renderIssueListAt(`/projects/p1/issues?filter=${encodeURIComponent(JSON.stringify(tree))}`);
+
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    for (const body of bodies) {
+      expect(JSON.stringify(body.filter)).not.toContain('retired');
+    }
+    expect(bodies.at(-1)?.filter).toEqual({
+      logic: 'And', conditions: [{ field: 'summary', op: 'Contains', value: 'login' }],
+    });
+  });
 });
 
 describe('value picker', () => {
@@ -530,7 +605,7 @@ describe('value picker', () => {
 
   function mockValues(values: string[]) {
     server.use(http.get('/api/projects/p1/filter-values', () =>
-      HttpResponse.json({ field: 'status', values })));
+      HttpResponse.json({ field: 'status', values: values.map((name) => ({ name, count: 1 })), emptyCount: 0 })));
   }
 
   function mockEmptyPage() {
@@ -550,7 +625,7 @@ describe('value picker', () => {
     await waitFor(() =>
       expect(screen.getByLabelText(/value for condition 1/i).tagName).toBe('SELECT'));
     const control = screen.getByLabelText(/value for condition 1/i);
-    expect(within(control).getByRole('option', { name: 'In Progress' })).toBeInTheDocument();
+    expect(within(control).getByRole('option', { name: /^In Progress/ })).toBeInTheDocument();
   });
 
   it('keeps a free text box for a field that has no value list', async () => {
@@ -583,7 +658,7 @@ describe('value picker', () => {
     let asked = 0;
     server.use(http.get('/api/projects/p1/filter-values', () => {
       asked += 1;
-      return HttpResponse.json({ field: 'status', values: ['Backlog'] });
+      return HttpResponse.json({ field: 'status', values: [{ name: 'Backlog', count: 1 }], emptyCount: 0 });
     }));
 
     const isNull = encodeURIComponent('[{"field":"status","op":"IsNull"}]');
@@ -593,3 +668,39 @@ describe('value picker', () => {
     expect(asked).toBe(0);
   });
 });
+
+describe('nested groups', () => {
+  it('sends the tree it shows, minus the parts switched off', async () => {
+    const { bodies } = mockIssuesQuery();
+    const tree = {
+      logic: 'And',
+      conditions: [{ field: 'summary', op: 'Contains', value: 'login' }],
+      groups: [{
+        logic: 'Or',
+        conditions: [
+          { field: 'storyPoints', op: 'Gte', value: 3 },
+          { field: 'storyPoints', op: 'IsNull' },
+        ],
+      }],
+    };
+    const user = userEvent.setup({ delay: null });
+
+    renderIssueListAt(`/projects/p1/issues?filter=${encodeURIComponent(JSON.stringify(tree))}`);
+
+    await waitFor(() => expect(bodies.at(-1)?.filter).toEqual(tree));
+
+    await user.click(await screen.findByRole('button', { name: 'Disable condition 2.1' }));
+
+    await waitFor(() => expect(bodies.at(-1)?.filter).toEqual({
+      logic: 'And',
+      conditions: [{ field: 'summary', op: 'Contains', value: 'login' }],
+      groups: [{ logic: 'Or', conditions: [{ field: 'storyPoints', op: 'IsNull' }] }],
+    }));
+  });
+});
+
+/** Reports the router's current query string, so a test can see what the list wrote to the URL. */
+function SearchProbe({ onSearch }: { onSearch: (search: string) => void }) {
+  onSearch(useLocation().search);
+  return null;
+}

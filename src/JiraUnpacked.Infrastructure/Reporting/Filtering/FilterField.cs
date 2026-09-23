@@ -30,24 +30,27 @@ internal static class FilterFields
             ["team"]       = Dict("team",       (Issue i) => i.TeamId),
             ["storyPoints"]= new("storyPoints", FieldType.Decimal,
                                  Ops(FilterOperator.Eq, FilterOperator.Neq, FilterOperator.Lt, FilterOperator.Lte,
-                                     FilterOperator.Gt, FilterOperator.Gte, FilterOperator.IsNull),
+                                     FilterOperator.Gt, FilterOperator.Gte, FilterOperator.IsNull, FilterOperator.IsNotNull),
                                  (Expression<Func<Issue, decimal?>>)(i => i.StoryPoints)),
             ["createdAt"]  = Date("createdAt",  (Issue i) => i.JiraCreatedAt),
             ["updatedAt"]  = Date("updatedAt",  (Issue i) => i.JiraUpdatedAt),
             ["summary"]    = new("summary", FieldType.Text,
-                                 Ops(FilterOperator.Contains, FilterOperator.StartsWith, FilterOperator.IsNull),
+                                 Ops(FilterOperator.Contains, FilterOperator.NotContains, FilterOperator.StartsWith,
+                                     FilterOperator.IsNull, FilterOperator.IsNotNull),
                                  (Expression<Func<Issue, string?>>)(i => i.Summary)),
             ["jiraKey"]    = new("jiraKey", FieldType.Text,
-                                 Ops(FilterOperator.Eq, FilterOperator.Contains, FilterOperator.StartsWith),
+                                 Ops(FilterOperator.Eq, FilterOperator.In, FilterOperator.NotIn,
+                                     FilterOperator.Contains, FilterOperator.StartsWith),
                                  (Expression<Func<Issue, string?>>)(i => i.JiraKey)),
             ["parent"]     = new("parent", FieldType.ParentRef,
-                                 Ops(FilterOperator.Eq, FilterOperator.IsNull),
+                                 Ops(FilterOperator.Eq, FilterOperator.IsNull, FilterOperator.IsNotNull),
                                  (Expression<Func<Issue, string?>>)(i => i.ParentJiraIssueId)),
         };
 
     private static FilterField Dict(string name, Expression<Func<Issue, Guid?>> sel) =>
         new(name, FieldType.DictName,
-            Ops(FilterOperator.Eq, FilterOperator.Neq, FilterOperator.In, FilterOperator.IsNull), sel);
+            Ops(FilterOperator.Eq, FilterOperator.Neq, FilterOperator.In, FilterOperator.NotIn,
+                FilterOperator.IsNull, FilterOperator.IsNotNull), sel);
 
     private static FilterField Date(string name, Expression<Func<Issue, DateTime>> sel) =>
         new(name, FieldType.DateTime,

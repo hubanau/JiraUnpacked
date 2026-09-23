@@ -343,4 +343,41 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
         cmd.Parameters.AddWithValue("id", created.Id);
         Assert.Equal(0L, (long)(await cmd.ExecuteScalarAsync())!);
     }
+
+    [Fact]
+    public async Task Disabled_parts_are_saved_unvalidated_and_come_back_disabled()
+    {
+        var (client, projectId) = await SeedAsync();
+
+        // The switched-off row names a field that does not exist. Validating it would make it
+        // impossible to save a view with a broken row turned off — sub-project 2 depends on this.
+        var created = await CreateOkAsync(client, projectId, new
+        {
+            name = "Partly off",
+            filter = new
+            {
+                logic = "And",
+                conditions = new object[]
+                {
+                    new { field = "status", op = "Eq", value = "Done" },
+                    new { field = "nope", op = "Eq", value = "x", disabled = true },
+                },
+                groups = new[]
+                {
+                    new
+                    {
+                        logic = "Or",
+                        disabled = true,
+                        conditions = new[] { new { field = "assignee", op = "Eq", value = "Bob" } },
+                    },
+                },
+            },
+        });
+
+        Assert.Null(created.Filter!.Conditions![0].Disabled);
+        Assert.True(created.Filter.Conditions[1].Disabled);
+        Assert.True(created.Filter.Groups!.Single().Disabled);
+        // jsonb::text renders `"key": value` with a space after the colon.
+        Assert.Contains("\"disabled\": true", await ReadDefinitionAsync(created.Id));
+    }
 }

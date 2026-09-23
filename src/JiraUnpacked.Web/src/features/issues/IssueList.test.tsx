@@ -6,33 +6,9 @@ import { delay, http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { server } from '../../test/setup';
 import IssueList, { IssueListRoute } from './IssueList';
-import type { FilterCatalog, IssueListItem } from '../../api/issues';
+import type { IssueListItem } from '../../api/issues';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../../api/issues';
-
-// IssueList always mounts FilterBuilder, which now fetches the filter
-// catalog from GET /api/filter-catalog rather than importing a
-// hand-maintained copy. Registered once per test (not once per module) so
-// it is reset along with every other handler in afterEach (see test/setup).
-const CATALOG: FilterCatalog = {
-  fields: [
-    { name: 'status', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'issueType', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'priority', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'assignee', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'sprint', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'team', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'storyPoints', type: 'Decimal', operators: ['Eq', 'Neq', 'Lt', 'Lte', 'Gt', 'Gte', 'IsNull'] },
-    { name: 'createdAt', type: 'DateTime', operators: ['Lt', 'Lte', 'Gt', 'Gte'] },
-    { name: 'updatedAt', type: 'DateTime', operators: ['Lt', 'Lte', 'Gt', 'Gte'] },
-    { name: 'summary', type: 'Text', operators: ['Contains', 'StartsWith', 'IsNull'] },
-    { name: 'jiraKey', type: 'Text', operators: ['Eq', 'Contains', 'StartsWith'] },
-    { name: 'parent', type: 'ParentRef', operators: ['Eq', 'IsNull'] },
-  ],
-  maxConditions: 20,
-  maxInValues: 100,
-  maxGroups: 10,
-  maxDepth: 3,
-};
+import { FILTER_CATALOG as CATALOG } from '../../test/filterCatalogFixture';
 
 function renderList() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -95,7 +71,15 @@ function row(jiraKey: string, overrides: Partial<IssueListItem> = {}): IssueList
 
 describe('IssueList', () => {
   beforeEach(() => {
-    server.use(http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)));
+    server.use(
+      http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)),
+      // Several tests below add a condition, whose default field is 'status' -- a dictionary
+      // field -- so ConditionRow fires its own filter-values fetch regardless of what the test
+      // itself cares about (see FilterBuilder.test.tsx's mockFilterCatalog for the same fix and
+      // its rationale). Failing it keeps the value control the text input these tests already
+      // interact with, without the MSW console noise from a request nothing handled.
+      http.get('/api/projects/p1/filter-values', () => new HttpResponse(null, { status: 500 })),
+    );
   });
 
   it('tells an unfiltered empty project to run a sync', async () => {

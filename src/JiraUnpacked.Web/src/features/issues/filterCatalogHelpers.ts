@@ -35,3 +35,22 @@ export const resetOperatorIfDisallowed = (
   catalog: FilterCatalog, field: string, op: FilterOperator,
 ): FilterOperator =>
   isOperatorAllowed(catalog, field, op) ? op : (operatorsFor(catalog, field)[0] ?? 'Eq');
+
+/** What the editor calls each operator. The wire keeps the enum names. */
+export const OPERATOR_LABELS: Record<FilterOperator, string> = {
+  Eq: 'is',
+  Neq: 'is not',
+  In: 'is any of',
+  NotIn: 'is none of',
+  IsNull: 'is empty',
+  IsNotNull: 'is not empty',
+  Lt: '<',
+  Lte: '≤',
+  Gt: '>',
+  Gte: '≥',
+  Contains: 'contains',
+  NotContains: 'does not contain',
+  StartsWith: 'starts with',
+};
+
+export const operatorLabel = (op: FilterOperator): string => OPERATOR_LABELS[op] ?? op;

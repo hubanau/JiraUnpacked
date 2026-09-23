@@ -58,7 +58,9 @@ public sealed class IssuesController : ControllerBase
         var result = await _filterValues.GetAsync(projectId, field ?? "", ct);
         if (result.Error is not null)
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: result.Error);
-        return result.Values is null ? NotFound() : Ok(new { field, values = result.Values });
+        return result.Values is null
+            ? NotFound()
+            : Ok(new { field, values = result.Values, emptyCount = result.EmptyCount });
     }
 
     /// <summary>Matches the SPA's own filter encoding, including its string enum names.</summary>
@@ -68,9 +70,11 @@ public sealed class IssuesController : ControllerBase
     };
 
     /// <summary>
-    /// The filtered, sorted list as CSV. A GET because the whole view already lives in the query
-    /// string. Like every endpoint here it needs the bearer token, so the SPA fetches it rather
-    /// than linking to it: a plain link is a navigation and carries no token.
+    /// The filtered, sorted list as CSV. `filter` may be a boolean tree (a JSON object) or, for
+    /// links made before groups existed, a flat `FilterCondition[]` joined by `logic`. A GET
+    /// because the whole view already lives in the query string. Like every endpoint here it
+    /// needs the bearer token, so the SPA fetches it rather than linking to it: a plain link is a
+    /// navigation and carries no token.
     /// </summary>
     [HttpGet("api/projects/{projectId:guid}/issues/export.csv")]
     public async Task<IActionResult> Export(
@@ -80,12 +84,10 @@ public sealed class IssuesController : ControllerBase
         [FromQuery] string? cols = null,
         CancellationToken ct = default)
     {
-        List<FilterCondition>? conditions;
+        FilterGroup? group;
         try
         {
-            conditions = string.IsNullOrWhiteSpace(filter)
-                ? null
-                : JsonSerializer.Deserialize<List<FilterCondition>>(filter, FilterJson);
+            group = ReadExportFilter(filter, logic);
         }
         catch (JsonException)
         {
@@ -94,9 +96,6 @@ public sealed class IssuesController : ControllerBase
                 title: "The filter in the link could not be read.");
         }
 
-        var group = conditions is { Count: > 0 }
-            ? new FilterGroup(logic == "Or" ? FilterLogic.Or : FilterLogic.And, conditions, null)
-            : null;
         var request = new IssueFilterRequest(null, group, 1, 1, sortBy, sortDescending);
 
         // Checked BEFORE a single byte is written: once the response has started there is no way
@@ -121,5 +120,24 @@ public sealed class IssuesController : ControllerBase
             await writer.WriteAsync(CsvWriter.Row(columns.Select(c => c.Value(item))));
 
         return new EmptyResult();
+    }
+
+    /// <summary>
+    /// `filter` in either shape a link may carry, told apart by its first character. A JSON
+    /// object is the boolean tree the SPA writes now, carrying its own logic — so `logic` is
+    /// ignored for it. A JSON array is the flat list links carried before groups existed,
+    /// joined by `logic` exactly as before.
+    /// </summary>
+    private static FilterGroup? ReadExportFilter(string? filter, string? logic)
+    {
+        if (string.IsNullOrWhiteSpace(filter)) return null;
+
+        if (filter.TrimStart().StartsWith('{'))
+            return JsonSerializer.Deserialize<FilterGroup>(filter, FilterJson);
+
+        var conditions = JsonSerializer.Deserialize<List<FilterCondition>>(filter, FilterJson);
+        return conditions is { Count: > 0 }
+            ? new FilterGroup(logic == "Or" ? FilterLogic.Or : FilterLogic.And, conditions, null)
+            : null;
     }
 }
