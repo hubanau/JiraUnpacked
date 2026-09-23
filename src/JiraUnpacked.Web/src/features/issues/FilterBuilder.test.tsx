@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { delay, http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
@@ -8,35 +8,9 @@ import { server } from '../../test/setup';
 import IssueList from './IssueList';
 import { FilterBuilder } from './FilterBuilder';
 import { ConditionRow } from './ConditionRow';
-import type { FilterCatalog, FilterCondition } from '../../api/issues';
-
-/**
- * The server's filter catalog (mirrors FilterFields.All and
- * IssueFilterTranslator's guard consts on the .NET side) used to mock
- * GET /api/filter-catalog. FilterBuilder now fetches this instead of
- * importing a hand-maintained copy, so every test that mounts it must
- * register this handler first via mockFilterCatalog().
- */
-const CATALOG: FilterCatalog = {
-  fields: [
-    { name: 'status', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'issueType', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'priority', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'assignee', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'sprint', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'team', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] },
-    { name: 'storyPoints', type: 'Decimal', operators: ['Eq', 'Neq', 'Lt', 'Lte', 'Gt', 'Gte', 'IsNull'] },
-    { name: 'createdAt', type: 'DateTime', operators: ['Lt', 'Lte', 'Gt', 'Gte'] },
-    { name: 'updatedAt', type: 'DateTime', operators: ['Lt', 'Lte', 'Gt', 'Gte'] },
-    { name: 'summary', type: 'Text', operators: ['Contains', 'StartsWith', 'IsNull'] },
-    { name: 'jiraKey', type: 'Text', operators: ['Eq', 'Contains', 'StartsWith'] },
-    { name: 'parent', type: 'ParentRef', operators: ['Eq', 'IsNull'] },
-  ],
-  maxConditions: 20,
-  maxInValues: 100,
-  maxGroups: 10,
-  maxDepth: 3,
-};
+import type { FilterCondition } from '../../api/issues';
+import { FILTER_CATALOG as CATALOG } from '../../test/filterCatalogFixture';
+import { emptyRoot } from './filterTree';
 
 /**
  * The conditions the SPA actually sent, whichever envelope carried them.
@@ -105,7 +79,7 @@ describe('FilterBuilder', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <FilterBuilder projectId="p1" conditions={[]} onChange={() => {}} logic="And" onLogicChange={() => {}} />
+        <FilterBuilder projectId="p1" tree={emptyRoot()} onChange={() => {}} />
       </QueryClientProvider>,
     );
 
@@ -123,7 +97,7 @@ describe('FilterBuilder', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <FilterBuilder projectId="p1" conditions={[]} onChange={() => {}} logic="And" onLogicChange={() => {}} />
+        <FilterBuilder projectId="p1" tree={emptyRoot()} onChange={() => {}} />
       </QueryClientProvider>,
     );
 
@@ -246,7 +220,7 @@ describe('FilterBuilder', () => {
     const ops = within(screen.getByLabelText(/operator for condition 1/i))
       .getAllByRole('option')
       .map((o) => o.textContent);
-    expect(ops).toEqual(['Eq', 'Contains', 'StartsWith']);
+    expect(ops).toEqual(['Eq', 'In', 'NotIn', 'Contains', 'StartsWith']);
   });
 
   it('blocks a 21st condition', async () => {
@@ -264,13 +238,13 @@ describe('FilterBuilder', () => {
       <QueryClientProvider client={queryClient}>
         <FilterBuilder
           projectId="p1"
-          logic="And"
-          onLogicChange={() => {}}
-          conditions={Array.from(
-            { length: CATALOG.maxConditions },
-            () => ({ field: 'status', op: 'Eq' as const, value: '' }),
-          )}
           onChange={() => {}}
+          tree={{
+            id: 'root', logic: 'And', groups: [],
+            conditions: Array.from({ length: CATALOG.maxConditions }, (_, i) => ({
+              id: `c${i}`, field: 'status', op: 'Eq' as const, value: '',
+            })),
+          }}
         />
       </QueryClientProvider>,
     );
@@ -322,23 +296,15 @@ describe('FilterBuilder', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/not allowed for field 'createdAt'/i);
   });
 
-  it('shows the Neq-on-dictionary-field note only while a row uses it', async () => {
+  it('no longer warns that "is not" matches empty fields, because it does not', async () => {
     mockIssuesQuery();
     const user = userEvent.setup({ delay: null });
     renderIssueList();
     await addCondition(user);
 
-    expect(
-      screen.queryByText(/also matches issues where the field is empty/i),
-    ).not.toBeInTheDocument();
-
-    // The default added condition is field=status (a dictionary field);
-    // switching its operator to Neq should surface the note.
     await user.selectOptions(screen.getByLabelText(/operator for condition 1/i), 'Neq');
 
-    expect(
-      await screen.findByText(/also matches issues where the field is empty/i),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/also matches issues where the field is empty/i)).not.toBeInTheDocument();
   });
 
   it('Clear all returns to the collapsed no-filter state', async () => {
@@ -522,6 +488,58 @@ describe('FilterBuilder logic toggle', () => {
     await screen.findByRole('button', { name: /add condition/i });
     expect(screen.queryByLabelText(/match/i)).not.toBeInTheDocument();
   });
+
+  it('reads a legacy flat link with its old logic, and writes a tree without it on the next edit', async () => {
+    mockFilterCatalog();
+    const sent: Record<string, unknown>[] = [];
+    server.use(http.post('/api/projects/p1/issues/query', async ({ request }) => {
+      sent.push((await request.json()) as Record<string, unknown>);
+      return HttpResponse.json({ items: [], page: 1, pageSize: 50, totalCount: 0 });
+    }));
+    let search = '';
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={[`/projects/p1/issues?filter=${ONE_CONDITION}&logic=Or`]}>
+          <Routes>
+            <Route
+              path="/projects/:id/issues"
+              element={<><IssueList /><SearchProbe onSearch={(s) => { search = s; }} /></>}
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ filter: { logic: 'Or' } }));
+
+    await user.selectOptions(await screen.findByLabelText(/match/i), 'And');
+
+    await waitFor(() => {
+      const params = new URLSearchParams(search);
+      expect(params.get('logic')).toBeNull();
+      expect(JSON.parse(params.get('filter')!)).toEqual({
+        logic: 'And', conditions: [{ field: 'status', op: 'Eq', value: 'Backlog' }],
+      });
+    });
+  });
+
+  it('leaves a field the catalog no longer has out of the request', async () => {
+    const { bodies } = mockIssuesQuery();
+    const tree = {
+      logic: 'And',
+      conditions: [
+        { field: 'retired', op: 'Eq', value: 'x' },
+        { field: 'summary', op: 'Contains', value: 'login' },
+      ],
+    };
+
+    renderIssueListAt(`/projects/p1/issues?filter=${encodeURIComponent(JSON.stringify(tree))}`);
+
+    await waitFor(() => expect(bodies.at(-1)?.filter).toEqual({
+      logic: 'And', conditions: [{ field: 'summary', op: 'Contains', value: 'login' }],
+    }));
+  });
 });
 
 describe('value picker', () => {
@@ -593,3 +611,9 @@ describe('value picker', () => {
     expect(asked).toBe(0);
   });
 });
+
+/** Reports the router's current query string, so a test can see what the list wrote to the URL. */
+function SearchProbe({ onSearch }: { onSearch: (search: string) => void }) {
+  onSearch(useLocation().search);
+  return null;
+}

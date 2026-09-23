@@ -1,6 +1,6 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import type { FilterCondition, FilterLogic } from '../../api/issues';
+import { parseFilterParam, toUrlJson, type EditorGroup } from './filterTree';
 
 export const DEFAULT_SORT = 'updatedAt';
 
@@ -9,35 +9,40 @@ export const DEFAULT_COLUMNS = [
   'jiraKey', 'summary', 'status', 'issueType', 'assignee', 'sprint', 'storyPoints', 'updatedAt',
 ];
 
+/** How many of this hook's own recent writes it recognises when the URL catches up with them. */
+const REMEMBERED_WRITES = 20;
+
 /**
- * The list's whole view — filter, logic, sort, columns — read from and written to the query
- * string.
+ * The list's whole view — filter tree, sort, columns — read from and written to the query string.
  *
- * The URL rather than localStorage for two reasons, in order. Only ju.username and ju.theme may
- * be persisted, and this is not a reason to widen that. And a URL is shareable: "PLAT bugs this
- * sprint by points" becomes a link, which is most of the value of building a filter at all. It
- * also survives reload and Back, which useState does not.
- *
- * A default is written as an ABSENT param, never an explicit one, so an untouched list has a
- * clean URL and a shared link carries only what was deliberately chosen.
+ * The URL rather than localStorage: only ju.username and ju.theme may be persisted, and a URL is
+ * shareable, survives reload and Back. A default is written as an ABSENT param, so an untouched
+ * list has a clean URL. The filter is written unpruned (disabled parts survive a reload) and
+ * always as a tree; the legacy `logic` param is read once and dropped on the first write.
  */
 export function useListState() {
   const [params, setParams] = useSearchParams();
-
-  // Keyed on the raw string, not the params object. IssueList resets paging in an effect keyed
-  // on conditions, so a fresh array identity each render would make that effect fire forever.
   const rawFilter = params.get('filter');
-  const conditions = useMemo<FilterCondition[]>(() => {
-    if (!rawFilter) return [];
-    try {
-      const parsed: unknown = JSON.parse(rawFilter);
-      return Array.isArray(parsed) ? (parsed as FilterCondition[]) : [];
-    } catch {
-      // A URL is user-editable and chat clients truncate them. A broken filter degrades to
-      // "no filter"; it must never blank the page.
-      return [];
-    }
-  }, [rawFilter]);
+  const rawLogic = params.get('logic');
+
+  // The strings this hook itself wrote to `filter=`. React Router applies URL updates in a
+  // transition, so our own write can land a render or more after the edit. When it does, that
+  // is an echo, not news: re-parsing it would mint fresh ids and remount every row, dropping
+  // focus and any half-typed value mid-keystroke. Read in render, only ever written in setTree.
+  const recentWrites = useRef<string[]>([]);
+
+  const [held, setHeld] = useState(() => ({
+    raw: rawFilter, logic: rawLogic, tree: parseFilterParam(rawFilter, rawLogic),
+  }));
+
+  let tree = held.tree;
+  if (held.raw !== rawFilter || held.logic !== rawLogic) {
+    // The URL moved. Our own write arriving keeps the tree already held (it may even be newer
+    // than the URL); anything else — Back, a pasted link — is adopted from the URL.
+    const echo = rawLogic === null && recentWrites.current.includes(rawFilter ?? '');
+    if (!echo) tree = parseFilterParam(rawFilter, rawLogic);
+    setHeld({ raw: rawFilter, logic: rawLogic, tree });
+  }
 
   const patch = useCallback((next: Record<string, string | null>) => {
     setParams((prev) => {
@@ -50,6 +55,13 @@ export function useListState() {
     }, { replace: true });
   }, [setParams]);
 
+  const setTree = useCallback((next: EditorGroup) => {
+    const raw = toUrlJson(next);
+    recentWrites.current = [...recentWrites.current.slice(-(REMEMBERED_WRITES - 1)), raw ?? ''];
+    setHeld((h) => ({ ...h, tree: next }));
+    patch({ filter: raw, logic: null });
+  }, [patch]);
+
   const columnsParam = params.get('cols');
   const columns = useMemo(
     () => columnsParam?.split(',').filter(Boolean) ?? DEFAULT_COLUMNS,
@@ -57,17 +69,11 @@ export function useListState() {
   );
 
   return {
-    conditions,
-    logic: (params.get('logic') === 'Or' ? 'Or' : 'And') as FilterLogic,
+    tree,
+    setTree,
     sortBy: params.get('sortBy') ?? DEFAULT_SORT,
     sortDescending: params.get('sortDesc') !== 'false',
     columns,
-
-    setConditions: (next: FilterCondition[]) =>
-      patch({ filter: next.length === 0 ? null : JSON.stringify(next) }),
-
-    setLogic: (next: FilterLogic) =>
-      patch({ logic: next === 'Or' ? 'Or' : null }),
 
     setSort: (by: string, descending: boolean) =>
       patch({

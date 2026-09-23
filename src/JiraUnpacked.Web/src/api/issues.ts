@@ -139,8 +139,8 @@ export const getFilterValues = (projectId: string, field: string) =>
     `/api/projects/${projectId}/filter-values?field=${encodeURIComponent(field)}`);
 
 export interface ExportView {
-  conditions: FilterCondition[];
-  logic: FilterLogic;
+  /** The pruned tree the list was queried with; undefined = no filter. */
+  filter?: FilterGroup;
   sortBy: string;
   sortDescending: boolean;
   columns: string[];
@@ -149,14 +149,12 @@ export interface ExportView {
 /**
  * The CSV of the view currently on screen. Fetched with the session rather than linked to — see
  * apiDownload for why a link cannot work. The server caps the export's size, which is what makes
- * holding it in memory acceptable.
+ * holding it in memory acceptable. `filter` is always the tree: the server reads a JSON object as
+ * a FilterGroup with its own logic, so no `logic` param is sent.
  */
 export const exportIssuesCsv = (projectId: string, view: ExportView): Promise<Download> => {
   const params = new URLSearchParams();
-  if (view.conditions.length > 0) {
-    params.set('filter', JSON.stringify(view.conditions));
-    if (view.logic === 'Or') params.set('logic', 'Or');
-  }
+  if (view.filter) params.set('filter', JSON.stringify(view.filter));
   params.set('sortBy', view.sortBy);
   params.set('sortDescending', String(view.sortDescending));
   params.set('cols', view.columns.join(','));
