@@ -16,8 +16,8 @@ interface ConditionRowProps {
   condition: FilterCondition;
   catalog: FilterCatalog;
   onChange: (next: FilterCondition) => void;
-  onRemove: () => void;
-  index: number;
+  /** Position in the tree, e.g. "1" or "2.1" — part of every control's accessible name. */
+  label: string;
 }
 
 /**
@@ -28,20 +28,16 @@ interface ConditionRowProps {
  * 400 that nothing here would otherwise catch.
  */
 export function ConditionRow({
-  projectId, condition, catalog, onChange, onRemove, index }: ConditionRowProps) {
+  projectId, condition, catalog, onChange, label }: ConditionRowProps) {
   // Draft text for the "In" multi-value editor's add box. Local because it
   // is not part of the submitted condition until "Add value" commits it.
   const [inDraft, setInDraft] = useState('');
 
-  // FilterBuilder keys rows by array index, so removing a row shifts index
-  // identity onto a different condition — this component instance stays
-  // mounted but starts receiving a different `condition` object. Without
-  // this reset, `inDraft` (which is not part of `condition`) would survive
-  // that shift and appear to belong to the condition that took its place.
-  // Comparing against the previous condition during render (rather than in
-  // an effect) clears it in the same render that shows the new condition,
-  // before anything paints. Condition objects are only re-created on real
-  // edits, so this does not cause spurious resets.
+  // Rows are keyed by id (see GroupEditor), so this component instance is only ever reused for
+  // the SAME condition across renders — its position label can change (a sibling removed above
+  // it), but `condition` itself does not change identity except on a real edit. The reset below
+  // therefore only fires when the condition's own field or operator changes, which is exactly
+  // when a stale `inDraft` (not part of `condition`) would otherwise read as belonging to it.
   const [prev, setPrev] = useState(condition);
   if (prev !== condition) {
     setPrev(condition);
@@ -50,7 +46,6 @@ export function ConditionRow({
 
   const fieldType = typeFor(catalog, condition.field);
   const ops = operatorsFor(catalog, condition.field);
-  const rowNumber = index + 1;
 
   const handleFieldChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const nextField = event.target.value;
@@ -119,8 +114,8 @@ export function ConditionRow({
   // existed -- a broken picker must not make a working filter unusable.
   const pickable = wantsValueList && valueList.data ? valueList.data.values : null;
 
-  const valueFieldId = `condition-${index}-value`;
-  const valueLabel = `Value for condition ${rowNumber}`;
+  const valueFieldId = `condition-${label}-value`;
+  const valueLabel = `Value for condition ${label}`;
 
   const renderValueControl = () => {
     if (condition.op === 'IsNull') return null;
@@ -226,7 +221,7 @@ export function ConditionRow({
 
   return (
     <div className="flex flex-wrap items-end gap-2 rounded-md border border-[var(--ju-border)] p-2">
-      <Field label={`Field for condition ${rowNumber}`} id={`condition-${index}-field`}>
+      <Field label={`Field for condition ${label}`} id={`condition-${label}-field`}>
         <Select value={condition.field} onChange={handleFieldChange}>
           {fieldNames(catalog).map((f) => (
             <option key={f} value={f}>
@@ -236,7 +231,7 @@ export function ConditionRow({
         </Select>
       </Field>
 
-      <Field label={`Operator for condition ${rowNumber}`} id={`condition-${index}-operator`}>
+      <Field label={`Operator for condition ${label}`} id={`condition-${label}-operator`}>
         <Select value={condition.op} onChange={handleOperatorChange}>
           {ops.map((op) => (
             <option key={op} value={op}>
@@ -247,10 +242,6 @@ export function ConditionRow({
       </Field>
 
       {renderValueControl()}
-
-      <Button type="button" variant="secondary" onClick={onRemove}>
-        Remove
-      </Button>
     </div>
   );
 }

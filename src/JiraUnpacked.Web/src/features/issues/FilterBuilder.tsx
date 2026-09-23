@@ -1,11 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import type { FilterCondition, FilterLogic } from '../../api/issues';
 import { getFilterCatalog } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
 import { ApiError } from '../../api/errors';
-import { Button, ErrorState, Field, Select, Spinner } from '../../ui';
-import { ConditionRow } from './ConditionRow';
-import { blankCondition, emptyRoot, isEmptyTree, withIdentityOf, type EditorGroup } from './filterTree';
+import { Button, ErrorState, Spinner } from '../../ui';
+import { GroupEditor } from './GroupEditor';
+import { blankCondition, blankGroup, countEnabled, emptyRoot, isEmptyTree, type EditorGroup } from './filterTree';
 
 /**
  * The server's filter-field allow-list and guards. Static and tenant-independent, hence
@@ -43,69 +42,47 @@ export function FilterBuilder({ projectId, tree, onChange }: FilterBuilderProps)
     );
   }
 
-  const conditions = tree.conditions;
-  const atConditionLimit = conditions.length >= catalog.maxConditions;
-
-  const handleAdd = () => {
-    if (atConditionLimit) return;
-    onChange({ ...tree, conditions: [...conditions, blankCondition()] });
-  };
-
-  const handleRowChange = (id: string, next: FilterCondition) =>
-    onChange({ ...tree, conditions: conditions.map((c) => (c.id === id ? withIdentityOf(c, next) : c)) });
-
-  const handleRemove = (id: string) =>
-    onChange({ ...tree, conditions: conditions.filter((c) => c.id !== id) });
-
   if (isEmptyTree(tree)) {
     return (
       <div className="flex items-center justify-between gap-4">
         <p className="text-sm text-[var(--ju-muted)]">No filter — showing all issues</p>
-        <Button type="button" variant="secondary" onClick={handleAdd} disabled={atConditionLimit}>
-          Add condition
-        </Button>
+        <div className="flex gap-2">
+          <Button type="button" variant="secondary" onClick={() => onChange({ ...tree, conditions: [blankCondition()] })}>
+            Add condition
+          </Button>
+          {catalog.maxDepth > 1 && (
+            <Button type="button" variant="secondary" onClick={() => onChange({ ...tree, groups: [blankGroup()] })}>
+              Add group
+            </Button>
+          )}
+        </div>
       </div>
     );
   }
 
+  const counts = countEnabled(tree);
+
   return (
     <div className="flex flex-col gap-3">
-      <Field label="Match" id="filter-logic" hint="All: every condition must hold. Any: at least one.">
-        <Select
-          id="filter-logic"
-          value={tree.logic}
-          onChange={(e) => onChange({ ...tree, logic: e.target.value as FilterLogic })}
-        >
-          <option value="And">All conditions</option>
-          <option value="Or">Any condition</option>
-        </Select>
-      </Field>
-
-      {conditions.map((condition, index) => (
-        <ConditionRow
-          key={condition.id}
-          index={index}
-          projectId={projectId}
-          condition={condition}
-          catalog={catalog}
-          onChange={(next) => handleRowChange(condition.id, next)}
-          onRemove={() => handleRemove(condition.id)}
-        />
-      ))}
-
-      <div className="flex items-center gap-2">
-        <Button type="button" variant="secondary" onClick={handleAdd} disabled={atConditionLimit}>
-          Add condition
-        </Button>
-        <Button type="button" variant="secondary" onClick={() => onChange(emptyRoot())}>
+      <GroupEditor
+        group={tree}
+        onChange={onChange}
+        catalog={catalog}
+        projectId={projectId}
+        counts={counts}
+        depth={1}
+        label=""
+      />
+      <div>
+        <Button type="button" variant="secondary" size="sm" onClick={() => onChange(emptyRoot())}>
           Clear all
         </Button>
       </div>
-
-      {atConditionLimit && (
-        <p className="text-xs text-[var(--ju-muted)]">
-          You can add at most {catalog.maxConditions} conditions.
-        </p>
+      {counts.conditions >= catalog.maxConditions && (
+        <p className="text-xs text-[var(--ju-muted)]">You can add at most {catalog.maxConditions} conditions.</p>
+      )}
+      {counts.groups >= catalog.maxGroups && (
+        <p className="text-xs text-[var(--ju-muted)]">You can add at most {catalog.maxGroups} groups.</p>
       )}
     </div>
   );

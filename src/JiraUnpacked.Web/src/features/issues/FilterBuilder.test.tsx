@@ -280,7 +280,7 @@ describe('FilterBuilder', () => {
     };
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <ConditionRow projectId="p1" condition={condition} catalog={CATALOG} onChange={() => {}} onRemove={() => {}} index={0} />
+        <ConditionRow projectId="p1" condition={condition} catalog={CATALOG} onChange={() => {}} label="1" />
       </QueryClientProvider>,
     );
 
@@ -351,7 +351,7 @@ describe('FilterBuilder', () => {
     });
 
     // Remove the first (status/Done) row.
-    await user.click(screen.getAllByRole('button', { name: /^remove$/i })[0]);
+    await user.click(screen.getByRole('button', { name: 'Remove condition 1' }));
 
     // Only the summary row remains, now shifted up into row 1's position.
     expect(screen.getByLabelText(/field for condition 1/i)).toHaveValue('summary');
@@ -422,7 +422,7 @@ describe('FilterBuilder', () => {
 
     // Remove the middle row. Condition 3 (priority/In) shifts up into
     // condition 2's position — the same list slot that held the draft.
-    await user.click(screen.getAllByRole('button', { name: /^remove$/i })[1]);
+    await user.click(screen.getByRole('button', { name: 'Remove condition 2' }));
 
     // Condition 2 is now what used to be condition 3.
     await waitFor(() => {
@@ -640,6 +640,36 @@ describe('value picker', () => {
 
     await screen.findByLabelText(/field for condition 1/i);
     expect(asked).toBe(0);
+  });
+});
+
+describe('nested groups', () => {
+  it('sends the tree it shows, minus the parts switched off', async () => {
+    const { bodies } = mockIssuesQuery();
+    const tree = {
+      logic: 'And',
+      conditions: [{ field: 'summary', op: 'Contains', value: 'login' }],
+      groups: [{
+        logic: 'Or',
+        conditions: [
+          { field: 'storyPoints', op: 'Gte', value: 3 },
+          { field: 'storyPoints', op: 'IsNull' },
+        ],
+      }],
+    };
+    const user = userEvent.setup({ delay: null });
+
+    renderIssueListAt(`/projects/p1/issues?filter=${encodeURIComponent(JSON.stringify(tree))}`);
+
+    await waitFor(() => expect(bodies.at(-1)?.filter).toEqual(tree));
+
+    await user.click(await screen.findByRole('button', { name: 'Disable condition 2.1' }));
+
+    await waitFor(() => expect(bodies.at(-1)?.filter).toEqual({
+      logic: 'And',
+      conditions: [{ field: 'summary', op: 'Contains', value: 'login' }],
+      groups: [{ logic: 'Or', conditions: [{ field: 'storyPoints', op: 'IsNull' }] }],
+    }));
   });
 });
 
