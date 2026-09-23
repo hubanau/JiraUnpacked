@@ -79,10 +79,19 @@ public sealed class FilterCatalogEndpointTests : IClassFixture<JiraUnpackedApiFa
         // server actually rejects, producing a runtime 400 this test would
         // never catch.
         var status = catalog.Fields.Single(f => f.Name == "status");
-        Assert.True(new HashSet<string> { "Eq", "Neq", "In", "IsNull" }.SetEquals(status.Operators));
+        Assert.True(new HashSet<string> { "Eq", "Neq", "In", "NotIn", "IsNull", "IsNotNull" }.SetEquals(status.Operators));
 
         var jiraKey = catalog.Fields.Single(f => f.Name == "jiraKey");
-        Assert.True(new HashSet<string> { "Eq", "Contains", "StartsWith" }.SetEquals(jiraKey.Operators));
+        Assert.True(new HashSet<string> { "Eq", "In", "NotIn", "Contains", "StartsWith" }.SetEquals(jiraKey.Operators));
+
+        var storyPoints = catalog.Fields.Single(f => f.Name == "storyPoints");
+        Assert.True(new HashSet<string> { "Eq", "Neq", "Lt", "Lte", "Gt", "Gte", "IsNull", "IsNotNull" }.SetEquals(storyPoints.Operators));
+
+        var summary = catalog.Fields.Single(f => f.Name == "summary");
+        Assert.True(new HashSet<string> { "Contains", "NotContains", "StartsWith", "IsNull", "IsNotNull" }.SetEquals(summary.Operators));
+
+        var parent = catalog.Fields.Single(f => f.Name == "parent");
+        Assert.True(new HashSet<string> { "Eq", "IsNull", "IsNotNull" }.SetEquals(parent.Operators));
 
         // Exact per-field `type`, and — via SetEquals against
         // ExpectedFieldTypes.Values.Distinct() — the exact distinct set of

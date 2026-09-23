@@ -2,12 +2,19 @@ using System.Text.Json;
 
 namespace JiraUnpacked.Domain.Abstractions;
 
-public enum FilterOperator { Eq, Neq, In, Lt, Lte, Gt, Gte, Contains, StartsWith, IsNull }
+/// <summary>
+/// Serialised and stored BY NAME. New members are appended, never inserted: the ordinal is a
+/// history, not a meaning (the catalog's display order lives in FilterCatalogService).
+/// </summary>
+public enum FilterOperator { Eq, Neq, In, Lt, Lte, Gt, Gte, Contains, StartsWith, IsNull, NotIn, IsNotNull, NotContains }
 
 /// <summary>How a group joins its parts. Applies to the group's conditions AND its nested groups alike.</summary>
 public enum FilterLogic { And, Or }
 
-/// <summary>One filter condition. Value for single-value ops; Values for In. Both null for IsNull.</summary>
+/// <summary>
+/// One filter condition. Value for single-value ops; Values for In/NotIn, where a JSON null
+/// element stands for (Empty). Both null for IsNull/IsNotNull.
+/// </summary>
 public sealed record FilterCondition(
     string Field, FilterOperator Op, JsonElement? Value, List<JsonElement>? Values);
 
