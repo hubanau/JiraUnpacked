@@ -1,17 +1,19 @@
-import { useState, type ChangeEvent } from 'react';
+import type { ChangeEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { FilterCatalog, FilterCondition, FilterOperator } from '../../api/issues';
 import { getFilterValues } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
-import { fieldNames, isDictionaryField, operatorsFor, resetOperatorIfDisallowed, typeFor } from './filterCatalogHelpers';
-import { Badge, Button, Field, Select } from '../../ui';
-
-const INPUT_CLASS =
-  'rounded-md border border-[var(--ju-border)] bg-[var(--ju-bg)] px-3 py-2 text-sm text-[var(--ju-text)] ' +
-  'focus:outline-none focus:ring-2 focus:ring-[var(--ju-primary)] disabled:cursor-not-allowed disabled:opacity-60';
+import { Field, Select } from '../../ui';
+import { ChipInput } from './ChipInput';
+import {
+  fieldNames, isDictionaryField, operatorLabel, operatorsFor, resetOperatorIfDisallowed, typeFor,
+} from './filterCatalogHelpers';
+import { takesList, takesNoValue } from './filterTree';
+import { INPUT_CLASS } from './styles';
+import { MultiValuePicker, SingleValueSelect } from './ValuePicker';
 
 interface ConditionRowProps {
-  /** Only used to fetch this project's values for the picker. */
+  /** Only used to fetch this project's values for the pickers. */
   projectId: string;
   condition: FilterCondition;
   catalog: FilterCatalog;
@@ -20,223 +22,151 @@ interface ConditionRowProps {
   label: string;
 }
 
+const JIRA_KEY_SEPARATORS = /[,\s]+/;
+const toUpper = (s: string) => s.toUpperCase();
+
 /**
- * One field/operator/value row. Every transition that could leave a stale
- * value/values key sitting alongside a new field or operator instead
- * rebuilds the condition from scratch — see the module doc on FilterCondition
- * in ../../api/issues for why a leftover key of the wrong shape is a runtime
- * 400 that nothing here would otherwise catch.
+ * One field / operator / value row. Every transition rebuilds the condition from scratch with
+ * only the key its new operator takes, so a stale value/values key of the wrong shape never
+ * rides along to a 400. The row's identity (id, on/off) belongs to GroupEditor, which puts it
+ * back (withIdentityOf).
  */
-export function ConditionRow({
-  projectId, condition, catalog, onChange, label }: ConditionRowProps) {
-  // Draft text for the "In" multi-value editor's add box. Local because it
-  // is not part of the submitted condition until "Add value" commits it.
-  const [inDraft, setInDraft] = useState('');
-
-  // Rows are keyed by id (see GroupEditor), so this component instance is only ever reused for
-  // the SAME condition across renders — its position label can change (a sibling removed above
-  // it), but `condition` itself does not change identity except on a real edit. The reset below
-  // therefore only fires when the condition's own field or operator changes, which is exactly
-  // when a stale `inDraft` (not part of `condition`) would otherwise read as belonging to it.
-  const [prev, setPrev] = useState(condition);
-  if (prev !== condition) {
-    setPrev(condition);
-    setInDraft('');
-  }
-
-  const fieldType = typeFor(catalog, condition.field);
-  const ops = operatorsFor(catalog, condition.field);
+export function ConditionRow({ projectId, condition, catalog, onChange, label }: ConditionRowProps) {
+  const { field, op } = condition;
+  const fieldType = typeFor(catalog, field);
+  const known = fieldType !== undefined;
+  const isDict = isDictionaryField(catalog, field);
 
   const handleFieldChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const nextField = event.target.value;
-    // A value valid for the old field's type rarely is for the new one, so
-    // it — and any `values` array — is dropped entirely, not carried over.
-    onChange({ field: nextField, op: resetOperatorIfDisallowed(catalog, nextField, condition.op) });
-    setInDraft('');
+    const nextOp = resetOperatorIfDisallowed(catalog, nextField, op);
+    // A value valid for the old field rarely is for the new one, so it is dropped, not carried.
+    onChange(takesList(nextOp) ? { field: nextField, op: nextOp, values: [] } : { field: nextField, op: nextOp });
   };
 
   const handleOperatorChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const nextOp = event.target.value as FilterOperator;
-    if (nextOp === 'In') {
-      onChange({ field: condition.field, op: nextOp, values: [] });
-    } else if (nextOp === 'IsNull') {
-      onChange({ field: condition.field, op: nextOp });
+    if (takesNoValue(nextOp)) {
+      onChange({ field, op: nextOp });
+    } else if (takesList(nextOp)) {
+      // "is any of" <-> "is none of" keeps the list: flipping the sense is the common edit.
+      onChange({ field, op: nextOp, values: takesList(op) ? [...(condition.values ?? [])] : [] });
     } else {
-      onChange({ field: condition.field, op: nextOp, value: '' });
+      const keep = !takesList(op) && !takesNoValue(op) && condition.value !== null;
+      onChange({ field, op: nextOp, value: keep ? condition.value ?? '' : '' });
     }
-    setInDraft('');
   };
 
-  const handleTextOrDateChange = (event: ChangeEvent<HTMLInputElement>) => {
-    onChange({ field: condition.field, op: condition.op, value: event.target.value });
-  };
-
-  /** Same write, different element: a <select> is not an <input> as far as the types go. */
-  const handlePickedChange = (event: ChangeEvent<HTMLSelectElement>) => {
-    onChange({ field: condition.field, op: condition.op, value: event.target.value });
-  };
-
-  const handleNumberChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const raw = event.target.value;
-    onChange({ field: condition.field, op: condition.op, value: raw === '' ? '' : Number(raw) });
-  };
-
-  const handleAddInValue = () => {
-    const trimmed = inDraft.trim();
-    const current = condition.values ?? [];
-    if (!trimmed || current.length >= catalog.maxInValues) return;
-    onChange({ field: condition.field, op: condition.op, values: [...current, trimmed] });
-    setInDraft('');
-  };
-
-  const handleRemoveInValue = (removeIndex: number) => {
-    const current = condition.values ?? [];
-    onChange({
-      field: condition.field,
-      op: condition.op,
-      values: current.filter((_, i) => i !== removeIndex),
-    });
-  };
-
-  // Only dictionary fields have a value list, and only operators that take a value need one --
-  // IsNull compares against nothing, so fetching for it is a wasted round trip.
-  const wantsValueList = isDictionaryField(catalog, condition.field) && condition.op !== 'IsNull';
+  // Only dictionary fields have a value list, and only operators that take a value need one.
+  const wantsValueList = isDict && !takesNoValue(op);
   const valueList = useQuery({
-    queryKey: queryKeys.filterValues(projectId, condition.field),
-    queryFn: () => getFilterValues(projectId, condition.field),
+    queryKey: queryKeys.filterValues(projectId, field),
+    queryFn: () => getFilterValues(projectId, field),
     enabled: wantsValueList,
     // A project's set of values changes only when a sync runs.
     staleTime: 5 * 60 * 1000,
   });
+  // The list is an affordance, not a gate: while it loads, or if it fails, every control falls
+  // back to typing — a broken picker must not make a working filter unusable.
+  const picked = wantsValueList ? valueList.data : undefined;
 
-  // The list is an affordance, not a gate. If it is missing or failed, every control below falls
-  // back to the text box it replaced, which is exactly what the field did before the picker
-  // existed -- a broken picker must not make a working filter unusable.
-  const pickable = wantsValueList && valueList.data ? valueList.data.values.map((v) => v.name) : null;
-
-  const valueFieldId = `condition-${label}-value`;
+  const valueId = `condition-${label}-value`;
   const valueLabel = `Value for condition ${label}`;
+  const textValue = typeof condition.value === 'string' ? condition.value : '';
 
   const renderValueControl = () => {
-    if (condition.op === 'IsNull') return null;
+    if (takesNoValue(op)) return null;
 
-    if (condition.op === 'In') {
+    if (takesList(op)) {
       const values = condition.values ?? [];
-      const atLimit = values.length >= catalog.maxInValues;
+      if (picked) {
+        return (
+          <MultiValuePicker
+            label={`Values for condition ${label}`}
+            options={picked.values}
+            emptyCount={picked.emptyCount}
+            selected={values}
+            max={catalog.maxInValues}
+            onChange={(next) => onChange({ field, op, values: next })}
+          />
+        );
+      }
+      const isKey = field === 'jiraKey';
+      // Typing cannot produce (Empty), but one that arrived in a link is kept, not silently lost.
+      const keepsEmpty = values.includes(null);
       return (
-        <div className="flex flex-col gap-2">
-          <div className="flex items-end gap-2">
-            <Field label={valueLabel} id={valueFieldId}>
-              <input
-                type="text"
-                className={INPUT_CLASS}
-                value={inDraft}
-                onChange={(e) => setInDraft(e.target.value)}
-              />
-            </Field>
-            <Button type="button" variant="secondary" onClick={handleAddInValue} disabled={atLimit}>
-              Add value
-            </Button>
-          </div>
-          {atLimit && (
-            <p className="text-xs text-[var(--ju-muted)]">
-              You can add at most {catalog.maxInValues} values.
-            </p>
-          )}
-          {values.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {values.map((v, i) => (
-                <Badge key={`${v}-${i}`}>
-                  {v}
-                  <button
-                    type="button"
-                    aria-label={`Remove ${v}`}
-                    className="ml-1"
-                    onClick={() => handleRemoveInValue(i)}
-                  >
-                    ×
-                  </button>
-                </Badge>
-              ))}
-            </div>
-          )}
-        </div>
+        <ChipInput
+          key={field}
+          id={valueId}
+          label={valueLabel}
+          values={values.filter((v): v is string | number => v !== null).map(String)}
+          max={catalog.maxInValues - (keepsEmpty ? 1 : 0)}
+          splitOn={isKey ? JIRA_KEY_SEPARATORS : undefined}
+          normalize={isKey ? toUpper : undefined}
+          onChange={(next) => onChange({ field, op, values: keepsEmpty ? [null, ...next] : next })}
+        />
       );
     }
 
-    if (pickable) {
+    if (isDict && picked) {
       return (
-        <Field label={valueLabel} id={valueFieldId}>
-          <Select
-            id={valueFieldId}
-            value={(condition.value as string | undefined) ?? ''}
-            onChange={handlePickedChange}
-          >
-            <option value="">— choose —</option>
-            {pickable.map((v) => (
-              <option key={v} value={v}>{v}</option>
-            ))}
-          </Select>
+        <Field label={valueLabel} id={valueId}>
+          <SingleValueSelect
+            value={textValue}
+            options={picked.values}
+            emptyCount={picked.emptyCount}
+            onPick={(name) => onChange({ field, op, value: name })}
+            // "is (Empty)" is "is empty": the operator changes, so a null value never reaches the wire.
+            onPickEmpty={() => onChange({ field, op: op === 'Neq' ? 'IsNotNull' : 'IsNull' })}
+          />
         </Field>
       );
     }
 
     if (fieldType === 'Decimal') {
       return (
-        <Field label={valueLabel} id={valueFieldId}>
+        <Field label={valueLabel} id={valueId}>
           <input
             type="number"
             className={INPUT_CLASS}
             value={condition.value ?? ''}
-            onChange={handleNumberChange}
-          />
-        </Field>
-      );
-    }
-
-    if (fieldType === 'DateTime') {
-      return (
-        <Field label={valueLabel} id={valueFieldId}>
-          <input
-            type="date"
-            className={INPUT_CLASS}
-            value={(condition.value as string | undefined) ?? ''}
-            onChange={handleTextOrDateChange}
+            onChange={(e) => onChange({ field, op, value: e.target.value === '' ? '' : Number(e.target.value) })}
           />
         </Field>
       );
     }
 
     return (
-      <Field label={valueLabel} id={valueFieldId}>
+      <Field label={valueLabel} id={valueId}>
         <input
-          type="text"
+          type={fieldType === 'DateTime' ? 'date' : 'text'}
           className={INPUT_CLASS}
-          value={(condition.value as string | undefined) ?? ''}
-          onChange={handleTextOrDateChange}
+          value={textValue}
+          onChange={(e) => onChange({ field, op, value: e.target.value })}
         />
       </Field>
     );
   };
 
   return (
-    <div className="flex flex-wrap items-end gap-2 rounded-md border border-[var(--ju-border)] p-2">
-      <Field label={`Field for condition ${label}`} id={`condition-${label}-field`}>
-        <Select value={condition.field} onChange={handleFieldChange}>
+    <div className="flex flex-wrap items-end gap-2">
+      <Field
+        label={`Field for condition ${label}`}
+        id={`condition-${label}-field`}
+        error={known ? undefined : `'${field}' can no longer be filtered on, so this condition is not applied.`}
+      >
+        <Select value={field} onChange={handleFieldChange}>
+          {!known && <option value={field} disabled>{field}</option>}
           {fieldNames(catalog).map((f) => (
-            <option key={f} value={f}>
-              {f}
-            </option>
+            <option key={f} value={f}>{f}</option>
           ))}
         </Select>
       </Field>
 
       <Field label={`Operator for condition ${label}`} id={`condition-${label}-operator`}>
-        <Select value={condition.op} onChange={handleOperatorChange}>
-          {ops.map((op) => (
-            <option key={op} value={op}>
-              {op}
-            </option>
+        <Select value={op} onChange={handleOperatorChange}>
+          {operatorsFor(catalog, field).map((o) => (
+            <option key={o} value={o}>{operatorLabel(o)}</option>
           ))}
         </Select>
       </Field>

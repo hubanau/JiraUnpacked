@@ -85,6 +85,24 @@ describe('MultiValuePicker', () => {
     expect(screen.getByRole('checkbox', { name: /^backlog/i })).toBeEnabled();
     expect(screen.getByText(/at most 1 values/i)).toBeInTheDocument();
   });
+
+  it('closes on Escape and returns focus to its summary', async () => {
+    // jsdom does not apply the UA stylesheet that hides a closed <details>' content, so the
+    // popover's own `open` state -- what the Escape handler actually flips -- is what is
+    // asserted here, rather than the search box's visibility (which real browsers, but not
+    // jsdom, would also hide).
+    const user = userEvent.setup();
+    renderMulti();
+    const summary = screen.getByText('Choose values');
+    await user.click(summary);
+    const details = summary.closest('details') as HTMLDetailsElement;
+    expect(details.open).toBe(true);
+
+    await user.keyboard('{Escape}');
+
+    expect(details.open).toBe(false);
+    expect(summary).toHaveFocus();
+  });
 });
 
 describe('SingleValueSelect', () => {

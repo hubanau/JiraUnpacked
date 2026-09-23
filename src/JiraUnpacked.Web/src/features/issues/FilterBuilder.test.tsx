@@ -230,7 +230,7 @@ describe('FilterBuilder', () => {
     const ops = within(screen.getByLabelText(/operator for condition 1/i))
       .getAllByRole('option')
       .map((o) => o.textContent);
-    expect(ops).toEqual(['Eq', 'In', 'NotIn', 'Contains', 'StartsWith']);
+    expect(ops).toEqual(['is', 'is any of', 'is none of', 'contains', 'starts with']);
   });
 
   it('blocks a 21st condition', async () => {
