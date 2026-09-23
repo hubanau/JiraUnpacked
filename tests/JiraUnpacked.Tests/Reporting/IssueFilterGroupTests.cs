@@ -250,4 +250,116 @@ public sealed class IssueFilterGroupTests
         Assert.True(pred(Issue(i => { i.StatusId = InProgressId; i.StoryPoints = 5m; })));
         Assert.False(pred(Issue(i => { i.StatusId = InProgressId; i.StoryPoints = 1m; })));  // still AND
     }
+
+    private static FilterCondition Off(FilterCondition c) => c with { Disabled = true };
+    private static FilterGroup Off(FilterGroup g) => g with { Disabled = true };
+
+    [Fact]
+    public async Task A_disabled_condition_is_skipped_without_being_validated()
+    {
+        // Unknown field AND a value of the wrong type: either is a 400 if the row is looked at.
+        // A row switched off because it is broken must not break the filter.
+        var pred = await CompileAsync(new FilterGroup(FilterLogic.And, new List<FilterCondition>
+        {
+            Status("Done"),
+            Off(new FilterCondition("secret", FilterOperator.Eq, J(42), null)),
+        }, null));
+
+        Assert.True(pred(Issue(i => i.StatusId = DoneId)));
+        Assert.False(pred(Issue(i => i.StatusId = InProgressId)));
+    }
+
+    [Fact]
+    public async Task Disabled_conditions_do_not_count_toward_the_limit()
+    {
+        var conditions = Enumerable.Range(0, IssueFilterTranslator.MaxConditions).Select(_ => Status("Done")).ToList();
+        conditions.Add(Off(Status("Done")));   // the 21st, switched off
+
+        var r = await Sut.BuildAsync(new FilterGroup(FilterLogic.And, conditions, null), Resolver, CancellationToken.None);
+
+        Assert.Null(r.Error);
+    }
+
+    [Fact]
+    public async Task A_disabled_group_is_skipped_whole_even_past_the_depth_limit()
+    {
+        var pred = await CompileAsync(new FilterGroup(FilterLogic.And,
+            new List<FilterCondition> { Status("Done") },
+            new List<FilterGroup> { Off(Chain(IssueFilterTranslator.MaxDepth + 1)) }));
+
+        Assert.True(pred(Issue(i => i.StatusId = DoneId)));
+    }
+
+    [Fact]
+    public async Task Disabled_groups_do_not_count_toward_the_group_limit()
+    {
+        var root = Siblings(IssueFilterTranslator.MaxGroups - 1);   // root + 9 = at the limit
+        root.Groups!.Add(Off(Group(FilterLogic.And, Status("Done"))));
+
+        var r = await Sut.BuildAsync(root, Resolver, CancellationToken.None);
+
+        Assert.Null(r.Error);
+    }
+
+    [Theory]
+    [InlineData(FilterLogic.And)]
+    [InlineData(FilterLogic.Or)]
+    public async Task A_group_whose_parts_are_all_disabled_is_treated_as_absent(FilterLogic inner)
+    {
+        // Kept as an empty group it would be vacuously true under And (an outer Or would then
+        // match everything) or vacuously false under Or (an outer And would match nothing).
+        // Absent, the outer group means exactly its other parts.
+        var allOff = new FilterGroup(inner, new List<FilterCondition> { Off(Status("In Progress")) }, null);
+
+        var underOr = await CompileAsync(new FilterGroup(FilterLogic.Or,
+            new List<FilterCondition> { Status("Done") }, new List<FilterGroup> { allOff }));
+        Assert.True(underOr(Issue(i => i.StatusId = DoneId)));
+        Assert.False(underOr(Issue(i => i.StatusId = InProgressId)));
+
+        var underAnd = await CompileAsync(new FilterGroup(FilterLogic.And,
+            new List<FilterCondition> { Status("Done") }, new List<FilterGroup> { allOff }));
+        Assert.True(underAnd(Issue(i => i.StatusId = DoneId)));
+        Assert.False(underAnd(Issue(i => i.StatusId = InProgressId)));
+    }
+
+    [Theory]
+    [InlineData(FilterLogic.And)]
+    [InlineData(FilterLogic.Or)]
+    public async Task A_root_with_nothing_enabled_matches_every_issue(FilterLogic logic)
+    {
+        var pred = await CompileAsync(new FilterGroup(logic,
+            new List<FilterCondition> { Off(Status("Done")) },
+            new List<FilterGroup> { Off(Group(FilterLogic.And, Status("Done"))) }));
+
+        Assert.True(pred(Issue(i => i.StatusId = InProgressId)));
+        Assert.True(pred(Issue(i => i.StatusId = null)));
+    }
+
+    [Fact]
+    public async Task A_disabled_root_matches_every_issue()
+    {
+        var pred = await CompileAsync(Off(Group(FilterLogic.And, Status("Done"))));
+
+        Assert.True(pred(Issue(i => i.StatusId = InProgressId)));
+    }
+
+    [Fact]
+    public async Task A_nested_group_written_with_no_parts_is_still_rejected()
+    {
+        // Switched-off parts are a choice; a group with nothing in it at all is a client bug.
+        var error = await ErrorAsync(new FilterGroup(FilterLogic.And,
+            new List<FilterCondition> { Off(Status("Done")) },
+            new List<FilterGroup> { new(FilterLogic.Or, null, null) }));
+
+        Assert.Equal("A filter group must contain at least one condition or nested group.", error);
+    }
+
+    [Fact]
+    public async Task The_flat_conditions_path_skips_disabled_rows_too()
+    {
+        var r = await Sut.BuildAsync(new[] { Off(Status("Done")) }, Resolver, CancellationToken.None);
+
+        Assert.Null(r.Error);
+        Assert.True(r.Predicate!.Compile()(Issue(i => i.StatusId = InProgressId)));
+    }
 }

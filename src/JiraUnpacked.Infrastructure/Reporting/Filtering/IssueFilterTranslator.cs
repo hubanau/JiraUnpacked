@@ -49,11 +49,19 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
     public async Task<FilterBuildResult> BuildAsync(
         FilterGroup group, DictNameResolver resolveDict, CancellationToken ct = default)
     {
+        // A root switched off — or one whose every part is switched off — is "no filter": the
+        // user turned the parts off on purpose. A group WRITTEN empty is still refused below.
+        if (group.Disabled == true) return new FilterBuildResult(MatchAll, null);
+
         var (predicate, error) = await BuildGroupAsync(group, resolveDict, new Budget(), 1, ct);
-        return error is not null ? Err(error) : new FilterBuildResult(predicate, null);
+        return error is not null ? Err(error) : new FilterBuildResult(predicate ?? MatchAll, null);
     }
 
-    private async Task<(Expression<Func<Issue, bool>>?, string?)> BuildGroupAsync(
+    /// <summary>
+    /// A null Predicate with a null Error means every part of this group is switched off: the
+    /// group is absent, and its parent joins only its other parts.
+    /// </summary>
+    private async Task<(Expression<Func<Issue, bool>>? Predicate, string? Error)> BuildGroupAsync(
         FilterGroup group, DictNameResolver resolveDict, Budget budget, int depth, CancellationToken ct)
     {
         if (depth > MaxDepth)
@@ -65,13 +73,16 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
         var groups = group.Groups ?? new List<FilterGroup>();
 
         // An empty And is vacuously true and an empty Or is vacuously false. Same client bug,
-        // opposite blast radius, and neither is what the caller meant — so refuse both.
+        // opposite blast radius, and neither is what the caller meant — so refuse both. Checked
+        // on what was WRITTEN, before disabled parts are set aside.
         if (conditions.Count == 0 && groups.Count == 0)
             return (null, "A filter group must contain at least one condition or nested group.");
 
         var parts = new List<Expression<Func<Issue, bool>>>();
 
-        foreach (var c in conditions)
+        // Disabled parts are set aside before anything looks at them: not validated (a row
+        // switched off because it is broken must not break the filter) and not counted.
+        foreach (var c in conditions.Where(c => c.Disabled != true))
         {
             if (++budget.Conditions > MaxConditions)
                 return (null, $"A filter may have at most {MaxConditions} conditions.");
@@ -81,12 +92,14 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
             parts.Add(predicate!);
         }
 
-        foreach (var g in groups)
+        foreach (var g in groups.Where(g => g.Disabled != true))
         {
             var (predicate, error) = await BuildGroupAsync(g, resolveDict, budget, depth + 1, ct);
             if (error is not null) return (null, error);
-            parts.Add(predicate!);
+            if (predicate is not null) parts.Add(predicate);
         }
+
+        if (parts.Count == 0) return (null, null);
 
         // Seedless Aggregate on purpose: seeding with `i => true` is harmless under AndAlso but
         // would make every Or group match everything. parts is non-empty by the check above.
