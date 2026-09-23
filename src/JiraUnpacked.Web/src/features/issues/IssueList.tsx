@@ -32,7 +32,7 @@ export default function IssueList() {
   }, [tree]);
 
   // Shared with FilterBuilder through the query cache: same key, fetched once.
-  const { data: catalog } = useFilterCatalog();
+  const { data: catalog, isPending: catalogPending } = useFilterCatalog();
   const knownFields = useMemo(
     () => (catalog ? new Set(catalog.fields.map((f) => f.name)) : undefined),
     [catalog],
@@ -47,6 +47,11 @@ export default function IssueList() {
   const { data, isPending, error, isPlaceholderData } = useQuery({
     queryKey: queryKeys.issues(id, request),
     queryFn: () => queryIssues(id, request),
+    // Until the catalog has settled — loaded OR failed, either way `catalogPending` goes false —
+    // `knownFields` is undefined and pruneTree cannot tell a live field from a retired one, so a
+    // link built on a retired field would otherwise slip into the very first request. Once the
+    // catalog fails for good the fallback is the same as always: send unchecked (see pruneTree).
+    enabled: !catalogPending,
     // Bridges the *pending* phase of a new page/filter with the previous
     // result so an in-flight request doesn't blank the table.
     placeholderData: (prev) => prev,

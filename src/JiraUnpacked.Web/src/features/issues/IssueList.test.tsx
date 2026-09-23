@@ -71,7 +71,15 @@ function row(jiraKey: string, overrides: Partial<IssueListItem> = {}): IssueList
 
 describe('IssueList', () => {
   beforeEach(() => {
-    server.use(http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)));
+    server.use(
+      http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)),
+      // Several tests below add a condition, whose default field is 'status' -- a dictionary
+      // field -- so ConditionRow fires its own filter-values fetch regardless of what the test
+      // itself cares about (see FilterBuilder.test.tsx's mockFilterCatalog for the same fix and
+      // its rationale). Failing it keeps the value control the text input these tests already
+      // interact with, without the MSW console noise from a request nothing handled.
+      http.get('/api/projects/p1/filter-values', () => new HttpResponse(null, { status: 500 })),
+    );
   });
 
   it('tells an unfiltered empty project to run a sync', async () => {

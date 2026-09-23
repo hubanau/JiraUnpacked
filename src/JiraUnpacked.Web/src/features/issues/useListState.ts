@@ -39,20 +39,39 @@ export function useListState() {
   if (held.raw !== rawFilter || held.logic !== rawLogic) {
     // The URL moved. Our own write arriving keeps the tree already held (it may even be newer
     // than the URL); anything else — Back, a pasted link — is adopted from the URL.
-    const echo = rawLogic === null && recentWrites.current.includes(rawFilter ?? '');
-    if (!echo) tree = parseFilterParam(rawFilter, rawLogic);
+    //
+    // A match only counts as an echo of the OLDEST still-unconfirmed write it could be: found by
+    // index, not just membership. Once found, that entry and every one before it are dropped —
+    // they are now confirmed (or superseded) — so a later URL that happens to carry the same
+    // JSON (e.g. Clear All's '', landing again after a fresh navigation) is never mistaken for a
+    // write whose own echo already arrived and was consumed; it is adopted fresh instead.
+    const matchIndex = rawLogic === null ? recentWrites.current.indexOf(rawFilter ?? '') : -1;
+    if (matchIndex === -1) {
+      tree = parseFilterParam(rawFilter, rawLogic);
+    } else {
+      recentWrites.current = recentWrites.current.slice(matchIndex + 1);
+    }
     setHeld({ raw: rawFilter, logic: rawLogic, tree });
   }
 
+  // React Router's setSearchParams updater is handed the searchParams of the last COMMITTED
+  // render, not of a sibling call earlier in the same tick — so a filter write immediately
+  // followed by a sort write, before either has committed, would each build on the same stale
+  // base and the second would silently overwrite the first. This ref is this hook's own record
+  // of "what the URL should now contain": refreshed from the committed params on every render,
+  // and advanced by every patch, so the next patch in the same tick builds on top of the one
+  // just made rather than on a params snapshot that has not caught up yet.
+  const latestParams = useRef(params);
+  latestParams.current = params;
+
   const patch = useCallback((next: Record<string, string | null>) => {
-    setParams((prev) => {
-      const out = new URLSearchParams(prev);
-      for (const [key, value] of Object.entries(next)) {
-        if (value === null) out.delete(key);
-        else out.set(key, value);
-      }
-      return out;
-    }, { replace: true });
+    const out = new URLSearchParams(latestParams.current);
+    for (const [key, value] of Object.entries(next)) {
+      if (value === null) out.delete(key);
+      else out.set(key, value);
+    }
+    latestParams.current = out;
+    setParams(out, { replace: true });
   }, [setParams]);
 
   const setTree = useCallback((next: EditorGroup) => {

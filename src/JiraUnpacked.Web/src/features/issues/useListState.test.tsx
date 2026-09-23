@@ -112,4 +112,64 @@ describe('useListState', () => {
 
     expect(result.current.params.has('sortBy')).toBe(false);
   });
+
+  it('adopts a URL that matches an old write whose echo already landed, rather than keeping a later one forever', () => {
+    // Regression for a bug where a remembered write was never forgotten once its own echo had
+    // already arrived: add X, Clear all, build Y, then navigate to a URL with no filter (the same
+    // '' that Clear All once wrote) used to be misread as Clear All's echo *again* and silently
+    // kept Y, because '' stayed in the remembered-writes window forever.
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => result.current.state.setTree(ONE_ROW));     // add X -- echo lands and is consumed
+    act(() => result.current.state.setTree(emptyRoot())); // Clear all -- echo lands and is consumed
+    act(() => result.current.state.setTree(ONE_ROW));     // build Y -- echo lands and is consumed
+
+    // A fresh navigation carrying no filter -- not this hook's own echo of "Clear all", which
+    // already landed two writes ago -- must be adopted, not mistaken for a stale match.
+    act(() => result.current.navigate('/projects/p1/issues'));
+
+    expect(result.current.state.tree.conditions).toEqual([]);
+  });
+
+  it('keeps both changes when a filter write is followed immediately by a sort write, before either has committed', () => {
+    // Regression for a bug where react-router's setSearchParams updater is handed the
+    // searchParams of the last COMMITTED render, not of a sibling call earlier in the same tick:
+    // two patches back to back (e.g. a filter edit immediately followed by clicking a sort
+    // header) would each build on the same stale base, so the second silently discarded the
+    // first instead of both landing in the URL.
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => {
+      result.current.state.setTree(ONE_ROW);
+      result.current.state.setSort('storyPoints', false);
+    });
+
+    expect(JSON.parse(result.current.params.get('filter')!)).toEqual({
+      logic: 'And', conditions: [{ field: 'summary', op: 'Contains', value: 'l' }],
+    });
+    expect(result.current.params.get('sortBy')).toBe('storyPoints');
+    expect(result.current.params.get('sortDesc')).toBe('false');
+  });
+
+  it('still recognises an echo of an earlier write once a later one is already held, without losing the later one', () => {
+    // Two writes issued before either's own URL confirmation has had a chance to land -- what
+    // happens whenever the tree changes twice in quick succession. Whichever of the two the URL
+    // settles on first, the held tree must end on the LATEST write: an echo of the first must
+    // never regress it back, and must still be recognised as this hook's own (not adopted fresh,
+    // which would mint new ids and drop the second edit entirely).
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+    const later: EditorGroup = {
+      id: 'root-2', logic: 'And', groups: [],
+      conditions: [{ id: 'row-2', field: 'summary', op: 'Contains', value: 'lo' }],
+    };
+
+    act(() => {
+      result.current.state.setTree(ONE_ROW);
+      result.current.state.setTree(later);
+    });
+
+    expect(result.current.state.tree.id).toBe('root-2');
+    expect(result.current.state.tree.conditions[0].id).toBe('row-2');
+    expect(result.current.state.tree.conditions[0].value).toBe('lo');
+  });
 });

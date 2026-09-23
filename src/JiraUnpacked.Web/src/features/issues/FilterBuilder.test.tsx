@@ -24,7 +24,17 @@ const sentConditions = (body: Record<string, unknown>): unknown =>
   (body.filter as { conditions?: unknown[] } | undefined)?.conditions ?? body.conditions;
 
 function mockFilterCatalog() {
-  server.use(http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)));
+  server.use(
+    http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)),
+    // The default row's field is 'status', a dictionary field, so mounting a condition at all
+    // (most tests below do, via addCondition or a filter already in the URL) fires this fetch
+    // whether or not the test cares about the picker. Failing it keeps the value control exactly
+    // the text input it already was when this request went genuinely unhandled (MSW is
+    // configured to error on one) — just without the console noise. The 'value picker' describe
+    // below registers its own specific response after this one for the tests that ARE about it,
+    // which — being added later — takes precedence.
+    http.get('/api/projects/p1/filter-values', () => new HttpResponse(null, { status: 500 })),
+  );
 }
 
 function renderIssueList() {
@@ -258,8 +268,11 @@ describe('FilterBuilder', () => {
     // directly with CATALOG.maxInValues values already present, rather than
     // driving that many sequential "Add value" interactions through a
     // mounted IssueList (which made this the suite's second-slowest test).
-    // ConditionRow takes the catalog as a plain prop (no fetch of its own),
-    // so this needs no QueryClientProvider or MSW handler.
+    // ConditionRow takes the catalog as a plain prop, so this needs no
+    // filter-catalog fetch — but 'status' is a dictionary field, so ConditionRow
+    // still fires its own filter-values fetch regardless of op; failed here to
+    // keep MSW quiet, same as mockFilterCatalog does for every other test.
+    server.use(http.get('/api/projects/p1/filter-values', () => new HttpResponse(null, { status: 500 })));
     const condition: FilterCondition = {
       field: 'status',
       op: 'In',
@@ -491,6 +504,16 @@ describe('FilterBuilder logic toggle', () => {
 
   it('reads a legacy flat link with its old logic, and writes a tree without it on the next edit', async () => {
     mockFilterCatalog();
+    // The link's one condition is field=status, so mounting it fires a filter-values fetch —
+    // registered here with the real (counts) response envelope, overriding mockFilterCatalog's
+    // default failure for this test specifically. `values` is left empty: ConditionRow's picker
+    // still renders each entry as `<option value={v}>{v}</option>` with the whole element, not
+    // `.name` — a populated response here crashes the render with "Objects are not valid as a
+    // React child". That is a real bug (the actual backend already returns this counts shape;
+    // see FilterValueService), not a test artifact, but fixing ConditionRow itself is the
+    // value-picker rework's job, not this one — flagged in the fix report instead.
+    server.use(http.get('/api/projects/p1/filter-values', () =>
+      HttpResponse.json({ field: 'status', values: [], emptyCount: 0 })));
     const sent: Record<string, unknown>[] = [];
     server.use(http.post('/api/projects/p1/issues/query', async ({ request }) => {
       sent.push((await request.json()) as Record<string, unknown>);
@@ -525,6 +548,10 @@ describe('FilterBuilder logic toggle', () => {
   });
 
   it('leaves a field the catalog no longer has out of the request', async () => {
+    // The issues query is gated on the catalog having settled (see IssueList), so this asserts
+    // over every body the query handler ever received, not just the last one: before that gate
+    // existed, the very FIRST request — sent while the catalog was still loading and knownFields
+    // was undefined — carried 'retired' unfiltered, and only a later refetch dropped it.
     const { bodies } = mockIssuesQuery();
     const tree = {
       logic: 'And',
@@ -536,9 +563,13 @@ describe('FilterBuilder logic toggle', () => {
 
     renderIssueListAt(`/projects/p1/issues?filter=${encodeURIComponent(JSON.stringify(tree))}`);
 
-    await waitFor(() => expect(bodies.at(-1)?.filter).toEqual({
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    for (const body of bodies) {
+      expect(JSON.stringify(body.filter)).not.toContain('retired');
+    }
+    expect(bodies.at(-1)?.filter).toEqual({
       logic: 'And', conditions: [{ field: 'summary', op: 'Contains', value: 'login' }],
-    }));
+    });
   });
 });
 
