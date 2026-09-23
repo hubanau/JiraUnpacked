@@ -131,6 +131,45 @@ public sealed class IssueExportTests : IClassFixture<JiraUnpackedApiFactory>, IA
         Assert.Equal("text/csv", resp.Content.Headers.ContentType!.MediaType);
     }
 
+    [Fact]
+    public async Task Exports_a_filter_tree_and_ignores_the_legacy_logic_param()
+    {
+        var (client, tenant) = await MetricsTestData.AuthedTenantAsync(_factory);
+        var ctx = await MetricsTestData.SeedProjectAsync(tenant);
+        for (var i = 0; i < 3; i++) await Seed(ctx, $"DONE-{i}", ctx.DoneStatusId);
+        for (var i = 0; i < 2; i++) await Seed(ctx, $"TODO-{i}", ctx.ToDoStatusId);
+        await MetricsTestData.SeedIssueAsync(ctx, "90001", "NONE-0", "no status", null, null,
+            new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        // Done OR (Empty), with a switched-off To Do arm that must stay out. `logic=And` belongs
+        // to the old array format; applied to this tree it would turn the Or into an And and
+        // export nothing.
+        var tree = """{"logic":"Or","conditions":[{"field":"status","op":"Eq","value":"Done"},{"field":"status","op":"In","values":[null]},{"field":"status","op":"Eq","value":"To Do","disabled":true}]}""";
+
+        var csv = await client.GetStringAsync(
+            $"/api/projects/{ctx.ProjectId}/issues/export.csv?filter={Uri.EscapeDataString(tree)}&logic=And&cols=jiraKey");
+
+        var keys = csv.Split("\r\n", StringSplitOptions.RemoveEmptyEntries).Skip(1)
+            .OrderBy(k => k, StringComparer.Ordinal);
+        Assert.Equal(new[] { "DONE-0", "DONE-1", "DONE-2", "NONE-0" }, keys);
+    }
+
+    [Fact]
+    public async Task A_legacy_array_filter_still_honours_its_logic_param()
+    {
+        var (client, tenant) = await MetricsTestData.AuthedTenantAsync(_factory);
+        var ctx = await MetricsTestData.SeedProjectAsync(tenant);
+        for (var i = 0; i < 3; i++) await Seed(ctx, $"DONE-{i}", ctx.DoneStatusId);
+        for (var i = 0; i < 2; i++) await Seed(ctx, $"TODO-{i}", ctx.ToDoStatusId);
+
+        var legacy = """[{"field":"status","op":"Eq","value":"Done"},{"field":"status","op":"Eq","value":"To Do"}]""";
+
+        var csv = await client.GetStringAsync(
+            $"/api/projects/{ctx.ProjectId}/issues/export.csv?filter={Uri.EscapeDataString(legacy)}&logic=Or&cols=jiraKey");
+
+        Assert.Equal(5 + 1, csv.Split("\r\n", StringSplitOptions.RemoveEmptyEntries).Length);   // + header
+    }
+
     private static Task Seed(SeedContext ctx, string key, Guid statusId) =>
         MetricsTestData.SeedIssueAsync(
             ctx, Guid.NewGuid().ToString("N")[..10], key, key, statusId, null,

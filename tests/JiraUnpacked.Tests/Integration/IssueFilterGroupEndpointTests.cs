@@ -201,4 +201,40 @@ public sealed class IssueFilterGroupEndpointTests : IClassFixture<JiraUnpackedAp
 
         Assert.Equal(6, page.TotalCount);
     }
+
+    [Fact]
+    public async Task Three_levels_with_not_in_and_explicit_empty_select_exactly_the_intended_rows()
+    {
+        var (client, tenant) = await FilterTestData.AuthedTenantAsync(_factory);
+        var projectId = await FilterTestData.SeedFilterFixtureAsync(tenant);
+
+        //     assignee NotIn [Alice]                                             -> ACME-4, 5, 6 (ACME-3 has none: excluded)
+        // AND ( parent IsNotNull                                                 -> ACME-5, 6
+        //       OR ( summary NotContains "epic" AND status In [(Empty)] ) )      -> ACME-3, 5, 6
+        var page = await FilterTestData.QueryOkAsync(client, projectId, Req(new
+        {
+            logic = "And",
+            conditions = new[] { Cond("assignee", "NotIn", values: new[] { "Alice" }) },
+            groups = new[]
+            {
+                new
+                {
+                    logic = "Or",
+                    conditions = new[] { Cond("parent", "IsNotNull") },
+                    groups = new[]
+                    {
+                        Group("And", new[]
+                        {
+                            Cond("summary", "NotContains", value: "epic"),
+                            Cond("status", "In", values: new object?[] { null }),
+                        }),
+                    },
+                },
+            },
+        }));
+
+        // ACME-4 is Bob's but is the epic and has no parent; ACME-3 fits the inner arm but has
+        // no assignee, and "is none of" never matches an empty field.
+        Assert.Equal(new[] { "ACME-5", "ACME-6" }, Keys(page));
+    }
 }
