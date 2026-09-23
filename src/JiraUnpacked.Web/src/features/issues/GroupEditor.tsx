@@ -61,6 +61,9 @@ export function GroupEditor({
   // A new group arrives with one blank condition, so it needs room for both.
   const addGroupHint = limitHint({ conditions: 1, groups: 1 });
   const duplicateHint = limitHint(countEnabled(group));
+  // Switching a disabled group back on adds back whatever it holds (respecting ITS children's own
+  // on/off state) — counted as if only its own `disabled` flag had already flipped.
+  const enableGroupHint = group.disabled ? limitHint(countEnabled({ ...group, disabled: false })) : undefined;
 
   const set = (patch: Partial<EditorGroup>) => onChange({ ...group, ...patch });
 
@@ -101,7 +104,10 @@ export function GroupEditor({
           label={`Disable ${name}`}
           glyph="⏻"
           aria-pressed={!!group.disabled}
-          title={group.disabled ? 'Switched off — click to apply again' : 'Switch off without deleting'}
+          disabled={enableGroupHint !== undefined}
+          title={group.disabled
+            ? (enableGroupHint ?? 'Switched off — click to apply again')
+            : 'Switch off without deleting'}
           onClick={() => onChange(toggleDisabled(group))}
         />
         {onRemove && <IconButton label={`Remove ${name}`} glyph="✕" title="Remove" onClick={onRemove} />}
@@ -111,6 +117,8 @@ export function GroupEditor({
         const rowLabel = childLabel(i + 1);
         // Copying a switched-off row adds nothing that counts, so it is never blocked.
         const copyHint = c.disabled ? undefined : addConditionHint;
+        // Switching a disabled condition back on adds exactly one condition, same as adding a new one.
+        const enableHint = c.disabled ? addConditionHint : undefined;
         return (
           <div
             key={c.id}
@@ -120,7 +128,10 @@ export function GroupEditor({
               label={`Disable condition ${rowLabel}`}
               glyph="⏻"
               aria-pressed={!!c.disabled}
-              title={c.disabled ? 'Switched off — click to apply again' : 'Switch off without deleting'}
+              disabled={enableHint !== undefined}
+              title={c.disabled
+                ? (enableHint ?? 'Switched off — click to apply again')
+                : 'Switch off without deleting'}
               onClick={() => set({ conditions: conditions.map((x) => (x.id === c.id ? toggleDisabled(x) : x)) })}
             />
             <div className="flex-1">

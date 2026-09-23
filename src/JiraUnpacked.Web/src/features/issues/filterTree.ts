@@ -1,4 +1,5 @@
 import type { FilterCondition, FilterGroup, FilterLogic, FilterOperator } from '../../api/issues';
+import { OPERATOR_LABELS } from './filterCatalogHelpers';
 
 /**
  * The editor's working copy of a filter: the wire FilterGroup plus a client-only `id` on every
@@ -23,10 +24,14 @@ export interface TreeCounts {
   groups: number;
 }
 
-const OPERATORS: readonly FilterOperator[] = [
-  'Eq', 'Neq', 'In', 'NotIn', 'Lt', 'Lte', 'Gt', 'Gte',
-  'Contains', 'NotContains', 'StartsWith', 'IsNull', 'IsNotNull',
-];
+/**
+ * A field's operator is valid iff it has a label — OPERATOR_LABELS is `Record<FilterOperator,
+ * string>`, so it is exhaustive by construction and the compiler refuses to build if a member is
+ * ever added to FilterOperator without one. A live lookup rather than a list captured once at
+ * module load, so this stays true even if OPERATOR_LABELS is ever extended at runtime.
+ */
+const isKnownOperator = (op: string): op is FilterOperator =>
+  Object.prototype.hasOwnProperty.call(OPERATOR_LABELS, op);
 
 let lastId = 0;
 /** Unique for the page's lifetime, which is all a React key needs. */
@@ -171,9 +176,12 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 
 const notNull = <T>(x: T | null): x is T => x !== null;
 
+/** Fields with no empty operators at all — see the operators table in the design spec. */
+const NO_EMPTY_OPS: ReadonlySet<string> = new Set(['jiraKey']);
+
 function readCondition(v: unknown): EditorCondition | null {
   if (!isRecord(v) || typeof v.field !== 'string' || typeof v.op !== 'string') return null;
-  if (!OPERATORS.includes(v.op as FilterOperator)) return null;
+  if (!isKnownOperator(v.op)) return null;
   const c: EditorCondition = { id: newId(), field: v.field, op: v.op as FilterOperator };
   if (typeof v.value === 'string' || typeof v.value === 'number' || v.value === null) c.value = v.value;
   if (Array.isArray(v.values)) {
@@ -181,6 +189,19 @@ function readCondition(v: unknown): EditorCondition | null {
       typeof x === 'string' || typeof x === 'number' || x === null);
   }
   if (v.disabled === true) c.disabled = true;
+
+  // A hand-edited (or hand-crafted) link can carry `value: null` on an operator that does not
+  // mean (Empty) on the wire — Eq/Neq are the only ones where it does. Normalise at parse time
+  // rather than trusting it through: Eq/Neq become the is-empty/is-not-empty operator they mean;
+  // any other operator just has the null dropped, leaving the condition incomplete (pruned, never
+  // sent) rather than silently kept with a value its operator cannot use. jiraKey has no empty
+  // operators at all (see the operators table), so it is never turned into IsNull — its null is
+  // always just dropped, incomplete.
+  if (c.value === null) {
+    if (!NO_EMPTY_OPS.has(c.field) && c.op === 'Eq') c.op = 'IsNull';
+    else if (!NO_EMPTY_OPS.has(c.field) && c.op === 'Neq') c.op = 'IsNotNull';
+    delete c.value;
+  }
   return c;
 }
 

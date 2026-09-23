@@ -137,6 +137,50 @@ describe('GroupEditor', () => {
     expect(screen.getByRole('button', { name: 'Add condition' })).toBeEnabled();
   });
 
+  it('blocks re-enabling a disabled condition at the limit, but still allows switching one off', async () => {
+    const editor = renderEditor(
+      root({ conditions: [summary('a'), summary('b'), { ...summary('c'), disabled: true }] }),
+      { ...FILTER_CATALOG, maxConditions: 2 },
+    );
+
+    const reenable = screen.getByRole('button', { name: 'Disable condition 3' });
+    expect(reenable).toBeDisabled();
+    expect(reenable).toHaveAttribute('title', 'Limit: 2 conditions');
+
+    const disable = screen.getByRole('button', { name: 'Disable condition 1' });
+    expect(disable).toBeEnabled();
+    expect(editor.tree().conditions[2].disabled).toBe(true);   // still off: the click never landed
+  });
+
+  it('blocks re-enabling a disabled group at the limit, computed from what it would add if switched on', () => {
+    renderEditor(
+      root({
+        conditions: [summary('a')],
+        groups: [nested('g', { disabled: true, conditions: [summary('b'), summary('c')] })],
+      }),
+      { ...FILTER_CATALOG, maxConditions: 2 },
+    );
+
+    const reenable = screen.getByRole('button', { name: 'Disable group 2' });
+    expect(reenable).toBeDisabled();
+    expect(reenable).toHaveAttribute('title', 'Limit: 2 conditions');
+  });
+
+  it('allows re-enabling once there is room', async () => {
+    const user = userEvent.setup();
+    const editor = renderEditor(
+      root({ conditions: [summary('a'), { ...summary('b'), disabled: true }] }),
+      { ...FILTER_CATALOG, maxConditions: 2 },
+    );
+
+    const reenable = screen.getByRole('button', { name: 'Disable condition 2' });
+    expect(reenable).toBeEnabled();
+
+    await user.click(reenable);
+
+    expect(editor.tree().conditions[1].disabled).toBeUndefined();
+  });
+
   it('stops adding and duplicating groups at the group limit', () => {
     renderEditor(
       root({ conditions: [summary('a')], groups: [nested('g', { conditions: [summary('b')] })] }),

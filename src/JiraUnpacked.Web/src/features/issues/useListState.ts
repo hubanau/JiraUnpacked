@@ -58,11 +58,18 @@ export function useListState() {
   // render, not of a sibling call earlier in the same tick — so a filter write immediately
   // followed by a sort write, before either has committed, would each build on the same stale
   // base and the second would silently overwrite the first. This ref is this hook's own record
-  // of "what the URL should now contain": refreshed from the committed params on every render,
-  // and advanced by every patch, so the next patch in the same tick builds on top of the one
-  // just made rather than on a params snapshot that has not caught up yet.
+  // of "what the URL should now contain": advanced by every patch, so the next patch in the same
+  // tick builds on top of the one just made rather than on a params snapshot that has not caught
+  // up yet. It is refreshed from the committed params only when `params`'s IDENTITY has actually
+  // changed — not on every render — because a render can happen (e.g. from unrelated state)
+  // before the router's own transition has committed; refreshing unconditionally would stomp a
+  // patch already recorded here with the stale params still in scope for that render.
   const latestParams = useRef(params);
-  latestParams.current = params;
+  const seenParams = useRef(params);
+  if (params !== seenParams.current) {
+    seenParams.current = params;
+    latestParams.current = params;
+  }
 
   const patch = useCallback((next: Record<string, string | null>) => {
     const out = new URLSearchParams(latestParams.current);
@@ -76,6 +83,16 @@ export function useListState() {
 
   const setTree = useCallback((next: EditorGroup) => {
     const raw = toUrlJson(next);
+    // A no-op write (the new tree serialises to exactly what the URL already holds, e.g. typing
+    // "2." into storyPoints where it parses the same as "2") must not be remembered: if it were,
+    // it would sit in the window forever (nothing ever changes the URL to consume it), so a later
+    // navigation that happens to land on this same URL again (Back included) would be misread as
+    // this hook's own echo and ignored, leaving the tree stuck on whatever it held before instead
+    // of following the URL. Update the held tree (fresh ids, e.g.) and stop — nothing to patch.
+    if (raw === latestParams.current.get('filter') && !latestParams.current.has('logic')) {
+      setHeld((h) => ({ ...h, tree: next }));
+      return;
+    }
     recentWrites.current = [...recentWrites.current.slice(-(REMEMBERED_WRITES - 1)), raw ?? ''];
     setHeld((h) => ({ ...h, tree: next }));
     patch({ filter: raw, logic: null });

@@ -30,9 +30,10 @@ public sealed record FilterGroup(
     FilterLogic Logic, List<FilterCondition>? Conditions, List<FilterGroup>? Groups, bool? Disabled = null);
 
 /// <summary>
-/// Either a flat AND over <see cref="Conditions"/> (the original FR-E4 shape, still the one the
-/// SPA sends) or a boolean tree under <see cref="Filter"/>. Both populated is an error, not a
-/// merge. Neither populated = unfiltered.
+/// Either a flat AND over <see cref="Conditions"/> (the original FR-E4 shape, kept for legacy
+/// links and callers — the SPA no longer writes it) or a boolean tree under <see cref="Filter"/>
+/// (what the SPA always sends now). Both populated is an error, not a merge. Neither populated =
+/// unfiltered.
 /// </summary>
 /// <param name="SortBy">
 /// A column from the closed sort catalog. Null means the default (newest updated first). An

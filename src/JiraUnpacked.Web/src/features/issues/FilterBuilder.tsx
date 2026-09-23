@@ -47,11 +47,11 @@ export function FilterBuilder({ projectId, tree, onChange }: FilterBuilderProps)
       <div className="flex items-center justify-between gap-4">
         <p className="text-sm text-[var(--ju-muted)]">No filter — showing all issues</p>
         <div className="flex gap-2">
-          <Button type="button" variant="secondary" onClick={() => onChange({ ...tree, conditions: [blankCondition()] })}>
+          <Button type="button" variant="secondary" onClick={() => onChange({ ...emptyRoot(), conditions: [blankCondition()] })}>
             Add condition
           </Button>
           {catalog.maxDepth > 1 && (
-            <Button type="button" variant="secondary" onClick={() => onChange({ ...tree, groups: [blankGroup()] })}>
+            <Button type="button" variant="secondary" onClick={() => onChange({ ...emptyRoot(), groups: [blankGroup()] })}>
               Add group
             </Button>
           )}

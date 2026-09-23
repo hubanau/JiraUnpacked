@@ -99,6 +99,18 @@ public sealed class IssueExportTests : IClassFixture<JiraUnpackedApiFactory>, IA
     }
 
     [Fact]
+    public async Task Refuses_a_malformed_legacy_array_filter_rather_than_failing_with_a_500()
+    {
+        var (client, tenant) = await MetricsTestData.AuthedTenantAsync(_factory);
+        var ctx = await MetricsTestData.SeedProjectAsync(tenant);
+
+        var resp = await client.GetAsync(
+            $"/api/projects/{ctx.ProjectId}/issues/export.csv?filter={Uri.EscapeDataString("[bad")}");
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
     public async Task Refuses_an_unknown_sort_column()
     {
         var (client, tenant) = await MetricsTestData.AuthedTenantAsync(_factory);

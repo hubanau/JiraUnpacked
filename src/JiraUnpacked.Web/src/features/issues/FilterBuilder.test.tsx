@@ -10,7 +10,7 @@ import { FilterBuilder } from './FilterBuilder';
 import { ConditionRow } from './ConditionRow';
 import type { FilterCondition } from '../../api/issues';
 import { FILTER_CATALOG as CATALOG } from '../../test/filterCatalogFixture';
-import { emptyRoot } from './filterTree';
+import { emptyRoot, type EditorGroup } from './filterTree';
 
 /**
  * The conditions the SPA actually sent, whichever envelope carried them.
@@ -123,6 +123,32 @@ describe('FilterBuilder', () => {
     expect(await screen.findByText(/no filter — showing all issues/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /add condition/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /clear all/i })).not.toBeInTheDocument();
+  });
+
+  it('seeds a fresh, enabled root when adding a condition from empty state, even if the old root was disabled', async () => {
+    // A root can be left `disabled: true` (e.g. every part was switched off and then removed) and
+    // still be the empty tree the "No filter" state renders for. "Add condition" from there must
+    // not spread that disabled root onto the new row — the row would be born already dead.
+    mockFilterCatalog();
+    const user = userEvent.setup({ delay: null });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let latest: EditorGroup | undefined;
+    const disabledEmptyRoot: EditorGroup = { ...emptyRoot(), disabled: true };
+    render(
+      <QueryClientProvider client={queryClient}>
+        <FilterBuilder
+          projectId="p1"
+          tree={disabledEmptyRoot}
+          onChange={(next) => { latest = next; }}
+        />
+      </QueryClientProvider>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: /add condition/i }));
+
+    expect(latest?.disabled).toBeUndefined();
+    expect(latest?.conditions).toHaveLength(1);
+    expect(latest?.conditions[0].disabled).toBeUndefined();
   });
 
   it('sends neither value nor values for IsNull', async () => {

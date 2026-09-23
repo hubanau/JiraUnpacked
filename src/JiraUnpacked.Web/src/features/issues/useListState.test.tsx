@@ -151,6 +151,41 @@ describe('useListState', () => {
     expect(result.current.params.get('sortDesc')).toBe('false');
   });
 
+  it('does not keep re-recording a no-op write, so a later Back can still adopt the URL', () => {
+    // Regression: typing "2." into storyPoints parses to the same value as "2" already in the
+    // URL -- the write is a no-op, the URL never changes. If that no-op is remembered as if it
+    // were a real write, it never gets consumed (nothing ever changes the URL to produce its
+    // echo), so it sits in the window forever and a later Back to that same URL is misread as
+    // this hook's own echo and ignored -- the tree stays whatever it was, not what the URL holds.
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+    const storyPoints2 = (rowId: string): EditorGroup => ({
+      id: 'root-1', logic: 'And', groups: [],
+      conditions: [{ id: rowId, field: 'storyPoints', op: 'Eq', value: 2 }],
+    });
+
+    act(() => result.current.state.setTree(storyPoints2('row-1')));   // "2" -- writes filter=...
+    act(() => result.current.state.setTree(storyPoints2('row-2')));   // "2." parses to the same 2 -- no-op
+    act(() => result.current.navigate('/projects/p1/issues2'));       // away
+    act(() => result.current.navigate(-1));                           // Back
+
+    expect(result.current.state.tree.conditions).toEqual([
+      expect.objectContaining({ field: 'storyPoints', op: 'Eq', value: 2 }),
+    ]);
+  });
+
+  it('follows the URL to a different IssueList page while the hook stays mounted', () => {
+    const first = encodeURIComponent('{"logic":"And","conditions":[{"field":"status","op":"IsNull"}]}');
+    const second = encodeURIComponent('{"logic":"Or","conditions":[{"field":"status","op":"IsNotNull"}]}');
+    const { result } = renderHook(useProbe, { wrapper: wrap(`/projects/p1/issues?filter=${first}`) });
+
+    act(() => result.current.navigate(`/projects/p2/issues?filter=${second}`));
+
+    expect(result.current.state.tree.logic).toBe('Or');
+    expect(result.current.state.tree.conditions).toEqual([
+      expect.objectContaining({ field: 'status', op: 'IsNotNull' }),
+    ]);
+  });
+
   it('still recognises an echo of an earlier write once a later one is already held, without losing the later one', () => {
     // Two writes issued before either's own URL confirmation has had a chance to land -- what
     // happens whenever the tree changes twice in quick succession. Whichever of the two the URL

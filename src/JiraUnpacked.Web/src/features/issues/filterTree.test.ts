@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  blankGroup, cloneGroup, countEnabled, emptyRoot, insertAfter, parseFilterParam, pruneTree,
-  toUrlJson, toggleDisabled, withIdentityOf,
+  blankGroup, cloneGroup, countEnabled, emptyRoot, insertAfter, isCompleteCondition,
+  parseFilterParam, pruneTree, toUrlJson, toggleDisabled, withIdentityOf,
   type EditorCondition, type EditorGroup,
 } from './filterTree';
+import { OPERATOR_LABELS } from './filterCatalogHelpers';
 
 const cond = (id: string, rest: Omit<EditorCondition, 'id'>): EditorCondition => ({ id, ...rest });
 const group = (id: string, rest: Partial<EditorGroup> = {}): EditorGroup =>
@@ -203,5 +204,61 @@ describe('toUrlJson / parseFilterParam', () => {
       '{"logic":"And","conditions":[{"field":"status","op":"IsNull"},{"field":"status","op":"IsNull"}]}', null);
 
     expect(new Set([tree.id, ...tree.conditions.map((c) => c.id)]).size).toBe(3);
+  });
+
+  it('accepts every operator the editor has a label for, including one added after this test was written', () => {
+    // The accepted-operator check is a live lookup against OPERATOR_LABELS (a Record<FilterOperator,
+    // string>, exhaustive by construction) rather than a list captured once at module load, so a
+    // label the catalog gains later is honoured without a matching edit to filterTree.ts. Proven
+    // here by adding one at runtime, past what FilterOperator itself lists at compile time.
+    const labels = OPERATOR_LABELS as Record<string, string>;
+    labels.Bogus = 'bogus';
+    try {
+      const tree = parseFilterParam('{"logic":"And","conditions":[{"field":"status","op":"Bogus"}]}', null);
+      expect(tree.conditions.map((c) => c.op)).toEqual(['Bogus']);
+    } finally {
+      delete labels.Bogus;
+    }
+  });
+
+  describe('null-value normalisation', () => {
+    it('turns a hand-edited Eq null into IsNull', () => {
+      const tree = parseFilterParam('{"logic":"And","conditions":[{"field":"sprint","op":"Eq","value":null}]}', null);
+
+      expect(tree.conditions[0]).toMatchObject({ field: 'sprint', op: 'IsNull' });
+      expect('value' in tree.conditions[0]).toBe(false);
+    });
+
+    it('turns a hand-edited Neq null into IsNotNull', () => {
+      const tree = parseFilterParam('{"logic":"And","conditions":[{"field":"team","op":"Neq","value":null}]}', null);
+
+      expect(tree.conditions[0]).toMatchObject({ field: 'team', op: 'IsNotNull' });
+      expect('value' in tree.conditions[0]).toBe(false);
+    });
+
+    it('drops a null value on any other operator, leaving the condition incomplete rather than sent', () => {
+      const tree = parseFilterParam(
+        '{"logic":"And","conditions":[{"field":"summary","op":"Contains","value":null}]}', null);
+
+      expect(tree.conditions[0].op).toBe('Contains');
+      expect('value' in tree.conditions[0]).toBe(false);
+      expect(isCompleteCondition(tree.conditions[0])).toBe(false);
+    });
+
+    it('never turns a jiraKey null into IsNull, since jiraKey has no empty ops', () => {
+      const tree = parseFilterParam('{"logic":"And","conditions":[{"field":"jiraKey","op":"Eq","value":null}]}', null);
+
+      expect(tree.conditions[0].op).toBe('Eq');
+      expect('value' in tree.conditions[0]).toBe(false);
+      expect(isCompleteCondition(tree.conditions[0])).toBe(false);
+    });
+
+    it('never turns a jiraKey null into IsNotNull either', () => {
+      const tree = parseFilterParam('{"logic":"And","conditions":[{"field":"jiraKey","op":"Neq","value":null}]}', null);
+
+      expect(tree.conditions[0].op).toBe('Neq');
+      expect('value' in tree.conditions[0]).toBe(false);
+      expect(isCompleteCondition(tree.conditions[0])).toBe(false);
+    });
   });
 });

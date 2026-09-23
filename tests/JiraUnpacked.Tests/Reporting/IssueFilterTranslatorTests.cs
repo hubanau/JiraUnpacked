@@ -280,7 +280,7 @@ public sealed class IssueFilterTranslatorTests
     }
 
     [Fact]
-    public async Task Dict_in_with_only_null_is_is_empty()
+    public async Task Dict_in_with_only_null_is_empty()
     {
         var pred = await CompileAsync(new FilterCondition("sprint", FilterOperator.In, null, Vals((object?)null)));
         Assert.True(pred(Issue(i => i.SprintId = null)));
