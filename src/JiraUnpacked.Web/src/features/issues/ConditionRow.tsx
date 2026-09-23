@@ -112,7 +112,7 @@ export function ConditionRow({
   // The list is an affordance, not a gate. If it is missing or failed, every control below falls
   // back to the text box it replaced, which is exactly what the field did before the picker
   // existed -- a broken picker must not make a working filter unusable.
-  const pickable = wantsValueList && valueList.data ? valueList.data.values : null;
+  const pickable = wantsValueList && valueList.data ? valueList.data.values.map((v) => v.name) : null;
 
   const valueFieldId = `condition-${label}-value`;
   const valueLabel = `Value for condition ${label}`;

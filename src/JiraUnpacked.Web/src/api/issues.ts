@@ -133,9 +133,22 @@ export const getIssueDetail = (projectId: string, jiraIssueId: string) =>
 
 export const getFilterCatalog = () => apiFetch<FilterCatalog>('/api/filter-catalog');
 
-/** The values a dictionary field actually takes in this project. 400 for any other field. */
+export interface FilterValueOption {
+  name: string;
+  /** Issues in this project carrying the value — over the whole project, not the current filter. */
+  count: number;
+}
+
+export interface FilterValues {
+  field: string;
+  values: FilterValueOption[];
+  /** Issues in this project with no value for the field: the count behind (Empty). */
+  emptyCount: number;
+}
+
+/** The values a dictionary field actually takes in this project, with counts. 400 for any other field. */
 export const getFilterValues = (projectId: string, field: string) =>
-  apiFetch<{ field: string; values: string[] }>(
+  apiFetch<FilterValues>(
     `/api/projects/${projectId}/filter-values?field=${encodeURIComponent(field)}`);
 
 export interface ExportView {

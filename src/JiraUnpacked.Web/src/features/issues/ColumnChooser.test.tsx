@@ -233,7 +233,7 @@ describe('CSV export', () => {
     mockExport();
     // The status condition on screen asks for its value picker's choices.
     server.use(http.get('/api/projects/p1/filter-values', () =>
-      HttpResponse.json({ field: 'status', values: ['Backlog'] })));
+      HttpResponse.json({ field: 'status', values: [{ name: 'Backlog', count: 1 }], emptyCount: 0 })));
     const user = userEvent.setup();
     const filter = encodeURIComponent('[{"field":"status","op":"Eq","value":"Backlog"}]');
     renderList(`/projects/p1/issues?filter=${filter}&logic=Or&sortBy=storyPoints&cols=jiraKey,summary`);

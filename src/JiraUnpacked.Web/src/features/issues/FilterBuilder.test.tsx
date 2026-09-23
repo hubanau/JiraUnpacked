@@ -579,7 +579,7 @@ describe('value picker', () => {
 
   function mockValues(values: string[]) {
     server.use(http.get('/api/projects/p1/filter-values', () =>
-      HttpResponse.json({ field: 'status', values })));
+      HttpResponse.json({ field: 'status', values: values.map((name) => ({ name, count: 1 })), emptyCount: 0 })));
   }
 
   function mockEmptyPage() {
@@ -599,7 +599,7 @@ describe('value picker', () => {
     await waitFor(() =>
       expect(screen.getByLabelText(/value for condition 1/i).tagName).toBe('SELECT'));
     const control = screen.getByLabelText(/value for condition 1/i);
-    expect(within(control).getByRole('option', { name: 'In Progress' })).toBeInTheDocument();
+    expect(within(control).getByRole('option', { name: /^In Progress/ })).toBeInTheDocument();
   });
 
   it('keeps a free text box for a field that has no value list', async () => {
@@ -632,7 +632,7 @@ describe('value picker', () => {
     let asked = 0;
     server.use(http.get('/api/projects/p1/filter-values', () => {
       asked += 1;
-      return HttpResponse.json({ field: 'status', values: ['Backlog'] });
+      return HttpResponse.json({ field: 'status', values: [{ name: 'Backlog', count: 1 }], emptyCount: 0 });
     }));
 
     const isNull = encodeURIComponent('[{"field":"status","op":"IsNull"}]');
