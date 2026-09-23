@@ -1,31 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ApiError } from '../../api/errors';
 import { DEFAULT_PAGE_SIZE, exportIssuesCsv, queryIssues } from '../../api/issues';
-import type { FilterCondition, IssueFilterRequest, IssueListItem, PagedResult } from '../../api/issues';
+import type { IssueFilterRequest, IssueListItem, PagedResult } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
 import { Button, EmptyState, Spinner, Table, TBody, TD, TH, THead, TR } from '../../ui';
-import { FilterBuilder } from './FilterBuilder';
+import { FilterBuilder, useFilterCatalog } from './FilterBuilder';
 import { useListState } from './useListState';
+import { pruneTree } from './filterTree';
 import { ColumnChooser } from './ColumnChooser';
 import { ISSUE_COLUMNS, ALWAYS_ON } from './columns';
 import { saveBlob } from './saveBlob';
-
-/**
- * A condition the user has started but not finished — a single-value
- * operator with no value typed yet, or an `In` with no values added yet —
- * is unfinished, not invalid. `ConditionRow` necessarily emits these
- * mid-edit (e.g. a field change drops `value` entirely; picking a
- * Decimal/DateTime operator emits `value: ''`), and submitting them would
- * be a guaranteed 400 before the user has had a chance to fill them in.
- * `IsNull` needs no value at all, so it is always complete.
- */
-function isCompleteCondition(condition: FilterCondition): boolean {
-  if (condition.op === 'IsNull') return true;
-  if (condition.op === 'In') return (condition.values?.length ?? 0) > 0;
-  return condition.value !== undefined && condition.value !== '';
-}
 
 export default function IssueList() {
   // Route always supplies :id here (see App.tsx); the '' fallback only
@@ -34,38 +20,38 @@ export default function IssueList() {
 
   // The view lives in the URL, not in component state: that makes a filtered list shareable as
   // a link and survives reload and Back, neither of which useState does.
-  const {
-    conditions, setConditions, logic, setLogic, columns, setColumns,
-    sortBy, sortDescending, setSort,
-  } = useListState();
+  const { tree, setTree, columns, setColumns, sortBy, sortDescending, setSort } = useListState();
 
   const [page, setPage] = useState(1);
 
-  // Narrowing the filter can leave the user stranded on a page that no
-  // longer exists once results shrink — jump back to page 1 whenever the
-  // condition set changes so an empty page never gets mistaken for "no
-  // matches this filter".
+  // Narrowing the filter can leave the user stranded on a page that no longer exists — jump
+  // back to page 1 whenever the tree changes. `tree` keeps its identity across the URL's echo
+  // of our own writes (see useListState), so this fires once per edit.
   useEffect(() => {
     setPage(1);
-  }, [conditions]);
+  }, [tree]);
 
-  // The request the server actually sees omits conditions the user has not
-  // finished filling in yet — see isCompleteCondition. This is narrow and
-  // mechanical: it never drops a condition the user *has* filled in, and a
-  // server 400 for a condition that is complete but still invalid must
-  // still render (see the "still shows a server 400" FilterBuilder test).
-  const completeConditions = conditions.filter(isCompleteCondition);
+  // Shared with FilterBuilder through the query cache: same key, fetched once.
+  const { data: catalog, isPending: catalogPending } = useFilterCatalog();
+  const knownFields = useMemo(
+    () => (catalog ? new Set(catalog.fields.map((f) => f.name)) : undefined),
+    [catalog],
+  );
 
-  // `filter`, never `conditions`: the server rejects both together rather than merging them, and
-  // the flat list has nowhere to carry the And/Or choice. An empty filter is omitted entirely --
-  // the server refuses an empty group rather than guessing whether it means all or nothing.
+  // What the server sees: the tree without disabled parts, unfinished rows or retired fields
+  // (see pruneTree). Undefined = no filter — never an empty group, which the server refuses.
+  const filter = useMemo(() => pruneTree(tree, knownFields), [tree, knownFields]);
+
   const paging = { page, pageSize: DEFAULT_PAGE_SIZE, sortBy, sortDescending };
-  const request: IssueFilterRequest = completeConditions.length === 0
-    ? paging
-    : { filter: { logic, conditions: completeConditions }, ...paging };
+  const request: IssueFilterRequest = filter ? { filter, ...paging } : paging;
   const { data, isPending, error, isPlaceholderData } = useQuery({
     queryKey: queryKeys.issues(id, request),
     queryFn: () => queryIssues(id, request),
+    // Until the catalog has settled — loaded OR failed, either way `catalogPending` goes false —
+    // `knownFields` is undefined and pruneTree cannot tell a live field from a retired one, so a
+    // link built on a retired field would otherwise slip into the very first request. Once the
+    // catalog fails for good the fallback is the same as always: send unchecked (see pruneTree).
+    enabled: !catalogPending,
     // Bridges the *pending* phase of a new page/filter with the previous
     // result so an in-flight request doesn't blank the table.
     placeholderData: (prev) => prev,
@@ -85,8 +71,7 @@ export default function IssueList() {
   const shown = data ?? lastGoodData;
 
   const exportCsv = useMutation({
-    mutationFn: () =>
-      exportIssuesCsv(id, { conditions: completeConditions, logic, sortBy, sortDescending, columns }),
+    mutationFn: () => exportIssuesCsv(id, { filter, sortBy, sortDescending, columns }),
     onSuccess: ({ blob, filename }) => saveBlob(blob, filename ?? 'issues.csv'),
   });
 
@@ -126,13 +111,7 @@ export default function IssueList() {
 
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1">
-          <FilterBuilder
-            projectId={id}
-            conditions={conditions}
-            onChange={setConditions}
-            logic={logic}
-            onLogicChange={setLogic}
-          />
+          <FilterBuilder projectId={id} tree={tree} onChange={setTree} />
         </div>
         <div className="flex items-center gap-2">
           <ColumnChooser selected={columns} onChange={setColumns} />
@@ -146,7 +125,7 @@ export default function IssueList() {
         </div>
       </div>
 
-      {showEmpty && conditions.length === 0 && (
+      {showEmpty && !filter && (
         <EmptyState
           title="No issues yet"
           description="Run a sync to pull this project's issues from Jira."
@@ -154,7 +133,7 @@ export default function IssueList() {
         />
       )}
 
-      {showEmpty && conditions.length > 0 && (
+      {showEmpty && filter && (
         <EmptyState
           title="No issues match this filter"
           description="Try removing or loosening a condition."

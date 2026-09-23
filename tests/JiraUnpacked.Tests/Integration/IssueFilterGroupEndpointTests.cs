@@ -166,4 +166,75 @@ public sealed class IssueFilterGroupEndpointTests : IClassFixture<JiraUnpackedAp
         Assert.Equal(0, page.TotalCount);
         Assert.Empty(page.Items);
     }
+
+    [Fact]
+    public async Task Disabled_parts_are_left_out_of_the_query()
+    {
+        var (client, tenant) = await FilterTestData.AuthedTenantAsync(_factory);
+        var projectId = await FilterTestData.SeedFilterFixtureAsync(tenant);
+
+        // Were the switched-off arm applied, Bob's three issues would join ACME-1.
+        var page = await FilterTestData.QueryOkAsync(client, projectId, Req(new
+        {
+            logic = "Or",
+            conditions = new object[]
+            {
+                Cond("status", "Eq", value: "In Progress"),
+                new { field = "assignee", op = "Eq", value = "Bob", disabled = true },
+            },
+        }));
+
+        Assert.Equal(new[] { "ACME-1" }, Keys(page));
+    }
+
+    [Fact]
+    public async Task A_filter_with_everything_switched_off_returns_every_issue()
+    {
+        var (client, tenant) = await FilterTestData.AuthedTenantAsync(_factory);
+        var projectId = await FilterTestData.SeedFilterFixtureAsync(tenant);
+
+        var page = await FilterTestData.QueryOkAsync(client, projectId, Req(new
+        {
+            logic = "And",
+            conditions = new object[] { new { field = "status", op = "Eq", value = "Done", disabled = true } },
+        }));
+
+        Assert.Equal(6, page.TotalCount);
+    }
+
+    [Fact]
+    public async Task Three_levels_with_not_in_and_explicit_empty_select_exactly_the_intended_rows()
+    {
+        var (client, tenant) = await FilterTestData.AuthedTenantAsync(_factory);
+        var projectId = await FilterTestData.SeedFilterFixtureAsync(tenant);
+
+        //     assignee NotIn [Alice]                                             -> ACME-4, 5, 6 (ACME-3 has none: excluded)
+        // AND ( parent IsNotNull                                                 -> ACME-5, 6
+        //       OR ( summary NotContains "epic" AND status In [(Empty)] ) )      -> ACME-3, 5, 6
+        var page = await FilterTestData.QueryOkAsync(client, projectId, Req(new
+        {
+            logic = "And",
+            conditions = new[] { Cond("assignee", "NotIn", values: new[] { "Alice" }) },
+            groups = new[]
+            {
+                new
+                {
+                    logic = "Or",
+                    conditions = new[] { Cond("parent", "IsNotNull") },
+                    groups = new[]
+                    {
+                        Group("And", new[]
+                        {
+                            Cond("summary", "NotContains", value: "epic"),
+                            Cond("status", "In", values: new object?[] { null }),
+                        }),
+                    },
+                },
+            },
+        }));
+
+        // ACME-4 is Bob's but is the epic and has no parent; ACME-3 fits the inner arm but has
+        // no assignee, and "is none of" never matches an empty field.
+        Assert.Equal(new[] { "ACME-5", "ACME-6" }, Keys(page));
+    }
 }

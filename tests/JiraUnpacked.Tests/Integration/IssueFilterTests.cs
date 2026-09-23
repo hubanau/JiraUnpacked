@@ -54,6 +54,9 @@ public sealed class IssueFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
     private static Task Exec(NpgsqlConnection conn, string sql, params (string, object?)[] ps) =>
         FilterTestData.Exec(conn, sql, ps);
 
+    private static string[] Keys(PageDto page) =>
+        page.Items.Select(i => i.JiraKey).OrderBy(k => k, StringComparer.Ordinal).ToArray();
+
     // ---- per-operator coverage ----
 
     [Fact]
@@ -83,7 +86,7 @@ public sealed class IssueFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
     }
 
     [Fact]
-    public async Task Status_neq_includes_an_unassigned_issue()
+    public async Task Status_neq_excludes_issues_with_no_status()
     {
         var (client, tenant) = await AuthedTenantAsync();
         var projectId = await SeedFilterFixtureAsync(tenant);
@@ -91,11 +94,9 @@ public sealed class IssueFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
         var page = await QueryOkAsync(client, projectId,
             Req(new() { Cond("status", "Neq", value: "Done") }));
 
-        // Everything except the Done issue (ACME-2): ACME-1,3,4,5,6 — including unassigned ACME-3.
-        Assert.Equal(5, page.TotalCount);
-        Assert.Equal(new[] { "ACME-1", "ACME-3", "ACME-4", "ACME-5", "ACME-6" },
-            page.Items.Select(i => i.JiraKey).OrderBy(k => k));
-        Assert.Contains(page.Items, i => i.JiraKey == "ACME-3" && i.Assignee is null);
+        // Only ACME-1 has a status other than Done. ACME-3..6 have none, and "is not Done" no
+        // longer claims them: empty matches only when asked for.
+        Assert.Equal(new[] { "ACME-1" }, Keys(page));
     }
 
     [Fact]
@@ -254,11 +255,11 @@ public sealed class IssueFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
         Assert.Equal("ACME-1", page.Items[0].JiraKey);
     }
 
-    // ---- folded-in fix: storyPoints Neq on a NULL decimal (EF null-semantics rewrites `!= 5` to also
-    // ---- match NULLs — the same "Neq includes unassigned" rule the dict fields follow) ----
+    // ---- storyPoints Neq on a NULL decimal: EF's C# null semantics make a bare `!= 5` match NULLs,
+    // ---- so the translator guards it — "is not 5" means "has points, and they are not 5" ----
 
     [Fact]
-    public async Task StoryPoints_neq_includes_the_null_points_issue()
+    public async Task StoryPoints_neq_excludes_unestimated_issues()
     {
         var (client, tenant) = await AuthedTenantAsync();
         var connId = Guid.NewGuid(); var projId = Guid.NewGuid();
@@ -267,16 +268,90 @@ public sealed class IssueFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
             await conn.OpenAsync();
             await Exec(conn, @"INSERT INTO ""JiraConnections""(""Id"",""EndUserId"",""BaseUrl"",""Email"",""ApiTokenEncrypted"",""CreatedAt"") VALUES (@i,@t,'https://x','e','c',now())", ("i", connId), ("t", tenant));
             await Exec(conn, @"INSERT INTO ""JiraProjects""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraProjectKey"",""JiraProjectId"",""SyncIntervalMinutes"",""CreatedAt"") VALUES (@i,@t,@c,'ACME','1',60,now())", ("i", projId), ("t", tenant), ("c", connId));
-            await Exec(conn, @"INSERT INTO ""Issues""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""JiraKey"",""Summary"",""StoryPoints"",""JiraCreatedAt"",""JiraUpdatedAt"",""LastSyncedAt"") VALUES (@i,@t,@p,@ji,@k,@s,@sp,now(),now(),now())",
-                ("i", Guid.NewGuid()), ("t", tenant), ("p", projId), ("ji", "10001"), ("k", "ACME-1"), ("s", "Has points"), ("sp", 5m));
-            await Exec(conn, @"INSERT INTO ""Issues""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""JiraKey"",""Summary"",""StoryPoints"",""JiraCreatedAt"",""JiraUpdatedAt"",""LastSyncedAt"") VALUES (@i,@t,@p,@ji,@k,@s,@sp,now(),now(),now())",
-                ("i", Guid.NewGuid()), ("t", tenant), ("p", projId), ("ji", "10002"), ("k", "ACME-2"), ("s", "No points"), ("sp", (decimal?)null));
+            foreach (var (jid, key, summary, points) in new (string, string, string, decimal?)[]
+                     { ("10001", "ACME-1", "Has five", 5m), ("10002", "ACME-2", "No points", null), ("10003", "ACME-3", "Has three", 3m) })
+            {
+                await Exec(conn, @"INSERT INTO ""Issues""(""Id"",""EndUserId"",""JiraProjectId"",""JiraIssueId"",""JiraKey"",""Summary"",""StoryPoints"",""JiraCreatedAt"",""JiraUpdatedAt"",""LastSyncedAt"") VALUES (@i,@t,@p,@ji,@k,@s,@sp,now(),now(),now())",
+                    ("i", Guid.NewGuid()), ("t", tenant), ("p", projId), ("ji", jid), ("k", key), ("s", summary), ("sp", points));
+            }
         }
 
         var page = await QueryOkAsync(client, projId, Req(new() { Cond("storyPoints", "Neq", value: 5) }));
 
-        Assert.Equal(1, page.TotalCount);
-        Assert.Equal("ACME-2", page.Items[0].JiraKey); // NULL-points issue included; the 5-points issue excluded
+        Assert.Equal(new[] { "ACME-3" }, Keys(page));   // the NULL-points issue is no longer included
+    }
+
+    [Fact]
+    public async Task Status_not_in_excludes_the_listed_values_and_empty()
+    {
+        var (client, tenant) = await AuthedTenantAsync();
+        var projectId = await SeedFilterFixtureAsync(tenant);
+
+        var page = await QueryOkAsync(client, projectId,
+            Req(new() { Cond("status", "NotIn", values: new[] { "Done" }) }));
+
+        Assert.Equal(new[] { "ACME-1" }, Keys(page));
+    }
+
+    [Fact]
+    public async Task Status_in_with_empty_also_returns_issues_with_no_status()
+    {
+        var (client, tenant) = await AuthedTenantAsync();
+        var projectId = await SeedFilterFixtureAsync(tenant);
+
+        var page = await QueryOkAsync(client, projectId,
+            Req(new() { Cond("status", "In", values: new object?[] { "Done", null }) }));
+
+        Assert.Equal(new[] { "ACME-2", "ACME-3", "ACME-4", "ACME-5", "ACME-6" }, Keys(page));
+    }
+
+    [Fact]
+    public async Task Assignee_is_not_empty_returns_only_assigned_issues()
+    {
+        var (client, tenant) = await AuthedTenantAsync();
+        var projectId = await SeedFilterFixtureAsync(tenant);
+
+        var page = await QueryOkAsync(client, projectId, Req(new() { Cond("assignee", "IsNotNull") }));
+
+        Assert.Equal(new[] { "ACME-1", "ACME-2", "ACME-4", "ACME-5", "ACME-6" }, Keys(page));
+    }
+
+    [Fact]
+    public async Task Summary_not_contains_is_case_insensitive()
+    {
+        var (client, tenant) = await AuthedTenantAsync();
+        var projectId = await SeedFilterFixtureAsync(tenant);
+
+        var page = await QueryOkAsync(client, projectId,
+            Req(new() { Cond("summary", "NotContains", value: "TASK") }));
+
+        Assert.Equal(new[] { "ACME-1", "ACME-2", "ACME-3", "ACME-4" }, Keys(page));
+    }
+
+    [Fact]
+    public async Task JiraKey_in_and_not_in_select_and_exclude_exact_keys()
+    {
+        var (client, tenant) = await AuthedTenantAsync();
+        var projectId = await SeedFilterFixtureAsync(tenant);
+
+        var inList = await QueryOkAsync(client, projectId,
+            Req(new() { Cond("jiraKey", "In", values: new[] { "ACME-1", "ACME-3" }) }));
+        var notIn = await QueryOkAsync(client, projectId,
+            Req(new() { Cond("jiraKey", "NotIn", values: new[] { "ACME-1", "ACME-3" }) }));
+
+        Assert.Equal(new[] { "ACME-1", "ACME-3" }, Keys(inList));
+        Assert.Equal(new[] { "ACME-2", "ACME-4", "ACME-5", "ACME-6" }, Keys(notIn));
+    }
+
+    [Fact]
+    public async Task Parent_is_not_empty_returns_the_children()
+    {
+        var (client, tenant) = await AuthedTenantAsync();
+        var projectId = await SeedFilterFixtureAsync(tenant);
+
+        var page = await QueryOkAsync(client, projectId, Req(new() { Cond("parent", "IsNotNull") }));
+
+        Assert.Equal(new[] { "ACME-5", "ACME-6" }, Keys(page));
     }
 
     // ---- 400 validation cases ----

@@ -233,7 +233,7 @@ describe('CSV export', () => {
     mockExport();
     // The status condition on screen asks for its value picker's choices.
     server.use(http.get('/api/projects/p1/filter-values', () =>
-      HttpResponse.json({ field: 'status', values: ['Backlog'] })));
+      HttpResponse.json({ field: 'status', values: [{ name: 'Backlog', count: 1 }], emptyCount: 0 })));
     const user = userEvent.setup();
     const filter = encodeURIComponent('[{"field":"status","op":"Eq","value":"Backlog"}]');
     renderList(`/projects/p1/issues?filter=${filter}&logic=Or&sortBy=storyPoints&cols=jiraKey,summary`);
@@ -243,9 +243,12 @@ describe('CSV export', () => {
     await waitFor(() => expect(requests).toHaveLength(1));
     const params = requests[0].url.searchParams;
     expect(params.get('sortBy')).toBe('storyPoints');
-    expect(params.get('logic')).toBe('Or');
     expect(params.get('cols')).toBe('jiraKey,summary');
-    expect(JSON.parse(params.get('filter')!)).toEqual([{ field: 'status', op: 'Eq', value: 'Backlog' }]);
+    // A legacy link (flat list + logic=Or) is exported as the tree it now means; no logic param.
+    expect(params.has('logic')).toBe(false);
+    expect(JSON.parse(params.get('filter')!)).toEqual({
+      logic: 'Or', conditions: [{ field: 'status', op: 'Eq', value: 'Backlog' }],
+    });
   });
 
   it('omits the filter entirely when there is none, rather than sending an empty one', async () => {

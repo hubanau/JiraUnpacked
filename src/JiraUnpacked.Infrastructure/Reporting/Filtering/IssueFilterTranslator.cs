@@ -49,11 +49,19 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
     public async Task<FilterBuildResult> BuildAsync(
         FilterGroup group, DictNameResolver resolveDict, CancellationToken ct = default)
     {
+        // A root switched off — or one whose every part is switched off — is "no filter": the
+        // user turned the parts off on purpose. A group WRITTEN empty is still refused below.
+        if (group.Disabled == true) return new FilterBuildResult(MatchAll, null);
+
         var (predicate, error) = await BuildGroupAsync(group, resolveDict, new Budget(), 1, ct);
-        return error is not null ? Err(error) : new FilterBuildResult(predicate, null);
+        return error is not null ? Err(error) : new FilterBuildResult(predicate ?? MatchAll, null);
     }
 
-    private async Task<(Expression<Func<Issue, bool>>?, string?)> BuildGroupAsync(
+    /// <summary>
+    /// A null Predicate with a null Error means every part of this group is switched off: the
+    /// group is absent, and its parent joins only its other parts.
+    /// </summary>
+    private async Task<(Expression<Func<Issue, bool>>? Predicate, string? Error)> BuildGroupAsync(
         FilterGroup group, DictNameResolver resolveDict, Budget budget, int depth, CancellationToken ct)
     {
         if (depth > MaxDepth)
@@ -65,13 +73,16 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
         var groups = group.Groups ?? new List<FilterGroup>();
 
         // An empty And is vacuously true and an empty Or is vacuously false. Same client bug,
-        // opposite blast radius, and neither is what the caller meant — so refuse both.
+        // opposite blast radius, and neither is what the caller meant — so refuse both. Checked
+        // on what was WRITTEN, before disabled parts are set aside.
         if (conditions.Count == 0 && groups.Count == 0)
             return (null, "A filter group must contain at least one condition or nested group.");
 
         var parts = new List<Expression<Func<Issue, bool>>>();
 
-        foreach (var c in conditions)
+        // Disabled parts are set aside before anything looks at them: not validated (a row
+        // switched off because it is broken must not break the filter) and not counted.
+        foreach (var c in conditions.Where(c => c.Disabled != true))
         {
             if (++budget.Conditions > MaxConditions)
                 return (null, $"A filter may have at most {MaxConditions} conditions.");
@@ -81,12 +92,14 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
             parts.Add(predicate!);
         }
 
-        foreach (var g in groups)
+        foreach (var g in groups.Where(g => g.Disabled != true))
         {
             var (predicate, error) = await BuildGroupAsync(g, resolveDict, budget, depth + 1, ct);
             if (error is not null) return (null, error);
-            parts.Add(predicate!);
+            if (predicate is not null) parts.Add(predicate);
         }
+
+        if (parts.Count == 0) return (null, null);
 
         // Seedless Aggregate on purpose: seeding with `i => true` is harmless under AndAlso but
         // would make every Or group match everything. parts is non-empty by the check above.
@@ -126,20 +139,24 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
         var fk = (Expression<Func<Issue, Guid?>>)field.Selector;
         var p = fk.Parameters[0];
         var fkBody = fk.Body; // i.StatusId (Guid?)
+        var isEmpty = Expression.Equal(fkBody, NullGuid);
 
-        if (c.Op == FilterOperator.IsNull)
-            return (Lambda(Expression.Equal(fkBody, NullGuid), p), null);
+        if (c.Op == FilterOperator.IsNull) return (Lambda(isEmpty, p), null);
+        if (c.Op == FilterOperator.IsNotNull) return (Lambda(Expression.NotEqual(fkBody, NullGuid), p), null);
 
-        // Gather names for Eq (single) or In (list).
+        // Names to resolve, and whether (Empty) — a JSON null inside 'values' — was asked for.
         List<string> names;
-        if (c.Op == FilterOperator.In)
+        var wantsEmpty = false;
+        if (c.Op is FilterOperator.In or FilterOperator.NotIn)
         {
-            if (c.Values is null) return (null, $"Field '{c.Field}' with 'In' requires 'values'.");
-            if (c.Values.Count > MaxInValues) return (null, $"'In' accepts at most {MaxInValues} values.");
+            if (c.Values is null) return (null, $"Field '{c.Field}' with '{c.Op}' requires 'values'.");
+            if (c.Values.Count > MaxInValues) return (null, $"'{c.Op}' accepts at most {MaxInValues} values.");
             names = new List<string>();
             foreach (var v in c.Values)
             {
-                if (v.ValueKind != JsonValueKind.String) return (null, $"Field '{c.Field}' values must be strings.");
+                if (v.ValueKind == JsonValueKind.Null) { wantsEmpty = true; continue; }
+                if (v.ValueKind != JsonValueKind.String)
+                    return (null, $"Field '{c.Field}' values must be strings, or null for (Empty).");
                 names.Add(v.GetString()!);
             }
         }
@@ -150,7 +167,8 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
             names = new List<string> { sv.GetString()! };
         }
 
-        var ids = (await resolveDict(field.Name, names, ct)).ToList();
+        // In [null] is IsNull by another name: nothing to resolve, so no round trip.
+        var ids = names.Count == 0 ? new List<Guid>() : (await resolveDict(field.Name, names, ct)).ToList();
 
         // i.Fk.HasValue && ids.Contains(i.Fk.Value)
         var hasValue = Expression.Property(fkBody, nameof(Nullable<Guid>.HasValue));
@@ -160,8 +178,11 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
 
         return c.Op switch
         {
-            // Neq includes unassigned: i.Fk == null || !(hasValue && contains)
-            FilterOperator.Neq => (Lambda(Expression.OrElse(Expression.Equal(fkBody, NullGuid), Expression.Not(inSet)), p), null),
+            // One meaning of "empty" across the product: it matches only when asked for. "Is not"
+            // and "is none of" therefore require a value — a NULL null-in-NotIn adds nothing.
+            FilterOperator.Neq or FilterOperator.NotIn =>
+                (Lambda(Expression.AndAlso(hasValue, Expression.Not(contains)), p), null),
+            FilterOperator.In when wantsEmpty => (Lambda(Expression.OrElse(isEmpty, inSet), p), null),
             _ => (Lambda(inSet, p), null),   // Eq, In
         };
     }
@@ -170,14 +191,18 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
     {
         var sel = (Expression<Func<Issue, decimal?>>)field.Selector;
         var body = sel.Body; var p = sel.Parameters[0];
+        var notNull = Expression.NotEqual(body, NullDecimal);
         if (c.Op == FilterOperator.IsNull) return (Lambda(Expression.Equal(body, NullDecimal), p), null);
+        if (c.Op == FilterOperator.IsNotNull) return (Lambda(notNull, p), null);
         if (c.Value is not { ValueKind: JsonValueKind.Number } nv || !nv.TryGetDecimal(out var d))
             return (null, $"Field '{c.Field}' requires a numeric 'value'.");
         var k = Expression.Constant((decimal?)d, typeof(decimal?));
         Expression cmp = c.Op switch
         {
             FilterOperator.Eq => Expression.Equal(body, k),
-            FilterOperator.Neq => Expression.NotEqual(body, k),
+            // Guarded explicitly: under C# null semantics, which EF reproduces in SQL, a bare
+            // `StoryPoints != k` is TRUE for NULL — "is not 5" would claim every unestimated issue.
+            FilterOperator.Neq => Expression.AndAlso(notNull, Expression.NotEqual(body, k)),
             FilterOperator.Lt => Expression.LessThan(body, k),
             FilterOperator.Lte => Expression.LessThanOrEqual(body, k),
             FilterOperator.Gt => Expression.GreaterThan(body, k),
@@ -211,7 +236,27 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
     {
         var sel = (Expression<Func<Issue, string?>>)field.Selector;
         var body = sel.Body; var p = sel.Parameters[0];
+        var notNull = Expression.NotEqual(body, NullString);
         if (c.Op == FilterOperator.IsNull) return (Lambda(Expression.Equal(body, NullString), p), null);
+        if (c.Op == FilterOperator.IsNotNull) return (Lambda(notNull, p), null);
+
+        if (c.Op is FilterOperator.In or FilterOperator.NotIn)   // jiraKey
+        {
+            if (c.Values is null) return (null, $"Field '{c.Field}' with '{c.Op}' requires 'values'.");
+            if (c.Values.Count > MaxInValues) return (null, $"'{c.Op}' accepts at most {MaxInValues} values.");
+            var keys = new List<string>();
+            foreach (var v in c.Values)
+            {
+                // A key is never empty, so there is no (Empty) to ask for: a null here is a client bug.
+                if (v.ValueKind != JsonValueKind.String) return (null, $"Field '{c.Field}' values must be strings.");
+                keys.Add(v.GetString()!);
+            }
+            var inList = Expression.Call(Expression.Constant(keys), ListContains<string>(), body);
+            return c.Op == FilterOperator.In
+                ? (Lambda(inList, p), null)
+                : (Lambda(Expression.AndAlso(notNull, Expression.Not(inList)), p), null);
+        }
+
         if (c.Value is not { ValueKind: JsonValueKind.String } sv)
             return (null, $"Field '{c.Field}' requires a string 'value'.");
         var raw = sv.GetString()!;
@@ -219,7 +264,7 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
         if (c.Op == FilterOperator.Eq)   // jiraKey Eq
             return (Lambda(Expression.Equal(body, Expression.Constant(raw, typeof(string))), p), null);
 
-        // Contains / StartsWith -> EF.Functions.ILike(body, pattern, "\\") with wildcards escaped.
+        // Contains / NotContains / StartsWith -> EF.Functions.ILike(body, pattern, "\\") with wildcards escaped.
         var escaped = raw.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
         var pattern = c.Op == FilterOperator.StartsWith ? escaped + "%" : "%" + escaped + "%";
         var ilike = Expression.Call(ILikeMethod,
@@ -227,9 +272,9 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
             body,
             Expression.Constant(pattern, typeof(string)),
             Expression.Constant("\\", typeof(string)));
-        // Guard null summary: body != null && ILike(...)
-        var notNull = Expression.NotEqual(body, NullString);
-        return (Lambda(Expression.AndAlso(notNull, ilike), p), null);
+        // A NULL summary never matches, not even "does not contain": body != null && [NOT] ILike(...)
+        Expression match = c.Op == FilterOperator.NotContains ? Expression.Not(ilike) : ilike;
+        return (Lambda(Expression.AndAlso(notNull, match), p), null);
     }
 
     private static (Expression<Func<Issue, bool>>?, string?) BuildParent(FilterField field, FilterCondition c)
@@ -237,6 +282,7 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
         var sel = (Expression<Func<Issue, string?>>)field.Selector;
         var body = sel.Body; var p = sel.Parameters[0];
         if (c.Op == FilterOperator.IsNull) return (Lambda(Expression.Equal(body, NullString), p), null);
+        if (c.Op == FilterOperator.IsNotNull) return (Lambda(Expression.NotEqual(body, NullString), p), null);
         if (c.Value is not { ValueKind: JsonValueKind.String } sv)
             return (null, $"Field '{c.Field}' requires a string 'value'.");
         return (Lambda(Expression.Equal(body, Expression.Constant(sv.GetString(), typeof(string))), p), null);

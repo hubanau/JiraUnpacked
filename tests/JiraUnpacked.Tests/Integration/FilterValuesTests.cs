@@ -17,7 +17,8 @@ public sealed class FilterValuesTests : IClassFixture<JiraUnpackedApiFactory>, I
     public Task InitializeAsync() => _factory.EnsureDatabaseAsync();
     public Task DisposeAsync() => Task.CompletedTask;
 
-    private sealed record ValuesResponse(string Field, List<string> Values);
+    private sealed record ValueDto(string Name, int Count);
+    private sealed record ValuesResponse(string Field, List<ValueDto> Values, int EmptyCount);
 
     [Fact]
     public async Task Lists_only_the_statuses_some_issue_in_this_project_actually_has()
@@ -33,7 +34,7 @@ public sealed class FilterValuesTests : IClassFixture<JiraUnpackedApiFactory>, I
 
         var body = await GetValuesAsync(client, ctx.ProjectId, "status");
 
-        Assert.Equal(new[] { "To Do" }, body.Values);
+        Assert.Equal(new[] { "To Do" }, body.Values.Select(v => v.Name));
     }
 
     [Fact]
@@ -48,8 +49,8 @@ public sealed class FilterValuesTests : IClassFixture<JiraUnpackedApiFactory>, I
 
         var body = await GetValuesAsync(client, mine.ProjectId, "status");
 
-        Assert.Contains("Mine Only", body.Values);
-        Assert.DoesNotContain("Other Project Only", body.Values);
+        Assert.Contains("Mine Only", body.Values.Select(v => v.Name));
+        Assert.DoesNotContain("Other Project Only", body.Values.Select(v => v.Name));
     }
 
     [Fact]
@@ -65,8 +66,8 @@ public sealed class FilterValuesTests : IClassFixture<JiraUnpackedApiFactory>, I
 
         var body = await GetValuesAsync(clientA, a.ProjectId, "status");
 
-        Assert.Contains("Belongs To A", body.Values);
-        Assert.DoesNotContain("Belongs To B", body.Values);
+        Assert.Contains("Belongs To A", body.Values.Select(v => v.Name));
+        Assert.DoesNotContain("Belongs To B", body.Values.Select(v => v.Name));
     }
 
     [Theory]
@@ -99,6 +100,30 @@ public sealed class FilterValuesTests : IClassFixture<JiraUnpackedApiFactory>, I
         var resp = await client.GetAsync($"/api/projects/{Guid.NewGuid()}/filter-values?field=nonsense");
 
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Counts_each_value_and_the_issues_that_have_none()
+    {
+        var (client, tenant) = await MetricsTestData.AuthedTenantAsync(_factory);
+        var ctx = await MetricsTestData.SeedProjectAsync(tenant);
+        var at = DateTime.UtcNow;
+        await MetricsTestData.SeedIssueAsync(ctx, "10001", "ACME-1", "a", ctx.ToDoStatusId, null, at);
+        await MetricsTestData.SeedIssueAsync(ctx, "10002", "ACME-2", "b", ctx.ToDoStatusId, null, at);
+        await MetricsTestData.SeedIssueAsync(ctx, "10003", "ACME-3", "c", ctx.DoneStatusId, null, at);
+        await MetricsTestData.SeedIssueAsync(ctx, "10004", "ACME-4", "d", null, null, at);
+        await MetricsTestData.SeedIssueAsync(ctx, "10005", "ACME-5", "e", null, null, at);
+
+        var status = await GetValuesAsync(client, ctx.ProjectId, "status");
+
+        Assert.Equal(new[] { new ValueDto("Done", 1), new ValueDto("To Do", 2) }, status.Values);
+        Assert.Equal(2, status.EmptyCount);
+
+        // No issue here has an assignee: nothing to pick, and every issue is behind (Empty).
+        var assignee = await GetValuesAsync(client, ctx.ProjectId, "assignee");
+
+        Assert.Empty(assignee.Values);
+        Assert.Equal(5, assignee.EmptyCount);
     }
 
     private static async Task<ValuesResponse> GetValuesAsync(HttpClient client, Guid projectId, string field)

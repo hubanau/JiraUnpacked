@@ -11,22 +11,34 @@ namespace JiraUnpacked.Infrastructure.Reporting.Filtering;
 /// deterministic here rather than left to the source collections' natural
 /// enumeration: FilterFields.All is a Dictionary and each field's Ops is a
 /// HashSet, and neither's enumeration order is guaranteed by the language.
-/// Fields are sorted by name; operators are sorted by FilterOperator's
-/// declared enum order (its ordinal), which the language DOES guarantee is
-/// stable. This also happens to reproduce the operator order the client's
-/// former hand-maintained mirror used, since that mirror was written by
-/// reading FilterField.cs's Ops(...) calls, which list operators in the same
-/// enum-declaration order.
+/// Fields are sorted by name; operators are sorted by the explicit reading
+/// order in <see cref="DisplayOrder"/> rather than FilterOperator's declared
+/// (ordinal) order, since new members are appended to the enum without
+/// regard to where they should read in the editor.
 /// </summary>
 public sealed class FilterCatalogService : IFilterCatalogService
 {
+    /// <summary>
+    /// The order the editor offers operators in: equality, lists, comparisons, text matching,
+    /// then the two that take no value. Explicit because FilterOperator is append-only, which
+    /// makes its declaration order a history rather than a reading order. Every member must
+    /// appear here — FilterCatalogServiceTests checks.
+    /// </summary>
+    internal static readonly FilterOperator[] DisplayOrder =
+    {
+        FilterOperator.Eq, FilterOperator.Neq, FilterOperator.In, FilterOperator.NotIn,
+        FilterOperator.Lt, FilterOperator.Lte, FilterOperator.Gt, FilterOperator.Gte,
+        FilterOperator.Contains, FilterOperator.NotContains, FilterOperator.StartsWith,
+        FilterOperator.IsNull, FilterOperator.IsNotNull,
+    };
+
     public FilterCatalogView Get() => new(
         FilterFields.All.Values
             .OrderBy(f => f.Name, StringComparer.Ordinal)
             .Select(f => new FilterFieldInfo(
                 f.Name,
                 f.Type.ToString(),
-                f.Ops.OrderBy(o => (int)o).Select(o => o.ToString()).ToList()))
+                f.Ops.OrderBy(o => Array.IndexOf(DisplayOrder, o)).Select(o => o.ToString()).ToList()))
             .ToList(),
         IssueFilterTranslator.MaxConditions,
         IssueFilterTranslator.MaxInValues,

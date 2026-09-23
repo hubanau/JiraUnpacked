@@ -4,6 +4,7 @@ import {
   fieldNames,
   isDictionaryField,
   isOperatorAllowed,
+  operatorLabel,
   operatorsFor,
   resetOperatorIfDisallowed,
   typeFor,
@@ -103,5 +104,14 @@ describe('resetOperatorIfDisallowed', () => {
 
   it("falls back to 'Eq' for an unknown field with no operators of its own", () => {
     expect(resetOperatorIfDisallowed(CATALOG, 'notAField', 'Contains')).toBe('Eq');
+  });
+});
+
+describe('operatorLabel', () => {
+  it('names every operator in words, as the spec fixes them', () => {
+    expect(['Eq', 'Neq', 'In', 'NotIn', 'IsNull', 'IsNotNull', 'Lt', 'Lte', 'Gt', 'Gte', 'Contains', 'NotContains', 'StartsWith']
+      .map((op) => operatorLabel(op as Parameters<typeof operatorLabel>[0])))
+      .toEqual(['is', 'is not', 'is any of', 'is none of', 'is empty', 'is not empty', '<', '≤', '>', '≥',
+        'contains', 'does not contain', 'starts with']);
   });
 });
