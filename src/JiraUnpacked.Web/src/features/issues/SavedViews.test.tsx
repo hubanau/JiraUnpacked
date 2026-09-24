@@ -8,6 +8,7 @@ import { server } from '../../test/setup';
 import { FILTER_CATALOG } from '../../test/filterCatalogFixture';
 import { mockViewsApi, savedView } from '../../test/viewsFixture';
 import IssueList from './IssueList';
+import { DEFAULT_COLUMNS } from './useListState';
 
 type User = ReturnType<typeof userEvent.setup>;
 
@@ -224,5 +225,172 @@ describe('saved views — opening, modified, Save', () => {
     await user.click(screen.getByRole('button', { name: 'Views' }));
     expect(await within(menu()).findByText('Views unavailable')).toBeInTheDocument();
     expect(within(menu()).queryByRole('button')).not.toBeInTheDocument();
+  });
+});
+
+describe('saved views — managing', () => {
+  it('saves the list as a new view and loads it', async () => {
+    mockIssues();
+    const api = mockViewsApi([]);
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary&sortDesc=false');
+    await screen.findByText('ACME-1');
+
+    await user.click(screen.getByRole('button', { name: 'Views' }));
+    expect(await within(menu()).findByText('No saved views yet')).toBeInTheDocument();
+    await user.click(within(menu()).getByRole('button', { name: 'Save as new view…' }));
+    await user.type(within(menu()).getByLabelText('View name'), '  By summary  ');
+    await user.click(within(menu()).getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('button', { name: 'Views: By summary' })).toBeInTheDocument();
+    expect(api.requests).toEqual([{
+      method: 'POST',
+      body: { name: 'By summary', columns: DEFAULT_COLUMNS, sortBy: 'summary', sortDescending: false },
+    }]);
+    expect(urlParams().get('view')).toBe(api.views[0].id);
+    expect(screen.queryByRole('group', { name: 'Saved views' })).not.toBeInTheDocument();
+  });
+
+  it('says a taken name is taken, keeping the menu open with the name as typed', async () => {
+    mockIssues();
+    mockViewsApi([BACKLOG]);
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+
+    await user.click(screen.getByRole('button', { name: 'Views' }));
+    await user.click(within(menu()).getByRole('button', { name: 'Save as new view…' }));
+    await user.type(within(menu()).getByLabelText('View name'), 'My backlog');
+    await user.click(within(menu()).getByRole('button', { name: 'Save' }));
+
+    expect(await within(menu()).findByRole('alert')).toHaveTextContent('A view with this name already exists');
+    expect(within(menu()).getByLabelText('View name')).toHaveValue('My backlog');
+  });
+
+  it('shows the server’s own reason for any other refusal, such as the per-project cap', async () => {
+    mockIssues();
+    mockViewsApi([]);
+    server.use(http.post('/api/projects/p1/filters', () =>
+      HttpResponse.json({ title: 'A project may have at most 100 saved filters.' }, { status: 409 })));
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+
+    await user.click(screen.getByRole('button', { name: 'Views' }));
+    await user.click(within(menu()).getByRole('button', { name: 'Save as new view…' }));
+    await user.type(within(menu()).getByLabelText('View name'), 'One too many');
+    await user.click(within(menu()).getByRole('button', { name: 'Save' }));
+
+    expect(await within(menu()).findByRole('alert')).toHaveTextContent('A project may have at most 100 saved filters.');
+  });
+
+  it('needs a name: Save stays disabled while it is blank, and the field stops at 100 characters', async () => {
+    mockIssues();
+    mockViewsApi([]);
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+
+    await user.click(screen.getByRole('button', { name: 'Views' }));
+    await user.click(within(menu()).getByRole('button', { name: 'Save as new view…' }));
+    const name = within(menu()).getByLabelText('View name');
+    const save = within(menu()).getByRole('button', { name: 'Save' });
+
+    expect(save).toBeDisabled();
+    await user.type(name, '   ');
+    expect(save).toBeDisabled();
+    expect(name).toHaveAttribute('maxlength', '100');
+  });
+
+  it('renames the loaded view without saving the edits made since opening it', async () => {
+    mockIssues();
+    const api = mockViewsApi([BACKLOG]);
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+    await openView(user, 'My backlog');
+    await user.type(screen.getByLabelText('Value for condition 1'), 's');   // an unsaved edit
+
+    await user.click(screen.getByRole('button', { name: /^Views/ }));
+    await user.click(within(menu()).getByRole('button', { name: 'Rename…' }));
+    const name = within(menu()).getByLabelText('View name');
+    expect(name).toHaveValue('My backlog');
+    await user.clear(name);
+    await user.type(name, 'Login bugs');
+    await user.click(within(menu()).getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('button', { name: 'Views: Login bugs • modified' })).toBeInTheDocument();
+    expect(api.requests).toEqual([{
+      method: 'PUT', id: 'v-backlog', body: {
+        name: 'Login bugs', filter: LOGIN_FILTER,
+        columns: ['jiraKey', 'summary', 'priority'], sortBy: 'priority', sortDescending: false,
+      },
+    }]);
+  });
+
+  it('sets and removes the default, and stars the default in the list', async () => {
+    mockIssues();
+    const api = mockViewsApi([BACKLOG, TRIAGE]);
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+    await openView(user, 'Triage');
+
+    await user.click(screen.getByRole('button', { name: /^Views/ }));
+    await user.click(within(menu()).getByRole('button', { name: 'Set as default' }));
+    await waitFor(() => expect(api.views.find((v) => v.id === 'v-triage')?.isDefault).toBe(true));
+    // Only the flag moves: the view's stored definition goes back unchanged.
+    expect(api.requests.at(-1)).toEqual({
+      method: 'PUT', id: 'v-triage', body: { name: 'Triage', sortBy: 'createdAt', isDefault: true },
+    });
+
+    await user.click(screen.getByRole('button', { name: /^Views/ }));
+    const items = within(menu()).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('★ Default: Triage');
+    expect(items[1]).toHaveTextContent('My backlog');
+    expect(items[1]).not.toHaveTextContent('★');
+
+    await user.click(within(menu()).getByRole('button', { name: 'Remove default' }));
+    await waitFor(() => expect(api.views.some((v) => v.isDefault)).toBe(false));
+    expect(api.requests.at(-1)?.body).toEqual({ name: 'Triage', sortBy: 'createdAt', isDefault: false });
+  });
+
+  it('deletes the loaded view after confirming, and leaves the list as it is', async () => {
+    mockIssues();
+    const api = mockViewsApi([BACKLOG]);
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+    await openView(user, 'My backlog');
+
+    await user.click(screen.getByRole('button', { name: /^Views/ }));
+    await user.click(within(menu()).getByRole('button', { name: 'Delete…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Delete view “My backlog”?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete view' }));
+
+    expect(await screen.findByRole('button', { name: 'Views' })).toBeInTheDocument();
+    expect(api.views).toEqual([]);
+    expect(urlParams().has('view')).toBe(false);
+    expect(urlParams().get('sortBy')).toBe('priority');
+    expect(screen.getByLabelText('Value for condition 1')).toHaveValue('login');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('keeps the confirmation open with the reason when a delete fails', async () => {
+    mockIssues();
+    mockViewsApi([BACKLOG]);
+    server.use(http.delete('/api/projects/p1/filters/:viewId', () => new HttpResponse(null, { status: 500 })));
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+    await openView(user, 'My backlog');
+
+    await user.click(screen.getByRole('button', { name: /^Views/ }));
+    await user.click(within(menu()).getByRole('button', { name: 'Delete…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Delete view “My backlog”?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete view' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Something went wrong on the server.');
+    expect(urlParams().get('view')).toBe('v-backlog');
   });
 });

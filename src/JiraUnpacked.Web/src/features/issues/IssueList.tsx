@@ -142,6 +142,7 @@ export default function IssueList() {
             modified={savedViews.modified}
             snapshot={snapshot}
             onApply={openView}
+            onLoad={setViewId}
           />
           <ColumnChooser selected={columns} onChange={setColumns} />
           <Button
