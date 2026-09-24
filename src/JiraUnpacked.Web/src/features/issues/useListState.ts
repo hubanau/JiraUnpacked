@@ -62,7 +62,7 @@ export function useListState() {
   // The strings this hook itself wrote to `filter=`. React Router applies URL updates in a
   // transition, so our own write can land a render or more after the edit. When it does, that
   // is an echo, not news: re-parsing it would mint fresh ids and remount every row, dropping
-  // focus and any half-typed value mid-keystroke. Read in render, only ever written in setTree.
+  // focus and any half-typed value mid-keystroke. Read in render, written in setTree and applyParams.
   const recentWrites = useRef<string[]>([]);
 
   const [held, setHeld] = useState(() => ({

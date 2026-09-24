@@ -357,7 +357,7 @@ describe('useListState — fix round 1', () => {
     expect(after - before - 1).toBe(2);
   });
 
-  it('does not re-mint the tree when re-applying a view whose filter the URL already holds, through Back and Forward', () => {
+  it('does not re-mint the tree when re-applying a view whose filter the URL already holds, under a different sort', () => {
     const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
 
     act(() => result.current.state.applyParams(APPLIED, { replace: false }));
@@ -367,11 +367,34 @@ describe('useListState — fix round 1', () => {
     // Re-applying under a different sort: the filter itself is already the URL's, so nothing
     // about the tree should move.
     act(() => result.current.state.applyParams({ ...APPLIED, sortBy: 'summary' }, { replace: false }));
-    act(() => result.current.navigate(-1));
-    act(() => result.current.navigate(1));
 
     expect(result.current.state.tree.id).toBe(rootId);
     expect(result.current.state.tree.conditions[0].id).toBe(rowId);
+  });
+
+  it('adopts a Forward navigation fresh, rather than a stale record left by a filter-unchanged re-apply', () => {
+    // Back and Forward through the SAME filter content (only sortBy differs between the two
+    // "applied" entries) never touches held.raw/rawFilter -- the mismatch branch that consults
+    // recentWrites is only entered once the filter itself actually moves. So the hazard this test
+    // is really after can only show up two navigations later: Back past BOTH applied entries to
+    // the bare list (a genuine filter change, null -- nothing to match, adopted fresh) and then
+    // Forward again (another genuine filter change, back to VIEW_FILTER). If applyParams's
+    // filter-unchanged re-apply had recorded VIEW_FILTER into recentWrites (it must not: nothing
+    // about that re-apply ever changes the URL's `filter`, so nothing would ever arrive to consume
+    // it), that stale entry would still be sitting there and would wrongly match this Forward nav
+    // as "our own echo" -- keeping the bare list's empty tree instead of adopting VIEW_FILTER's.
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => result.current.state.applyParams(APPLIED, { replace: false })); // push V (sortBy=priority)
+    act(() => result.current.state.applyParams({ ...APPLIED, sortBy: 'summary' }, { replace: false })); // push V again, filter unchanged
+
+    act(() => result.current.navigate(-1)); // back to V, sortBy=priority (filter still VIEW_FILTER)
+    act(() => result.current.navigate(-1)); // back to the bare list (filter genuinely gone)
+    act(() => result.current.navigate(1));  // forward to V, sortBy=priority again (filter genuinely back)
+
+    expect(result.current.state.tree.conditions).toEqual([
+      expect.objectContaining({ field: 'status', op: 'IsNull' }),
+    ]);
   });
 
   it('writes only the five ListParams keys onto the URL, ignoring any other key on the object', () => {
