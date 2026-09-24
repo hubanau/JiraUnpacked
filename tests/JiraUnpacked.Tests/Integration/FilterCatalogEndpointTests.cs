@@ -85,7 +85,13 @@ public sealed class FilterCatalogEndpointTests : IClassFixture<JiraUnpackedApiFa
         Assert.True(new HashSet<string> { "Eq", "In", "NotIn", "Contains", "StartsWith" }.SetEquals(jiraKey.Operators));
 
         var storyPoints = catalog.Fields.Single(f => f.Name == "storyPoints");
-        Assert.True(new HashSet<string> { "Eq", "Neq", "Lt", "Lte", "Gt", "Gte", "IsNull", "IsNotNull" }.SetEquals(storyPoints.Operators));
+        Assert.True(new HashSet<string> { "Eq", "Neq", "Lt", "Lte", "Gt", "Gte", "Between", "IsNull", "IsNotNull" }.SetEquals(storyPoints.Operators));
+
+        foreach (var date in new[] { "createdAt", "updatedAt" })
+        {
+            var field = catalog.Fields.Single(f => f.Name == date);
+            Assert.True(new HashSet<string> { "Lt", "Lte", "Gt", "Gte", "Between", "InLast", "NotInLast", "InPeriod" }.SetEquals(field.Operators));
+        }
 
         var summary = catalog.Fields.Single(f => f.Name == "summary");
         Assert.True(new HashSet<string> { "Contains", "NotContains", "StartsWith", "IsNull", "IsNotNull" }.SetEquals(summary.Operators));

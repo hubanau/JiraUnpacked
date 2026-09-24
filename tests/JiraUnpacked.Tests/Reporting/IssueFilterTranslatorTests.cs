@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Infrastructure.Reporting.Filtering;
+using JiraUnpacked.Tests.Security;
 
 namespace JiraUnpacked.Tests.Reporting;
 
@@ -36,7 +37,8 @@ public sealed class IssueFilterTranslatorTests
         return Task.FromResult(ids);
     }
 
-    private static readonly IIssueFilterTranslator Sut = new IssueFilterTranslator();
+    // None of these conditions is relative, so the time is irrelevant — but there is always a clock.
+    private static readonly IIssueFilterTranslator Sut = new IssueFilterTranslator(new FakeClock(DateTime.UtcNow));
 
     // Recursively walks AndAlso nodes to locate a nested ILike call, without asserting an exact tree depth
     // (the top-level AND chain folds in an `i => true` seed, adding a wrapping AndAlso).

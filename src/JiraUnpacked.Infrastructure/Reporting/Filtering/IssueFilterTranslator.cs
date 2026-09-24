@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Linq.Expressions;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -29,6 +31,14 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
     public const int MaxInValues = 100;
     public const int MaxGroups = 10;
     public const int MaxDepth = 3;
+
+    private readonly IClock _clock;
+
+    /// <summary>
+    /// The clock is what makes a relative condition relative: "in the last 14 days" is resolved
+    /// against it on every build, so a saved view means the same thing whenever it is opened.
+    /// </summary>
+    public IssueFilterTranslator(IClock clock) => _clock = clock;
 
     /// <summary>Running totals for the guards. Counted over the WHOLE tree: a per-node limit is
     /// defeated by adding nodes, which is the shape a hostile request would take.</summary>
@@ -108,7 +118,7 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
         return (parts.Aggregate(combine), null);
     }
 
-    private static async Task<(Expression<Func<Issue, bool>>?, string?)> BuildConditionAsync(
+    private async Task<(Expression<Func<Issue, bool>>?, string?)> BuildConditionAsync(
         FilterCondition c, DictNameResolver resolveDict, CancellationToken ct)
     {
         if (!FilterFields.All.TryGetValue(c.Field, out var field))
@@ -194,6 +204,7 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
         var notNull = Expression.NotEqual(body, NullDecimal);
         if (c.Op == FilterOperator.IsNull) return (Lambda(Expression.Equal(body, NullDecimal), p), null);
         if (c.Op == FilterOperator.IsNotNull) return (Lambda(notNull, p), null);
+        if (c.Op == FilterOperator.Between) return BuildDecimalBetween(c, body, p);
         if (c.Value is not { ValueKind: JsonValueKind.Number } nv || !nv.TryGetDecimal(out var d))
             return (null, $"Field '{c.Field}' requires a numeric 'value'.");
         var k = Expression.Constant((decimal?)d, typeof(decimal?));
@@ -212,10 +223,18 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
         return (Lambda(cmp, p), null);
     }
 
-    private static (Expression<Func<Issue, bool>>?, string?) BuildDate(FilterField field, FilterCondition c)
+    private (Expression<Func<Issue, bool>>?, string?) BuildDate(FilterField field, FilterCondition c)
     {
         var sel = (Expression<Func<Issue, DateTime>>)field.Selector;
         var body = sel.Body; var p = sel.Parameters[0];
+
+        switch (c.Op)
+        {
+            case FilterOperator.Between: return BuildDateBetween(c, body, p);
+            case FilterOperator.InLast or FilterOperator.NotInLast: return BuildDateInLast(c, body, p);
+            case FilterOperator.InPeriod: return BuildDateInPeriod(c, body, p);
+        }
+
         if (c.Value is not { ValueKind: JsonValueKind.String } sv || !DateTime.TryParse(
                 sv.GetString(), null, System.Globalization.DateTimeStyles.AdjustToUniversal
                 | System.Globalization.DateTimeStyles.AssumeUniversal, out var dt))
@@ -230,6 +249,148 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
             _ => Expression.Constant(false),
         };
         return (Lambda(cmp, p), null);
+    }
+
+    // ---- ranges and relative dates ----
+
+    /// <summary>`values: [from, to]` — exactly two; either may be JSON null (open), not both.</summary>
+    private static string? ReadBounds(FilterCondition c, out JsonElement? from, out JsonElement? to)
+    {
+        from = null; to = null;
+        if (c.Values is not { Count: 2 })
+            return $"'Between' on '{c.Field}' requires 'values': [from, to].";
+        if (c.Values[0].ValueKind != JsonValueKind.Null) from = c.Values[0];
+        if (c.Values[1].ValueKind != JsonValueKind.Null) to = c.Values[1];
+        return from is null && to is null
+            ? $"'Between' on '{c.Field}' needs at least one bound; both are empty."
+            : null;
+    }
+
+    /// <summary>Joins an optional left part with a right part.</summary>
+    private static Expression And(Expression? a, Expression b) => a is null ? b : Expression.AndAlso(a, b);
+
+    /// <summary>
+    /// `from ≤ x ≤ to`, either bound open. An unestimated issue never matches: the lifted
+    /// comparison is false for NULL, in memory and in SQL alike.
+    /// </summary>
+    private static (Expression<Func<Issue, bool>>?, string?) BuildDecimalBetween(
+        FilterCondition c, Expression body, ParameterExpression p)
+    {
+        if (ReadBounds(c, out var fromEl, out var toEl) is { } boundsError) return (null, boundsError);
+        var notNumbers = $"'Between' on '{c.Field}' requires numbers (or null) in 'values'.";
+
+        decimal? from = null, to = null;
+        if (fromEl is { } f)
+        {
+            if (f.ValueKind != JsonValueKind.Number || !f.TryGetDecimal(out var d)) return (null, notNumbers);
+            from = d;
+        }
+        if (toEl is { } t)
+        {
+            if (t.ValueKind != JsonValueKind.Number || !t.TryGetDecimal(out var d)) return (null, notNumbers);
+            to = d;
+        }
+        if (from > to) return (null, $"'Between' on '{c.Field}': 'from' is greater than 'to'.");
+
+        Expression? cmp = null;
+        if (from is { } lo) cmp = Expression.GreaterThanOrEqual(body, Expression.Constant((decimal?)lo, typeof(decimal?)));
+        if (to is { } hi) cmp = And(cmp, Expression.LessThanOrEqual(body, Expression.Constant((decimal?)hi, typeof(decimal?))));
+        return (Lambda(cmp!, p), null);
+    }
+
+    private static readonly Regex DateOnlyShape = new(@"^\d{4}-\d{2}-\d{2}\z", RegexOptions.CultureInvariant);
+
+    /// <summary>An ISO-8601 date or timestamp, read as UTC like every other date here.</summary>
+    private static bool TryReadDate(JsonElement v, out DateTime value, out bool dateOnly)
+    {
+        value = default; dateOnly = false;
+        if (v.ValueKind != JsonValueKind.String) return false;
+        var s = v.GetString()!;
+        dateOnly = DateOnlyShape.IsMatch(s);
+        return DateTime.TryParse(s, CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out value);
+    }
+
+    /// <summary>
+    /// `from ≤ x ≤ to`. A date-only `to` means "through that day": everything before the next
+    /// midnight (UTC). A full timestamp is used as-is.
+    /// </summary>
+    private static (Expression<Func<Issue, bool>>?, string?) BuildDateBetween(
+        FilterCondition c, Expression body, ParameterExpression p)
+    {
+        if (ReadBounds(c, out var fromEl, out var toEl) is { } boundsError) return (null, boundsError);
+        var notDates = $"'Between' on '{c.Field}' requires ISO-8601 dates (or null) in 'values'.";
+
+        DateTime? from = null, to = null;
+        var toDateOnly = false;
+        if (fromEl is { } f)
+        {
+            if (!TryReadDate(f, out var d, out _)) return (null, notDates);
+            from = d;
+        }
+        if (toEl is { } t)
+        {
+            if (!TryReadDate(t, out var d, out toDateOnly)) return (null, notDates);
+            to = d;
+        }
+        // Judged against the effective end, so "from 10:00 on the 30th to the 30th" is not reversed.
+        if (from is { } a && to is { } b && (toDateOnly ? a >= b.AddDays(1) : a > b))
+            return (null, $"'Between' on '{c.Field}': 'from' is after 'to'.");
+
+        Expression? cmp = null;
+        if (from is { } lo) cmp = Expression.GreaterThanOrEqual(body, Expression.Constant(lo));
+        if (to is { } hi)
+            cmp = And(cmp, toDateOnly
+                ? Expression.LessThan(body, Expression.Constant(hi.AddDays(1)))
+                : Expression.LessThanOrEqual(body, Expression.Constant(hi)));
+        return (Lambda(cmp!, p), null);
+    }
+
+    /// <summary>InLast: `x ≥ now − amount·unit`. NotInLast: `x < now − amount·unit` ("more than … ago").</summary>
+    private (Expression<Func<Issue, bool>>?, string?) BuildDateInLast(
+        FilterCondition c, Expression body, ParameterExpression p)
+    {
+        if (c.Value is not { ValueKind: JsonValueKind.Object } v
+            || !v.TryGetProperty("amount", out var a) || a.ValueKind != JsonValueKind.Number
+            || !v.TryGetProperty("unit", out var u) || u.ValueKind != JsonValueKind.String)
+            return (null, $"'{c.Op}' on '{c.Field}' requires 'value': {{\"amount\": 14, \"unit\": \"days\"}}.");
+        if (!a.TryGetInt32(out var amount) || amount < 1 || amount > RelativeDates.MaxAmount)
+            return (null, $"'amount' must be a whole number from 1 to {RelativeDates.MaxAmount}.");
+        var unit = u.GetString()!;
+        if (!RelativeDates.Units.Contains(unit))
+            return (null, $"Unknown unit '{unit}'. Use one of: {string.Join(", ", RelativeDates.Units)}.");
+
+        var since = Expression.Constant(RelativeDates.Subtract(_clock.UtcNow, amount, unit));
+        return (Lambda(c.Op == FilterOperator.InLast
+            ? Expression.GreaterThanOrEqual(body, since)
+            : Expression.LessThan(body, since), p), null);
+    }
+
+    /// <summary>`start ≤ x < end` of the calendar period containing now, in the condition's zone (missing = UTC).</summary>
+    private (Expression<Func<Issue, bool>>?, string?) BuildDateInPeriod(
+        FilterCondition c, Expression body, ParameterExpression p)
+    {
+        if (c.Value is not { ValueKind: JsonValueKind.Object } v
+            || !v.TryGetProperty("period", out var pe) || pe.ValueKind != JsonValueKind.String)
+            return (null, $"'InPeriod' on '{c.Field}' requires 'value': {{\"period\": \"thisWeek\", \"timeZone\": \"Europe/Warsaw\"}}.");
+        var period = pe.GetString()!;
+        if (!RelativeDates.Periods.Contains(period))
+            return (null, $"Unknown period '{period}'. Use one of: {string.Join(", ", RelativeDates.Periods)}.");
+
+        string? zoneId = null;
+        if (v.TryGetProperty("timeZone", out var tz) && tz.ValueKind != JsonValueKind.Null)
+        {
+            if (tz.ValueKind != JsonValueKind.String)
+                return (null, "'timeZone' must be an IANA time zone id, such as \"Europe/Warsaw\".");
+            zoneId = tz.GetString();
+        }
+        if (!RelativeDates.TryResolveZone(zoneId, out var zone))
+            return (null, $"Unknown time zone '{zoneId}'. Use an IANA id, such as \"Europe/Warsaw\".");
+
+        var (start, end) = RelativeDates.Period(_clock.UtcNow, period, zone);
+        return (Lambda(Expression.AndAlso(
+            Expression.GreaterThanOrEqual(body, Expression.Constant(start)),
+            Expression.LessThan(body, Expression.Constant(end))), p), null);
     }
 
     private static (Expression<Func<Issue, bool>>?, string?) BuildText(FilterField field, FilterCondition c)

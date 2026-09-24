@@ -30,7 +30,8 @@ internal static class FilterFields
             ["team"]       = Dict("team",       (Issue i) => i.TeamId),
             ["storyPoints"]= new("storyPoints", FieldType.Decimal,
                                  Ops(FilterOperator.Eq, FilterOperator.Neq, FilterOperator.Lt, FilterOperator.Lte,
-                                     FilterOperator.Gt, FilterOperator.Gte, FilterOperator.IsNull, FilterOperator.IsNotNull),
+                                     FilterOperator.Gt, FilterOperator.Gte, FilterOperator.Between,
+                                     FilterOperator.IsNull, FilterOperator.IsNotNull),
                                  (Expression<Func<Issue, decimal?>>)(i => i.StoryPoints)),
             ["createdAt"]  = Date("createdAt",  (Issue i) => i.JiraCreatedAt),
             ["updatedAt"]  = Date("updatedAt",  (Issue i) => i.JiraUpdatedAt),
@@ -54,5 +55,6 @@ internal static class FilterFields
 
     private static FilterField Date(string name, Expression<Func<Issue, DateTime>> sel) =>
         new(name, FieldType.DateTime,
-            Ops(FilterOperator.Lt, FilterOperator.Lte, FilterOperator.Gt, FilterOperator.Gte), sel);
+            Ops(FilterOperator.Lt, FilterOperator.Lte, FilterOperator.Gt, FilterOperator.Gte,
+                FilterOperator.Between, FilterOperator.InLast, FilterOperator.NotInLast, FilterOperator.InPeriod), sel);
 }

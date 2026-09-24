@@ -5,6 +5,7 @@ using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Domain.Enums;
 using JiraUnpacked.Infrastructure.Persistence;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
@@ -25,7 +26,7 @@ internal static class MetricsTestData
     private sealed record TokenResponseDto(string AccessToken, DateTime ExpiresAtUtc, string RefreshToken);
 
     /// <summary>Creates an Active EndUser and logs in. The tenant EndUserId == user.Id.</summary>
-    internal static async Task<(HttpClient client, Guid tenantId)> AuthedTenantAsync(JiraUnpackedApiFactory factory)
+    internal static async Task<(HttpClient client, Guid tenantId)> AuthedTenantAsync(WebApplicationFactory<Program> factory)
     {
         var unique = Guid.NewGuid().ToString("N");
         var userId = Guid.NewGuid();
