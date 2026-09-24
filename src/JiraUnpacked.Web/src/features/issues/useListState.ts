@@ -12,6 +12,21 @@ export const DEFAULT_COLUMNS = [
 /** How many of this hook's own recent writes it recognises when the URL catches up with them. */
 const REMEMBERED_WRITES = 20;
 
+/** Every URL param that is part of the list's view. A URL with none of them is a bare list. */
+export const LIST_PARAMS = ['filter', 'logic', 'sortBy', 'sortDesc', 'cols', 'view'] as const;
+
+/**
+ * A whole list view as URL params, spelled exactly as this hook writes them: null = absent, which
+ * for sortBy/sortDesc/cols means the default. `view` names the saved view the list was opened from.
+ */
+export interface ListParams {
+  filter: string | null;
+  sortBy: string | null;
+  sortDesc: string | null;
+  cols: string | null;
+  view: string | null;
+}
+
 /**
  * The list's whole view — filter tree, sort, columns — read from and written to the query string.
  *
@@ -98,6 +113,36 @@ export function useListState() {
     patch({ filter: raw, logic: null });
   }, [patch]);
 
+  /**
+   * Replaces the whole view in one navigation — how a saved view is opened. Push keeps what the
+   * list showed one Back away; replace leaves nothing behind (a default view standing in for a
+   * bare URL).
+   *
+   * The applied filter is this hook's own write, exactly like setTree's: the tree is held at once
+   * and the URL's arrival is recognised as its echo. Holding it here, rather than waiting to adopt
+   * it from the URL, is what makes the view win over an edit queued in the same tick (the URL may
+   * not even move), and keeps a render in which the URL has not caught up yet from showing the
+   * old tree. The same no-op rule as setTree applies to what is remembered.
+   */
+  const applyParams = useCallback((next: ListParams, options: { replace: boolean }) => {
+    const current = latestParams.current;
+    const unchanged = next.filter === current.get('filter') && !current.has('logic');
+    if (!unchanged) {
+      recentWrites.current = [...recentWrites.current.slice(-(REMEMBERED_WRITES - 1)), next.filter ?? ''];
+    }
+    const out = new URLSearchParams(current);
+    for (const key of LIST_PARAMS) out.delete(key);
+    for (const [key, value] of Object.entries(next)) {
+      if (value !== null) out.set(key, value);
+    }
+    const tree = parseFilterParam(next.filter, null);
+    setHeld((h) => ({ ...h, tree }));
+    latestParams.current = out;
+    setParams(out, { replace: options.replace });
+  }, [setParams]);
+
+  const setViewId = useCallback((id: string | null) => patch({ view: id }), [patch]);
+
   const columnsParam = params.get('cols');
   const columns = useMemo(
     () => columnsParam?.split(',').filter(Boolean) ?? DEFAULT_COLUMNS,
@@ -110,6 +155,13 @@ export function useListState() {
     sortBy: params.get('sortBy') ?? DEFAULT_SORT,
     sortDescending: params.get('sortDesc') !== 'false',
     columns,
+
+    /** The saved view the list was opened from, if any; kept through edits so "modified" can show. */
+    viewId: params.get('view'),
+    /** False for a bare URL — the only case in which a default view may step in. */
+    hasListState: LIST_PARAMS.some((key) => params.has(key)),
+    setViewId,
+    applyParams,
 
     setSort: (by: string, descending: boolean) =>
       patch({

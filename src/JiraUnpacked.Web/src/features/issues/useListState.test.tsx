@@ -1,12 +1,18 @@
 import { renderHook, act } from '@testing-library/react';
 import { MemoryRouter, useNavigate, useSearchParams } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
-import { useListState } from './useListState';
+import { useListState, type ListParams } from './useListState';
 import { emptyRoot, type EditorGroup } from './filterTree';
 
 const wrap = (initial: string) =>
   function Wrapper({ children }: { children: React.ReactNode }) {
     return <MemoryRouter initialEntries={[initial]}>{children}</MemoryRouter>;
+  };
+
+/** Several history entries, starting on the last one — so a test can tell push from replace. */
+const wrapAt = (entries: string[]) =>
+  function Wrapper({ children }: { children: React.ReactNode }) {
+    return <MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>{children}</MemoryRouter>;
   };
 
 /** The hook plus what it cannot report about itself: the URL it wrote, and a way to navigate. */
@@ -206,5 +212,113 @@ describe('useListState', () => {
     expect(result.current.state.tree.id).toBe('root-2');
     expect(result.current.state.tree.conditions[0].id).toBe('row-2');
     expect(result.current.state.tree.conditions[0].value).toBe('lo');
+  });
+});
+
+const VIEW_FILTER = '{"logic":"Or","conditions":[{"field":"status","op":"IsNull"}]}';
+const APPLIED: ListParams = {
+  filter: VIEW_FILTER, sortBy: 'priority', sortDesc: 'false', cols: 'jiraKey,summary', view: 'v1',
+};
+
+describe('useListState — opening a saved view', () => {
+  it('replaces the whole view in one history entry, and Back returns to what the list showed', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues?sortBy=summary&logic=Or') });
+
+    act(() => result.current.state.applyParams(APPLIED, { replace: false }));
+
+    // Every list param is the view's; the stale legacy `logic` is gone with the rest.
+    expect(Object.fromEntries(result.current.params)).toEqual({
+      filter: VIEW_FILTER, sortBy: 'priority', sortDesc: 'false', cols: 'jiraKey,summary', view: 'v1',
+    });
+    expect(result.current.state.viewId).toBe('v1');
+    expect(result.current.state.tree.logic).toBe('Or');
+    expect(result.current.state.sortBy).toBe('priority');
+    expect(result.current.state.sortDescending).toBe(false);
+    expect(result.current.state.columns).toEqual(['jiraKey', 'summary']);
+
+    act(() => result.current.navigate(-1));
+
+    expect(result.current.params.get('sortBy')).toBe('summary');
+    expect(result.current.state.viewId).toBeNull();
+    expect(result.current.state.tree.conditions).toEqual([]);
+  });
+
+  it('with replace, leaves no entry behind: Back skips the list it stood in for', () => {
+    const { result } = renderHook(useProbe, {
+      wrapper: wrapAt(['/elsewhere?from=before', '/projects/p1/issues']),
+    });
+
+    act(() => result.current.state.applyParams(APPLIED, { replace: true }));
+    act(() => result.current.navigate(-1));
+
+    expect(result.current.params.get('from')).toBe('before');
+  });
+
+  it('an applied view wins over an edit queued in the same tick', () => {
+    // The URL already holds the view's filter, so it "does not move" — only a tree held at once
+    // by applyParams (not one waited for from the URL) can undo the queued edit.
+    const { result } = renderHook(useProbe, {
+      wrapper: wrap(`/projects/p1/issues?filter=${encodeURIComponent(VIEW_FILTER)}`),
+    });
+
+    act(() => {
+      result.current.state.setTree(ONE_ROW);
+      result.current.state.applyParams(APPLIED, { replace: false });
+    });
+
+    expect(result.current.params.get('filter')).toBe(VIEW_FILTER);
+    expect(result.current.state.tree.logic).toBe('Or');
+    expect(result.current.state.tree.conditions).toEqual([
+      expect.objectContaining({ field: 'status', op: 'IsNull' }),
+    ]);
+  });
+
+  it('an edit right after applying builds on the applied URL, keeping view= and the view’s sort', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => {
+      result.current.state.applyParams(APPLIED, { replace: false });
+      result.current.state.setTree(ONE_ROW);
+    });
+
+    expect(result.current.params.get('view')).toBe('v1');
+    expect(result.current.params.get('sortBy')).toBe('priority');
+    expect(JSON.parse(result.current.params.get('filter')!)).toEqual({
+      logic: 'And', conditions: [{ field: 'summary', op: 'Contains', value: 'l' }],
+    });
+    expect(result.current.state.tree.conditions[0].id).toBe('row-1');
+  });
+
+  it('Clear all keeps view=, so the list can show the view as modified', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => result.current.state.applyParams(APPLIED, { replace: false }));
+    act(() => result.current.state.setTree(emptyRoot()));
+
+    expect(result.current.params.has('filter')).toBe(false);
+    expect(result.current.params.get('view')).toBe('v1');
+  });
+
+  it('setViewId adds or drops view= and nothing else', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues?sortBy=summary&view=gone') });
+
+    act(() => result.current.state.setViewId(null));
+    expect(result.current.params.has('view')).toBe(false);
+    expect(result.current.params.get('sortBy')).toBe('summary');
+
+    act(() => result.current.state.setViewId('v2'));
+    expect(result.current.state.viewId).toBe('v2');
+  });
+
+  it.each([
+    ['/projects/p1/issues', false],
+    ['/projects/p1/issues?unrelated=1', false],
+    ['/projects/p1/issues?view=v1', true],
+    ['/projects/p1/issues?cols=jiraKey', true],
+    ['/projects/p1/issues?sortDesc=false', true],
+    ['/projects/p1/issues?logic=Or', true],
+  ])('knows whether %s carries any list state', (url, expected) => {
+    const { result } = renderHook(useProbe, { wrapper: wrap(url) });
+    expect(result.current.state.hasListState).toBe(expected);
   });
 });
