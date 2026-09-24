@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '../../api/errors';
 import { createView, deleteView, updateView, type SavedView } from '../../api/views';
@@ -114,6 +114,7 @@ export function ViewsMenu({
   // started in.
   const openRef = useRef(open);
   openRef.current = open;
+  const popoverId = useId();
 
   const openMenu = () => {
     setOpen(true);
@@ -135,9 +136,17 @@ export function ViewsMenu({
     setMode(next);
   };
 
+  // Read by the document's Escape listener below, which is attached once per opening.
+  const closeRef = useRef(close);
+  closeRef.current = close;
+
   // A click anywhere outside closes it, like every other popover. Deliberately not close(): an
   // outside click has already moved focus to whatever was clicked, and clawing it back to the
   // trigger would fight that.
+  //
+  // Escape is heard on the document, not on the popover: while a save is pending its Save button
+  // is disabled, a disabled control cannot hold focus, and the keydown then starts at <body> —
+  // it would never reach a handler on the popover itself.
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => {
@@ -146,8 +155,17 @@ export function ViewsMenu({
       setMode('list');
       setError(null);
     };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeRef.current();
+    };
     document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
   }, [open]);
 
   // Cancel's target button doesn't exist yet at the moment Cancel is clicked (mode is still
@@ -161,12 +179,6 @@ export function ViewsMenu({
     else if (target === 'rename') renameButtonRef.current?.focus();
   }, [mode]);
 
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Escape' || !open) return;
-    event.preventDefault();
-    close();
-  };
-
   /** Puts a saved view into the cached list at once (so the label follows), then asks the server. */
   const store = (saved: SavedView) => {
     queryClient.setQueryData<SavedView[]>(queryKeys.views(projectId), (old) => withView(old ?? [], saved));
@@ -175,9 +187,16 @@ export function ViewsMenu({
 
   // Overwrites with the list as it is now; isDefault left out, so the flag is unchanged.
   const overwrite = useMutation({
-    mutationFn: (view: SavedView) => updateView(projectId, view.id, saveRequest(view.name, snapshot)),
+    mutationFn: ({ view, list }: { view: SavedView; list: ListSnapshot }) =>
+      updateView(projectId, view.id, saveRequest(view.name, list)),
     onSuccess: store,
   });
+  // A failed Save speaks only about the list and view it tried to write: once the list is edited
+  // (a new snapshot) or another view — or none — is loaded (Back, say), the alert is stale.
+  const overwriteError = overwrite.error
+    && overwrite.variables?.list === snapshot && overwrite.variables.view.id === loaded?.id
+    ? overwrite.error
+    : null;
 
   // Both onError handlers below only show the failure if the menu is still open to show it in — a
   // request that resolves after the user already closed the menu (Escape, click outside) must not
@@ -263,13 +282,15 @@ export function ViewsMenu({
 
   return (
     <>
-      <div ref={rootRef} className="relative" onKeyDown={onKeyDown}>
+      <div ref={rootRef} className="relative">
         <div className="flex items-center gap-2">
           <button
             ref={triggerRef}
             type="button"
-            aria-haspopup="true"
+            // No aria-haspopup: its values promise a menu, listbox, tree, grid or dialog, and this
+            // popover is none of them — a group of controls. Expanded + controls say what it does.
             aria-expanded={open}
+            aria-controls={open ? popoverId : undefined}
             className={TRIGGER_CLASS}
             onClick={() => (open ? close() : openMenu())}
           >
@@ -277,7 +298,7 @@ export function ViewsMenu({
           </button>
           {loaded && modified && (
             <Button
-              onClick={() => overwrite.mutate(loaded)}
+              onClick={() => overwrite.mutate({ view: loaded, list: snapshot })}
               loading={overwrite.isPending}
               title={`Overwrite “${loaded.name}” with the list as it is now`}
             >
@@ -286,14 +307,15 @@ export function ViewsMenu({
           )}
         </div>
 
-        {overwrite.error && (
+        {overwriteError && (
           <p role="alert" className="mt-1 text-sm text-[var(--ju-danger)]">
-            {viewErrorMessage(overwrite.error)}
+            {viewErrorMessage(overwriteError)}
           </p>
         )}
 
         {open && (
           <div
+            id={popoverId}
             role="group"
             aria-label="Saved views"
             className="absolute right-0 z-20 mt-1 flex w-72 flex-col gap-2 rounded-[var(--ju-radius)] border border-[var(--ju-border)] bg-[var(--ju-surface)] p-3 shadow-lg"

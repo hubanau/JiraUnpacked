@@ -177,7 +177,10 @@ export default function IssueList() {
           <Table>
             <THead>
               <TR>
-                {visibleColumns.map((col) => (
+                {visibleColumns.map((col) => (col.sortable === false ? (
+                  // No aria-sort at all: this header is not sortable, not merely unsorted.
+                  <TH key={col.id}>{col.header}</TH>
+                ) : (
                   <TH
                     key={col.id}
                     // "none" rather than omitted: leaving it off reads as "not sortable", which
@@ -201,7 +204,7 @@ export default function IssueList() {
                       )}
                     </button>
                   </TH>
-                ))}
+                )))}
               </TR>
             </THead>
             <TBody>

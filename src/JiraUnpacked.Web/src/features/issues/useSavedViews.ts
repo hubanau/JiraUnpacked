@@ -16,7 +16,7 @@ export interface ViewListControls {
 export interface SavedViews {
   /** Undefined until loaded (or when the request failed). */
   views: SavedView[] | undefined;
-  /** The request failed: the menu says so and the list carries on without views. */
+  /** No views could be loaded at all: the menu says so and the list carries on without views. */
   unavailable: boolean;
   /** The view named by `view=`, when it is in the list. */
   loaded: SavedView | undefined;
@@ -84,5 +84,6 @@ export function useSavedViews(projectId: string, list: ViewListControls, snapsho
     }
   }, [viewId, views, query.isFetching, setViewId]);
 
-  return { views, unavailable: query.isError, loaded, modified, apply, holdQuery: !defaultSettled };
+  // Only when there is nothing to show: a failed background refetch keeps the list it already has.
+  return { views, unavailable: query.isError && !views, loaded, modified, apply, holdQuery: !defaultSettled };
 }

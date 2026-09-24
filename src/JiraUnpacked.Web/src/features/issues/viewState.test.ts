@@ -137,6 +137,14 @@ describe('saveRequest', () => {
     });
   });
 
+  it('leaves columns out when none of the listed ids is a column the table knows', () => {
+    const now = { ...opened(BACKLOG), columns: ['bogus'] };
+
+    expect(saveRequest('Mine', now)).not.toHaveProperty('columns');
+    // An empty list is the default list, on both sides of the comparison.
+    expect(isModified(view(), { ...opened(view()), columns: ['bogus'] })).toBe(false);
+  });
+
   it('sends no filter for an empty tree', () => {
     expect(saveRequest('All', opened(view()))).toEqual({
       name: 'All', columns: DEFAULT_COLUMNS, sortBy: 'updatedAt', sortDescending: true,
@@ -159,6 +167,10 @@ describe('resaveRequest', () => {
       sortBy: 'priority',
       sortDescending: false,
     });
+  });
+
+  it('does not send back an empty column list', () => {
+    expect(resaveRequest(view({ columns: [] }), { name: 'Renamed' })).toEqual({ name: 'Renamed' });
   });
 
   it('moves only the default flag, storing nothing the view did not store', () => {

@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { server } from '../../test/setup';
 import { FILTER_CATALOG } from '../../test/filterCatalogFixture';
 import { mockViewsApi, savedView } from '../../test/viewsFixture';
+import { queryKeys } from '../../api/queryKeys';
 import IssueList from './IssueList';
 import { DEFAULT_COLUMNS } from './useListState';
 
@@ -123,6 +124,38 @@ describe('saved views — opening, modified, Save', () => {
     expect(screen.getByRole('button', { name: 'Views' })).toBeInTheDocument();
   });
 
+  it('switches views in one step: no request mixes one view’s filter with another’s sort, and no flash of modified', async () => {
+    const bodies = mockIssues();
+    mockViewsApi([BACKLOG, TRIAGE]);
+    // Every text the page ever shows, including one replaced within the same act() flush: act runs
+    // both commits before the observer's callback, so the passing values come from the records.
+    const texts = new Set<string>();
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.oldValue !== null) texts.add(record.oldValue);
+        for (const node of [...record.addedNodes, ...record.removedNodes]) texts.add(node.textContent ?? '');
+      }
+    });
+    observer.observe(document.body, {
+      subtree: true, childList: true, characterData: true, characterDataOldValue: true,
+    });
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+
+    await openView(user, 'Triage');
+    await waitFor(() => expect(bodies.at(-1)).toMatchObject({ sortBy: 'createdAt' }));
+    await openView(user, 'My backlog');
+    await waitFor(() => expect(bodies.at(-1)).toMatchObject({ filter: LOGIN_FILTER, sortBy: 'priority' }));
+    observer.disconnect();
+
+    // Backlog's filter only ever travels with Backlog's own sort; nothing else carries a filter.
+    for (const body of bodies.filter((b) => 'filter' in b)) {
+      expect(body).toMatchObject({ filter: LOGIN_FILTER, sortBy: 'priority', sortDescending: false });
+    }
+    expect([...texts].filter((t) => t.includes('modified'))).toEqual([]);
+  });
+
   it('starts an opened view on page 1, even when only its sort differs', async () => {
     const bodies = mockIssues();
     mockViewsApi([TRIAGE]);
@@ -183,11 +216,29 @@ describe('saved views — opening, modified, Save', () => {
     }]);
   });
 
+  it('Save clears the marker when cols= names only columns the table does not know', async () => {
+    mockIssues();
+    const api = mockViewsApi([BACKLOG]);
+    const user = userEvent.setup();
+    const filter = encodeURIComponent(JSON.stringify(LOGIN_FILTER));
+    renderList(`/projects/p1/issues?filter=${filter}&sortBy=priority&sortDesc=false&cols=bogus&view=v-backlog`);
+    expect(await screen.findByRole('button', { name: 'Views: My backlog • modified' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('button', { name: 'Views: My backlog' })).toBeInTheDocument();
+    // No column the table knows is no column list at all: the view goes back to the default columns.
+    expect(api.requests).toEqual([{
+      method: 'PUT', id: 'v-backlog',
+      body: { name: 'My backlog', filter: LOGIN_FILTER, sortBy: 'priority', sortDescending: false },
+    }]);
+  });
+
   it('shows the server’s reason when Save fails, and keeps the view marked modified', async () => {
     mockIssues();
     mockViewsApi([BACKLOG]);
     server.use(http.put('/api/projects/p1/filters/:viewId', () =>
-      HttpResponse.json({ title: 'A saved filter definition may be at most 8192 bytes.' }, { status: 400 })));
+      HttpResponse.json({ title: 'A view may be at most 8192 bytes once saved.' }, { status: 400 })));
     const user = userEvent.setup();
     renderList('/projects/p1/issues?sortBy=summary');
     await screen.findByText('ACME-1');
@@ -196,8 +247,50 @@ describe('saved views — opening, modified, Save', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('A saved filter definition may be at most 8192 bytes.');
+    expect(await screen.findByRole('alert')).toHaveTextContent('A view may be at most 8192 bytes once saved.');
     expect(screen.getByRole('button', { name: 'Views: My backlog • modified' })).toBeInTheDocument();
+  });
+
+  it('drops a failed Save’s alert once the list is edited, or Back leaves the view', async () => {
+    mockIssues();
+    mockViewsApi([BACKLOG]);
+    server.use(http.put('/api/projects/p1/filters/:viewId', () =>
+      HttpResponse.json({ title: 'A view may be at most 8192 bytes once saved.' }, { status: 400 })));
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+    await openView(user, 'My backlog');
+    const value = screen.getByLabelText('Value for condition 1');
+    await user.type(value, 's');
+    await user.click(await screen.findByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('at most 8192 bytes');
+
+    // A later edit: the alert was about a list that is no longer on screen.
+    await user.type(value, 'x');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('at most 8192 bytes');
+
+    // Back to the list before the view: the alert was about a view that is no longer loaded.
+    await user.click(screen.getByRole('button', { name: 'Go back' }));
+    expect(await screen.findByRole('button', { name: 'Views' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('points the trigger at the popover it opens, and claims no menu', async () => {
+    mockIssues();
+    mockViewsApi([BACKLOG]);
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+
+    const trigger = screen.getByRole('button', { name: 'Views' });
+    // aria-haspopup="true" means a menu; the popover is a group of controls, not a role=menu.
+    expect(trigger).not.toHaveAttribute('aria-haspopup');
+    await user.click(trigger);
+    expect(menu().id).not.toBe('');
+    expect(trigger).toHaveAttribute('aria-controls', menu().id);
   });
 
   it('closes the menu on Escape (focus back on the button) and on a click outside', async () => {
@@ -231,6 +324,24 @@ describe('saved views — opening, modified, Save', () => {
     await user.click(screen.getByRole('button', { name: 'Views' }));
     expect(await within(menu()).findByText('Views unavailable')).toBeInTheDocument();
     expect(within(menu()).queryByRole('button')).not.toBeInTheDocument();
+  });
+  it('keeps listing the views it has when a later refetch fails', async () => {
+    mockIssues();
+    mockViewsApi([BACKLOG]);
+    const user = userEvent.setup();
+    const { queryClient } = renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+    await user.click(screen.getByRole('button', { name: 'Views' }));
+    expect(await within(menu()).findByRole('button', { name: 'My backlog' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    server.use(http.get('/api/projects/p1/filters', () => new HttpResponse(null, { status: 500 })));
+    await queryClient.invalidateQueries({ queryKey: queryKeys.views('p1') });
+    await waitFor(() => expect(queryClient.getQueryState(queryKeys.views('p1'))?.status).toBe('error'));
+
+    await user.click(screen.getByRole('button', { name: 'Views' }));
+    expect(within(menu()).getByRole('button', { name: 'My backlog' })).toBeInTheDocument();
+    expect(within(menu()).queryByText('Views unavailable')).not.toBeInTheDocument();
   });
 });
 
@@ -277,7 +388,7 @@ describe('saved views — managing', () => {
     mockIssues();
     mockViewsApi([]);
     server.use(http.post('/api/projects/p1/filters', () =>
-      HttpResponse.json({ title: 'A project may have at most 100 saved filters.' }, { status: 409 })));
+      HttpResponse.json({ title: 'A project may have at most 100 saved views.' }, { status: 409 })));
     const user = userEvent.setup();
     renderList('/projects/p1/issues?sortBy=summary');
     await screen.findByText('ACME-1');
@@ -287,7 +398,7 @@ describe('saved views — managing', () => {
     await user.type(within(menu()).getByLabelText('View name'), 'One too many');
     await user.click(within(menu()).getByRole('button', { name: 'Save' }));
 
-    expect(await within(menu()).findByRole('alert')).toHaveTextContent('A project may have at most 100 saved filters.');
+    expect(await within(menu()).findByRole('alert')).toHaveTextContent('A project may have at most 100 saved views.');
   });
 
   it('needs a name: Save stays disabled while it is blank, and the field stops at 100 characters', async () => {
@@ -428,8 +539,7 @@ describe('saved views — managing', () => {
     await user.click(within(menu()).getByRole('button', { name: 'Cancel' }));
     expect(within(menu()).getByRole('button', { name: 'Rename…' })).toHaveFocus();
 
-    // Cancel keeps the popover open (unlike a successful save) and lands focus back inside it, so
-    // Escape still reaches the root handler and closes the whole thing.
+    // Cancel keeps the popover open (unlike a successful save), so Escape still closes the whole thing.
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('group', { name: 'Saved views' })).not.toBeInTheDocument();
   });
@@ -467,17 +577,16 @@ describe('saved views — managing', () => {
     await user.type(within(menu()).getByLabelText('View name'), 'Too many');
     await user.click(within(menu()).getByRole('button', { name: 'Save' }));
 
-    // Close the menu while the request is still unresolved — via an outside click, not Escape:
-    // the pending Save button is disabled (aria-busy) and a disabled control can't hold focus, so
-    // Escape's keydown would land on <body> and never reach the root handler at all. (Not
-    // "ACME-1" either — that's a link to the issue detail route, which this test doesn't mount.)
+    // Close the menu while the request is still unresolved, with an outside click (Escape is
+    // covered by its own test). Not "ACME-1": that's a link to the issue detail route, which this
+    // test doesn't mount.
     await user.click(screen.getByText(/Page 1 of/));
     expect(screen.queryByRole('group', { name: 'Saved views' })).not.toBeInTheDocument();
 
     // Now let it fail, with the menu already closed. There is no DOM signal for "the mutation has
     // settled" here (that's the whole point of the fix — closed means silent), so this reads
     // react-query's own mutation cache instead of guessing at a timeout.
-    resolveRequest?.(HttpResponse.json({ title: 'A project may have at most 100 saved filters.' }, { status: 409 }));
+    resolveRequest?.(HttpResponse.json({ title: 'A project may have at most 100 saved views.' }, { status: 409 }));
     await waitFor(() => {
       const mutations = queryClient.getMutationCache().getAll();
       expect(mutations.some((m) => m.state.status === 'error')).toBe(true);
@@ -503,6 +612,33 @@ describe('saved views — managing', () => {
       method: 'POST',
       body: { name: 'By summary', columns: DEFAULT_COLUMNS, sortBy: 'summary', sortDescending: false },
     }]);
+  });
+
+  it('closes the menu on Escape while a new view is still being saved', async () => {
+    mockIssues();
+    mockViewsApi([]);
+    let resolveRequest: ((response: Response) => void) | undefined;
+    server.use(http.post('/api/projects/p1/filters', () =>
+      new Promise<Response>((resolve) => { resolveRequest = resolve; })));
+    const user = userEvent.setup();
+    const { queryClient } = renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+
+    const trigger = screen.getByRole('button', { name: 'Views' });
+    await user.click(trigger);
+    await user.click(within(menu()).getByRole('button', { name: 'Save as new view…' }));
+    await user.type(within(menu()).getByLabelText('View name'), 'Pending');
+    // Clicked, so focus sits on the Save button — which the pending request then disables.
+    await user.click(within(menu()).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(within(menu()).getByRole('button', { name: /Save/ })).toBeDisabled());
+
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('group', { name: 'Saved views' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    resolveRequest?.(HttpResponse.json({ title: 'A project may have at most 100 saved views.' }, { status: 409 }));
+    await waitFor(() => expect(queryClient.getMutationCache().getAll()[0]?.state.status).toBe('error'));
   });
 
   it('closes the whole menu on Escape from inside the name field, focus back on the trigger', async () => {
@@ -623,8 +759,12 @@ describe('saved views — the default view and stale links', () => {
 
     await user.click(screen.getByRole('button', { name: 'Open the list sorted by summary' }));
     await screen.findByText('ACME-1');
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    // Wait for the views to arrive — the moment a default would step in — rather than a guess
+    // at how long they take.
+    await user.click(screen.getByRole('button', { name: 'Views' }));
+    expect(await within(menu()).findByRole('button', { name: /My backlog/ }, { timeout: 2000 })).toBeInTheDocument();
 
+    expect(screen.getByRole('button', { name: 'Views' })).toBeInTheDocument();
     expect(urlParams().has('view')).toBe(false);
     expect(urlParams().get('sortBy')).toBe('summary');
   });

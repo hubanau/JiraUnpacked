@@ -135,6 +135,18 @@ describe('sortable headers', () => {
       expect(sent.at(-1)).toMatchObject({ sortBy: 'storyPoints', sortDescending: false }));
   });
 
+  it('offers no sort on Parent, which the server cannot order by', async () => {
+    // Parent holds an opaque Jira id: the server refuses sortBy=parent with a 400.
+    mockList();
+    renderList('/projects/p1/issues?cols=jiraKey,parent');
+
+    const parent = await screen.findByRole('columnheader', { name: 'Parent' });
+    expect(screen.queryByRole('button', { name: 'Sort by Parent' })).not.toBeInTheDocument();
+    // Omitted, not "none": this header is not sortable at all.
+    expect(parent).not.toHaveAttribute('aria-sort');
+    expect(screen.getByRole('button', { name: 'Sort by Key' })).toBeInTheDocument();
+  });
+
   it('tells assistive tech which column is sorted and which way', async () => {
     mockList();
     renderList('/projects/p1/issues?sortBy=storyPoints&sortDesc=false');

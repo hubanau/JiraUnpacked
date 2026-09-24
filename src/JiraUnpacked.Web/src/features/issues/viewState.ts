@@ -17,10 +17,11 @@ const COLUMN_ORDER = ISSUE_COLUMNS.map((c) => c.id);
 export const shownColumns = (columns: readonly string[]): string[] =>
   COLUMN_ORDER.filter((id) => columns.includes(id));
 
-// The URL's own normalisation (see useListState): a default is an absent param.
+// The URL's own normalisation (see useListState): a default is an absent param. No column the
+// table knows is no column list at all — the same "not stored" a view's empty list means.
 const colsParam = (columns: readonly string[]): string | null => {
   const joined = shownColumns(columns).join(',');
-  return joined === DEFAULT_COLUMNS.join(',') ? null : joined;
+  return joined === '' || joined === DEFAULT_COLUMNS.join(',') ? null : joined;
 };
 const sortByParam = (sortBy: string): string | null => (sortBy === DEFAULT_SORT ? null : sortBy);
 const sortDescParam = (descending: boolean): string | null => (descending ? null : 'false');
@@ -74,10 +75,11 @@ export function isModified(view: SavedView, current: ListSnapshot): boolean {
 /** The body that stores the list as it is now under `name` (isDefault left out: see SaveViewRequest). */
 export function saveRequest(name: string, current: ListSnapshot): SaveViewRequest {
   const filter = toSavable(current.tree);
+  const columns = shownColumns(current.columns);
   return {
     name,
     ...(filter ? { filter } : {}),
-    columns: shownColumns(current.columns),
+    ...(columns.length > 0 ? { columns } : {}),
     sortBy: current.sortBy,
     sortDescending: current.sortDescending,
   };
@@ -92,7 +94,7 @@ export function resaveRequest(view: SavedView, changes: { name?: string; isDefau
   return {
     name: changes.name ?? view.name,
     ...(filter ? { filter } : {}),
-    ...(view.columns ? { columns: view.columns } : {}),
+    ...(view.columns?.length ? { columns: view.columns } : {}),
     ...(view.sortBy !== null ? { sortBy: view.sortBy } : {}),
     ...(view.sortDescending !== null ? { sortDescending: view.sortDescending } : {}),
     ...(changes.isDefault !== undefined ? { isDefault: changes.isDefault } : {}),

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { startTransition, useCallback, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { parseFilterParam, toUrlJson, type EditorGroup } from './filterTree';
 
@@ -168,7 +168,11 @@ export function useListState() {
     if (!unchangedFilter) {
       recentWrites.current = [...recentWrites.current.slice(-(REMEMBERED_WRITES - 1)), next.filter ?? ''];
       const tree = parseFilterParam(next.filter, null);
-      setHeld((h) => ({ ...h, tree }));
+      // In a transition, like the router's own URL update: both then commit in the same render.
+      // A plain update would commit first, and for one render the list would pair the new view's
+      // filter with the old URL's sort, columns and view= — enough to send a request that
+      // belongs to neither view, and to flash the old view as modified.
+      startTransition(() => setHeld((h) => ({ ...h, tree })));
     }
 
     latestParams.current = out;
