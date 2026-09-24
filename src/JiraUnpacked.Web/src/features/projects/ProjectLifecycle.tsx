@@ -82,7 +82,7 @@ export function DeleteProject({ project }: { project: Project }) {
         error={errorText(mutation.error, 'Could not delete the project.')}
       >
         <p>
-          All synced issues, change history, sync runs, queries, mappings and saved filters for{' '}
+          All synced issues, change history, sync runs, queries, mappings and saved views for{' '}
           <strong>{project.jiraProjectKey}</strong> will be removed. The connection stays, and nothing in
           Jira is changed. This cannot be undone.
         </p>

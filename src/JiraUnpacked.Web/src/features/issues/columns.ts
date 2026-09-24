@@ -8,6 +8,11 @@ export interface IssueColumn {
   header: string;
   /** The cell's text. Key is special-cased in the table because it carries the issue link. */
   render: (item: IssueListItem) => ReactNode;
+  /**
+   * False for a column the server cannot order by (its SortFields), so its header offers no sort.
+   * Left out = sortable.
+   */
+  sortable?: false;
 }
 
 /**
@@ -28,7 +33,8 @@ export const ISSUE_COLUMNS: IssueColumn[] = [
   { id: 'sprint', header: 'Sprint', render: (i) => i.sprint ?? EMPTY },
   { id: 'team', header: 'Team', render: (i) => i.team ?? EMPTY },
   { id: 'storyPoints', header: 'Points', render: (i) => i.storyPoints ?? EMPTY },
-  { id: 'parent', header: 'Parent', render: (i) => i.parentJiraIssueId ?? EMPTY },
+  // An opaque Jira id: ordering by it orders by a string nobody reads, so the server refuses it.
+  { id: 'parent', header: 'Parent', render: (i) => i.parentJiraIssueId ?? EMPTY, sortable: false },
   { id: 'createdAt', header: 'Created', render: (i) => new Date(i.jiraCreatedAt).toLocaleDateString() },
   { id: 'updatedAt', header: 'Updated', render: (i) => new Date(i.jiraUpdatedAt).toLocaleDateString() },
 ];

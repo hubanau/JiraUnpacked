@@ -9,6 +9,7 @@ import IssueList, { IssueListRoute } from './IssueList';
 import type { IssueListItem } from '../../api/issues';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../../api/issues';
 import { FILTER_CATALOG as CATALOG } from '../../test/filterCatalogFixture';
+import { noSavedViews } from '../../test/viewsFixture';
 
 function renderList() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -73,6 +74,7 @@ describe('IssueList', () => {
   beforeEach(() => {
     server.use(
       http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)),
+      noSavedViews,
       // Several tests below add a condition, whose default field is 'status' -- a dictionary
       // field -- so ConditionRow fires its own filter-values fetch regardless of what the test
       // itself cares about (see FilterBuilder.test.tsx's mockFilterCatalog for the same fix and
