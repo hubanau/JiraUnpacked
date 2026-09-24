@@ -49,6 +49,18 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
         return (await resp.Content.ReadFromJsonAsync<SavedFilterView>(Json))!;
     }
 
+    private static async Task<List<SavedFilterView>> ListAsync(HttpClient client, Guid projectId) =>
+        (await client.GetFromJsonAsync<List<SavedFilterView>>($"/api/projects/{projectId}/filters", Json))!;
+
+    /// <summary>POSTs a body the server must refuse and returns the ProblemDetails title.</summary>
+    private static async Task<string> RejectedAsync(HttpClient client, Guid projectId, object body)
+    {
+        var resp = await client.PostAsJsonAsync($"/api/projects/{projectId}/filters", body);
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        var problem = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        return problem.GetProperty("title").GetString()!;
+    }
+
     [Fact]
     public async Task Create_list_get_update_and_delete_round_trip()
     {
@@ -173,16 +185,19 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
     }
 
     [Fact]
-    public async Task A_filter_with_no_conditions_at_all_is_rejected()
+    public async Task A_view_that_stores_only_a_name_is_the_plain_list_and_is_allowed()
     {
         var (client, projectId) = await SeedAsync();
 
-        var resp = await client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/filters", new { name = "Everything" });
+        // A view is a filter AND a presentation: "all issues, my columns" has no filter at all,
+        // and the plain list itself is a legitimate thing to name (and to make the default).
+        var created = await CreateOkAsync(client, projectId, new { name = "Everything" });
 
-        // Naming a filter that matches everything makes it look like a real constraint.
-        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
-        Assert.Contains("must contain at least one condition", await resp.Content.ReadAsStringAsync());
+        Assert.Null(created.Filter);
+        Assert.Null(created.Conditions);
+        Assert.Null(created.Columns);
+        Assert.Null(created.SortBy);
+        Assert.Null(created.SortDescending);
     }
 
     [Fact]
@@ -379,5 +394,102 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
         Assert.True(created.Filter.Groups!.Single().Disabled);
         // jsonb::text renders `"key": value` with a space after the colon.
         Assert.Contains("\"disabled\": true", await ReadDefinitionAsync(created.Id));
+    }
+
+    [Fact]
+    public async Task Columns_and_sort_round_trip_next_to_a_filter_with_disabled_parts()
+    {
+        var (client, projectId) = await SeedAsync();
+
+        var created = await CreateOkAsync(client, projectId, new
+        {
+            name = "My backlog",
+            filter = new
+            {
+                logic = "And",
+                conditions = new object[]
+                {
+                    new { field = "status", op = "Eq", value = "Done" },
+                    new { field = "assignee", op = "Eq", value = "Bob", disabled = true },
+                },
+            },
+            columns = new[] { "jiraKey", "summary", "priority" },
+            sortBy = "priority",
+            sortDescending = false,
+        });
+
+        Assert.Equal(new List<string> { "jiraKey", "summary", "priority" }, created.Columns);
+        Assert.Equal("priority", created.SortBy);
+        Assert.False(created.SortDescending);
+        Assert.True(created.Filter!.Conditions![1].Disabled);
+
+        var fetched = await client.GetFromJsonAsync<SavedFilterView>(
+            $"/api/projects/{projectId}/filters/{created.Id}", Json);
+        Assert.Equal(created.Columns, fetched!.Columns);
+        Assert.Equal("priority", fetched.SortBy);
+        Assert.False(fetched.SortDescending);
+
+        var updateResp = await client.PutAsJsonAsync($"/api/projects/{projectId}/filters/{created.Id}", new
+        {
+            name = "My backlog",
+            filter = new { logic = "And", conditions = new[] { new { field = "status", op = "Eq", value = "Done" } } },
+            columns = new[] { "jiraKey", "team" },
+            sortBy = "createdAt",
+            sortDescending = true,
+        });
+        Assert.Equal(HttpStatusCode.OK, updateResp.StatusCode);
+        var updated = (await updateResp.Content.ReadFromJsonAsync<SavedFilterView>(Json))!;
+        Assert.Equal(new List<string> { "jiraKey", "team" }, updated.Columns);
+        Assert.Equal("createdAt", updated.SortBy);
+        Assert.True(updated.SortDescending);
+
+        // Stored by name in the jsonb next to the filter, not in new columns.
+        var stored = await ReadDefinitionAsync(created.Id);
+        Assert.Contains("\"sortBy\": \"createdAt\"", stored);
+        Assert.Contains("\"columns\": [\"jiraKey\", \"team\"]", stored);
+    }
+
+    [Fact]
+    public async Task A_view_without_a_filter_keeps_its_columns_and_sort()
+    {
+        var (client, projectId) = await SeedAsync();
+
+        var created = await CreateOkAsync(client, projectId, new
+        {
+            name = "Everything, by points",
+            columns = new[] { "jiraKey", "storyPoints" },
+            sortBy = "storyPoints",
+        });
+
+        Assert.Null(created.Filter);
+        Assert.Equal(new List<string> { "jiraKey", "storyPoints" }, created.Columns);
+        Assert.Equal("storyPoints", created.SortBy);
+        // Absent means "the list's default", which is not the same claim as false.
+        Assert.Null(created.SortDescending);
+    }
+
+    [Fact]
+    public async Task Unknown_sort_fields_and_bad_column_lists_are_rejected()
+    {
+        var (client, projectId) = await SeedAsync();
+
+        Assert.StartsWith("'secret' is not a sortable column",
+            await RejectedAsync(client, projectId, new { name = "s", sortBy = "secret" }));
+        // parent is a filter field and a column, but ordering by an opaque Jira id means nothing.
+        Assert.StartsWith("'parent' is not a sortable column",
+            await RejectedAsync(client, projectId, new { name = "p", sortBy = "parent" }));
+
+        Assert.Equal("'secret' is not a known column.",
+            await RejectedAsync(client, projectId, new { name = "c", columns = new[] { "jiraKey", "secret" } }));
+        // Exact case: the SPA matches ids exactly, so "STATUS" would be stored and never shown.
+        Assert.Equal("'STATUS' is not a known column.",
+            await RejectedAsync(client, projectId, new { name = "u", columns = new[] { "STATUS" } }));
+        // A JSON null inside the list is a bad column — a 400, not a 500 from a null dictionary key.
+        Assert.Equal("'' is not a known column.",
+            await RejectedAsync(client, projectId, new { name = "n", columns = new[] { "jiraKey", null } }));
+        Assert.Equal("'status' is listed more than once.",
+            await RejectedAsync(client, projectId, new { name = "d", columns = new[] { "status", "summary", "status" } }));
+        Assert.Equal("A view may show at most 20 columns.",
+            await RejectedAsync(client, projectId, new { name = "m", columns = Enumerable.Repeat("status", 21).ToArray() }));
     }
 }

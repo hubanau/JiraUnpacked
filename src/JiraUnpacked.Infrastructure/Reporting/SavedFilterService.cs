@@ -33,6 +33,12 @@ public sealed class SavedFilterService : ISavedFilterService
     public const int MaxNameLength = 100;
 
     /// <summary>
+    /// Every column once is 12 today; 20 leaves room for fields the catalog gains later without
+    /// letting one definition grow without bound.
+    /// </summary>
+    public const int MaxColumns = 20;
+
+    /// <summary>
     /// Enum values are written by NAME, never as ordinals. Storing ordinals would make
     /// FilterOperator's declaration order load-bearing for data at rest: reordering it — which
     /// nothing else forbids, and which FilterCatalogService already relies on for display —
@@ -187,9 +193,10 @@ public sealed class SavedFilterService : ISavedFilterService
             f => f.JiraProjectId == projectId && f.Name == name && (excluding == null || f.Id != excluding), ct);
 
     /// <summary>
-    /// Name + definition checks. The definition goes through the SAME compiler the query
-    /// endpoints use, so anything the query would reject is a 400 here rather than a surprise
-    /// the next time someone runs the filter.
+    /// Name, presentation and definition checks. The filter goes through the SAME compiler the
+    /// query endpoints use, so anything the query would reject is a 400 here rather than a
+    /// surprise the next time someone opens the view. A view with no filter at all is fine: it
+    /// is the plain list, perhaps with its own columns or sort.
     /// </summary>
     private async Task<(string? Name, string? Definition, SaveFilterResult? Failure)> ValidateAsync(
         Guid projectId, SaveFilterRequest request, CancellationToken ct)
@@ -200,21 +207,20 @@ public sealed class SavedFilterService : ISavedFilterService
         if (name.Length > MaxNameLength)
             return (null, null, SaveFilterResult.Invalid($"A name may be at most {MaxNameLength} characters."));
 
-        var hasConditions = request.Conditions is { Count: > 0 };
-        var hasGroup = request.Filter is not null;
+        if (!SortFields.IsKnown(request.SortBy))
+            return (null, null, SaveFilterResult.Invalid(SortFields.Describe(request.SortBy)));
 
-        // A saved filter that matches everything is indistinguishable from having no filter,
-        // and naming it makes it look like a real constraint.
-        if (!hasConditions && !hasGroup)
-            return (null, null, SaveFilterResult.Invalid(
-                "A saved filter must contain at least one condition."));
+        if (DescribeBadColumns(request.Columns) is { } columnError)
+            return (null, null, SaveFilterResult.Invalid(columnError));
 
         var compiled = await _filter.CompileAsync(request.ToFilter(), ct);
         if (compiled.Error is not null)
             return (null, null, SaveFilterResult.Invalid(compiled.Error));
 
         var definition = JsonSerializer.Serialize(
-            new ReportFilter(request.Conditions, request.Filter), DefinitionJson);
+            new ViewDefinition(
+                request.Conditions, request.Filter, request.Columns, request.SortBy, request.SortDescending),
+            DefinitionJson);
 
         if (System.Text.Encoding.UTF8.GetByteCount(definition) > MaxDefinitionBytes)
             return (null, null, SaveFilterResult.Invalid(
@@ -224,13 +230,47 @@ public sealed class SavedFilterService : ISavedFilterService
     }
 
     /// <summary>
+    /// Null when the list is acceptable. Column ids are the filter catalog's field names — one
+    /// vocabulary for filtering, sorting and columns — matched EXACTLY: the catalog lookup ignores
+    /// case, but the SPA does not, so "STATUS" would be stored and then never shown.
+    /// </summary>
+    private static string? DescribeBadColumns(List<string>? columns)
+    {
+        if (columns is null) return null;
+        if (columns.Count > MaxColumns)
+            return $"A view may show at most {MaxColumns} columns.";
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var column in columns)
+        {
+            // A JSON null inside the list arrives as a null string: a bad column, not a 500.
+            if (column is null || !FilterFields.All.TryGetValue(column, out var field) || field.Name != column)
+                return $"'{column}' is not a known column.";
+            if (!seen.Add(column))
+                return $"'{column}' is listed more than once.";
+        }
+        return null;
+    }
+
+    /// <summary>
     /// The column is jsonb and this service is the only writer, so Postgres has already
-    /// validated the document and the shape is one this type round-trips.
+    /// validated the document and the shape is one this type round-trips. A definition written
+    /// before views existed simply has no columns/sort, which reads back as null.
     /// </summary>
     private static SavedFilterView ToView(SavedFilter row)
     {
-        var definition = JsonSerializer.Deserialize<ReportFilter>(row.DefinitionJson, DefinitionJson);
+        var d = JsonSerializer.Deserialize<ViewDefinition>(row.DefinitionJson, DefinitionJson);
         return new SavedFilterView(
-            row.Id, row.Name, definition?.Conditions, definition?.Filter, row.CreatedAt, row.UpdatedAt);
+            row.Id, row.Name, d?.Conditions, d?.Filter, d?.Columns, d?.SortBy, d?.SortDescending,
+            row.CreatedAt, row.UpdatedAt);
     }
 }
+
+/// <summary>
+/// What SavedFilters.DefinitionJson holds: the filter every endpoint takes, plus the list's
+/// presentation. Null members are omitted on write (DefinitionJson ignores nulls), so "absent"
+/// and "not part of this view" are the same thing.
+/// </summary>
+internal sealed record ViewDefinition(
+    List<FilterCondition>? Conditions, FilterGroup? Filter,
+    List<string>? Columns, string? SortBy, bool? SortDescending);
