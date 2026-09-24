@@ -1,12 +1,18 @@
 import { renderHook, act } from '@testing-library/react';
 import { MemoryRouter, useNavigate, useSearchParams } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
-import { useListState } from './useListState';
-import { emptyRoot, type EditorGroup } from './filterTree';
+import { useListState, type ListParams } from './useListState';
+import { emptyRoot, newId, type EditorGroup } from './filterTree';
 
 const wrap = (initial: string) =>
   function Wrapper({ children }: { children: React.ReactNode }) {
     return <MemoryRouter initialEntries={[initial]}>{children}</MemoryRouter>;
+  };
+
+/** Several history entries, starting on the last one — so a test can tell push from replace. */
+const wrapAt = (entries: string[]) =>
+  function Wrapper({ children }: { children: React.ReactNode }) {
+    return <MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>{children}</MemoryRouter>;
   };
 
 /** The hook plus what it cannot report about itself: the URL it wrote, and a way to navigate. */
@@ -206,5 +212,211 @@ describe('useListState', () => {
     expect(result.current.state.tree.id).toBe('root-2');
     expect(result.current.state.tree.conditions[0].id).toBe('row-2');
     expect(result.current.state.tree.conditions[0].value).toBe('lo');
+  });
+});
+
+const VIEW_FILTER = '{"logic":"Or","conditions":[{"field":"status","op":"IsNull"}]}';
+const APPLIED: ListParams = {
+  filter: VIEW_FILTER, sortBy: 'priority', sortDesc: 'false', cols: 'jiraKey,summary', view: 'v1',
+};
+
+describe('useListState — opening a saved view', () => {
+  it('replaces the whole view in one history entry, and Back returns to what the list showed', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues?sortBy=summary&logic=Or') });
+
+    act(() => result.current.state.applyParams(APPLIED, { replace: false }));
+
+    // Every list param is the view's; the stale legacy `logic` is gone with the rest.
+    expect(Object.fromEntries(result.current.params)).toEqual({
+      filter: VIEW_FILTER, sortBy: 'priority', sortDesc: 'false', cols: 'jiraKey,summary', view: 'v1',
+    });
+    expect(result.current.state.viewId).toBe('v1');
+    expect(result.current.state.tree.logic).toBe('Or');
+    expect(result.current.state.sortBy).toBe('priority');
+    expect(result.current.state.sortDescending).toBe(false);
+    expect(result.current.state.columns).toEqual(['jiraKey', 'summary']);
+
+    act(() => result.current.navigate(-1));
+
+    expect(result.current.params.get('sortBy')).toBe('summary');
+    expect(result.current.state.viewId).toBeNull();
+    expect(result.current.state.tree.conditions).toEqual([]);
+  });
+
+  it('with replace, leaves no entry behind: Back skips the list it stood in for', () => {
+    const { result } = renderHook(useProbe, {
+      wrapper: wrapAt(['/elsewhere?from=before', '/projects/p1/issues']),
+    });
+
+    act(() => result.current.state.applyParams(APPLIED, { replace: true }));
+    act(() => result.current.navigate(-1));
+
+    expect(result.current.params.get('from')).toBe('before');
+  });
+
+  it('an applied view wins over an edit queued in the same tick', () => {
+    // The URL already holds the view's filter, so it "does not move" — only a tree held at once
+    // by applyParams (not one waited for from the URL) can undo the queued edit.
+    const { result } = renderHook(useProbe, {
+      wrapper: wrap(`/projects/p1/issues?filter=${encodeURIComponent(VIEW_FILTER)}`),
+    });
+
+    act(() => {
+      result.current.state.setTree(ONE_ROW);
+      result.current.state.applyParams(APPLIED, { replace: false });
+    });
+
+    expect(result.current.params.get('filter')).toBe(VIEW_FILTER);
+    expect(result.current.state.tree.logic).toBe('Or');
+    expect(result.current.state.tree.conditions).toEqual([
+      expect.objectContaining({ field: 'status', op: 'IsNull' }),
+    ]);
+  });
+
+  it('an edit right after applying builds on the applied URL, keeping view= and the view’s sort', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => {
+      result.current.state.applyParams(APPLIED, { replace: false });
+      result.current.state.setTree(ONE_ROW);
+    });
+
+    expect(result.current.params.get('view')).toBe('v1');
+    expect(result.current.params.get('sortBy')).toBe('priority');
+    expect(JSON.parse(result.current.params.get('filter')!)).toEqual({
+      logic: 'And', conditions: [{ field: 'summary', op: 'Contains', value: 'l' }],
+    });
+    expect(result.current.state.tree.conditions[0].id).toBe('row-1');
+  });
+
+  it('Clear all keeps view=, so the list can show the view as modified', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => result.current.state.applyParams(APPLIED, { replace: false }));
+    act(() => result.current.state.setTree(emptyRoot()));
+
+    expect(result.current.params.has('filter')).toBe(false);
+    expect(result.current.params.get('view')).toBe('v1');
+  });
+
+  it('setViewId adds or drops view= and nothing else', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues?sortBy=summary&view=gone') });
+
+    act(() => result.current.state.setViewId(null));
+    expect(result.current.params.has('view')).toBe(false);
+    expect(result.current.params.get('sortBy')).toBe('summary');
+
+    act(() => result.current.state.setViewId('v2'));
+    expect(result.current.state.viewId).toBe('v2');
+  });
+
+  it.each([
+    ['/projects/p1/issues', false],
+    ['/projects/p1/issues?unrelated=1', false],
+    ['/projects/p1/issues?view=v1', true],
+    ['/projects/p1/issues?cols=jiraKey', true],
+    ['/projects/p1/issues?sortDesc=false', true],
+    ['/projects/p1/issues?logic=Or', true],
+  ])('knows whether %s carries any list state', (url, expected) => {
+    const { result } = renderHook(useProbe, { wrapper: wrap(url) });
+    expect(result.current.state.hasListState).toBe(expected);
+  });
+});
+
+describe('useListState — fix round 1', () => {
+  it('keeps a stable identity for every setter across a URL change', () => {
+    // Task 5/7 may put these in an effect's dependency array; a fresh identity on every URL write
+    // (react-router hands back a new setSearchParams each time) would make that effect fire
+    // forever, so this is load-bearing, not tidiness.
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+    const first = result.current.state;
+
+    act(() => result.current.state.setSort('storyPoints', false)); // a URL change
+
+    expect(result.current.state.setTree).toBe(first.setTree);
+    expect(result.current.state.setSort).toBe(first.setSort);
+    expect(result.current.state.setColumns).toBe(first.setColumns);
+    expect(result.current.state.setViewId).toBe(first.setViewId);
+    expect(result.current.state.applyParams).toBe(first.applyParams);
+  });
+
+  it('adopts an applied view\'s tree once — it is not re-parsed again once the URL commits', () => {
+    // The tree applyParams builds is this hook's own write, held immediately (see the doc comment
+    // on applyParams): the URL commit that follows must be recognised as ITS echo, not treated as
+    // a fresh link and re-parsed all over again. Every parse mints fresh ids from a shared counter
+    // (filterTree's `newId`), so parsing VIEW_FILTER (one group, one condition -- two ids) exactly
+    // once, and not twice, is something a global id-count checkpoint can catch even though the two
+    // parses would otherwise be indistinguishable by content alone.
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+    const idNum = (id: string) => Number(id.slice(1));
+
+    const before = idNum(newId());
+    act(() => result.current.state.applyParams(APPLIED, { replace: false }));
+    const after = idNum(newId());
+
+    expect(after - before - 1).toBe(2);
+  });
+
+  it('does not re-mint the tree when re-applying a view whose filter the URL already holds, under a different sort', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => result.current.state.applyParams(APPLIED, { replace: false }));
+    const rootId = result.current.state.tree.id;
+    const rowId = result.current.state.tree.conditions[0].id;
+
+    // Re-applying under a different sort: the filter itself is already the URL's, so nothing
+    // about the tree should move.
+    act(() => result.current.state.applyParams({ ...APPLIED, sortBy: 'summary' }, { replace: false }));
+
+    expect(result.current.state.tree.id).toBe(rootId);
+    expect(result.current.state.tree.conditions[0].id).toBe(rowId);
+  });
+
+  it('adopts a Forward navigation fresh, rather than a stale record left by a filter-unchanged re-apply', () => {
+    // Back and Forward through the SAME filter content (only sortBy differs between the two
+    // "applied" entries) never touches held.raw/rawFilter -- the mismatch branch that consults
+    // recentWrites is only entered once the filter itself actually moves. So the hazard this test
+    // is really after can only show up two navigations later: Back past BOTH applied entries to
+    // the bare list (a genuine filter change, null -- nothing to match, adopted fresh) and then
+    // Forward again (another genuine filter change, back to VIEW_FILTER). If applyParams's
+    // filter-unchanged re-apply had recorded VIEW_FILTER into recentWrites (it must not: nothing
+    // about that re-apply ever changes the URL's `filter`, so nothing would ever arrive to consume
+    // it), that stale entry would still be sitting there and would wrongly match this Forward nav
+    // as "our own echo" -- keeping the bare list's empty tree instead of adopting VIEW_FILTER's.
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => result.current.state.applyParams(APPLIED, { replace: false })); // push V (sortBy=priority)
+    act(() => result.current.state.applyParams({ ...APPLIED, sortBy: 'summary' }, { replace: false })); // push V again, filter unchanged
+
+    act(() => result.current.navigate(-1)); // back to V, sortBy=priority (filter still VIEW_FILTER)
+    act(() => result.current.navigate(-1)); // back to the bare list (filter genuinely gone)
+    act(() => result.current.navigate(1));  // forward to V, sortBy=priority again (filter genuinely back)
+
+    expect(result.current.state.tree.conditions).toEqual([
+      expect.objectContaining({ field: 'status', op: 'IsNull' }),
+    ]);
+  });
+
+  it('writes only the five ListParams keys onto the URL, ignoring any other key on the object', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+    const withExtra = { ...APPLIED, extra: 'nope' } as ListParams;
+
+    act(() => result.current.state.applyParams(withExtra, { replace: false }));
+
+    expect(result.current.params.has('extra')).toBe(false);
+  });
+
+  it('does not push a duplicate history entry when the view applied is already open and unmodified', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => result.current.state.applyParams(APPLIED, { replace: false })); // pushes one entry
+    act(() => result.current.state.applyParams(APPLIED, { replace: false })); // identical -- must not push again
+
+    act(() => result.current.navigate(-1));
+
+    // One Back is enough to land back on the bare list -- if the second call had pushed a
+    // duplicate entry, this Back would only land on the first (identical) applied entry instead.
+    expect(result.current.state.viewId).toBeNull();
+    expect(result.current.params.has('filter')).toBe(false);
   });
 });

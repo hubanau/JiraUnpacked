@@ -53,7 +53,7 @@ export function DeleteConnection({ connection, projectCount }: { connection: Con
       >
         <p>
           <strong>{connection.baseUrl}</strong> will be removed together with {projects} and all of their
-          synced issues, history, queries, mappings and saved filters. Nothing in Jira is changed. This
+          synced issues, history, queries, mappings and saved views. Nothing in Jira is changed. This
           cannot be undone.
         </p>
       </ConfirmDialog>

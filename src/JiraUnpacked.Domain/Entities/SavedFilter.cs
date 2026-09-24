@@ -19,6 +19,13 @@ public sealed class SavedFilter : ITenantOwned
     public Guid JiraProjectId { get; set; }
     public string Name { get; set; } = default!;
     public string DefinitionJson { get; set; } = default!;
+
+    /// <summary>
+    /// The view that opens when this project's issue list is opened with nothing in its URL. At
+    /// most one per project — a partial unique index enforces it (SavedFilterConfiguration).
+    /// </summary>
+    public bool IsDefault { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
