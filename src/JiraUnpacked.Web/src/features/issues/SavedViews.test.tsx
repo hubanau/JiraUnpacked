@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { http, HttpResponse } from 'msw';
+import { delay, http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/setup';
 import { FILTER_CATALOG } from '../../test/filterCatalogFixture';
@@ -520,5 +520,124 @@ describe('saved views — managing', () => {
 
     expect(screen.queryByRole('group', { name: 'Saved views' })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+});
+
+describe('saved views — the default view and stale links', () => {
+  it('opens the default view on a bare URL, replacing the entry rather than adding one', async () => {
+    const bodies = mockIssues();
+    mockViewsApi([{ ...BACKLOG, isDefault: true }, TRIAGE]);
+    const user = userEvent.setup();
+    renderList('/elsewhere?from=before', '/projects/p1/issues');
+
+    expect(await screen.findByRole('button', { name: 'Views: My backlog' })).toBeInTheDocument();
+    expect(urlParams().get('view')).toBe('v-backlog');
+    // The very first request is already the default view's — no flash of the unfiltered list.
+    expect(bodies[0]).toMatchObject({ filter: LOGIN_FILTER, sortBy: 'priority', sortDescending: false });
+
+    await user.click(screen.getByRole('button', { name: 'Go back' }));
+
+    expect(await screen.findByText('Somewhere else')).toBeInTheDocument();
+    expect(urlParams().get('from')).toBe('before');
+  });
+
+  it('opens the default only once: Clear all and a later bare URL leave the list bare', async () => {
+    mockIssues();
+    mockViewsApi([{ ...BACKLOG, isDefault: true }]);
+    const user = userEvent.setup();
+    renderList();
+    await screen.findByRole('button', { name: 'Views: My backlog' });
+
+    await user.click(screen.getByRole('button', { name: 'Clear all' }));
+    expect(await screen.findByRole('button', { name: 'Views: My backlog • modified' })).toBeInTheDocument();
+    expect(urlParams().has('filter')).toBe(false);
+
+    await user.click(screen.getByRole('button', { name: 'Open the bare list' }));
+
+    expect(await screen.findByRole('button', { name: 'Views' })).toBeInTheDocument();
+    expect(urlParams().toString()).toBe('');
+  });
+
+  it('leaves a URL that already says what to show alone, and does not wait for the views to send it', async () => {
+    const bodies = mockIssues();
+    server.use(http.get('/api/projects/p1/filters', async () => {
+      await delay('infinite');
+      return HttpResponse.json([]);
+    }));
+    renderList('/projects/p1/issues?sortBy=summary');
+
+    expect(await screen.findByText('ACME-1')).toBeInTheDocument();
+    expect(bodies[0]).toMatchObject({ sortBy: 'summary' });
+  });
+
+  it('does not open the default over list state in the URL', async () => {
+    mockIssues();
+    mockViewsApi([{ ...BACKLOG, isDefault: true }]);
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+
+    await user.click(screen.getByRole('button', { name: 'Views' }));
+    expect(await within(menu()).findByRole('button', { name: /My backlog/ })).toBeInTheDocument();
+    expect(urlParams().has('view')).toBe(false);
+    expect(urlParams().get('sortBy')).toBe('summary');
+  });
+
+  it('on a bare URL, sends nothing until the views are known', async () => {
+    const bodies = mockIssues();
+    let catalogServed = false;
+    server.use(
+      http.get('/api/filter-catalog', () => {
+        catalogServed = true;
+        return HttpResponse.json(FILTER_CATALOG);
+      }),
+      http.get('/api/projects/p1/filters', async () => {
+        await delay('infinite');
+        return HttpResponse.json([]);
+      }),
+    );
+    renderList();
+
+    await waitFor(() => expect(catalogServed).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(bodies).toEqual([]);
+  });
+
+  it('on a bare URL, goes ahead unfiltered when the views cannot load', async () => {
+    const bodies = mockIssues();
+    server.use(http.get('/api/projects/p1/filters', () => new HttpResponse(null, { status: 500 })));
+    renderList();
+
+    expect(await screen.findByText('ACME-1')).toBeInTheDocument();
+    expect(bodies[0]).not.toHaveProperty('filter');
+  });
+
+  it('lets list state that arrives before the views win over the default', async () => {
+    mockIssues();
+    server.use(http.get('/api/projects/p1/filters', async () => {
+      await delay(150);
+      return HttpResponse.json([{ ...BACKLOG, isDefault: true }]);
+    }));
+    const user = userEvent.setup();
+    renderList();
+
+    await user.click(screen.getByRole('button', { name: 'Open the list sorted by summary' }));
+    await screen.findByText('ACME-1');
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    expect(urlParams().has('view')).toBe(false);
+    expect(urlParams().get('sortBy')).toBe('summary');
+  });
+
+  it('drops a view id that names no view, and keeps the rest of the link', async () => {
+    mockIssues();
+    mockViewsApi([BACKLOG]);
+    const filter = encodeURIComponent('{"logic":"And","conditions":[{"field":"summary","op":"Contains","value":"crash"}]}');
+    renderList(`/projects/p1/issues?view=gone&sortBy=summary&filter=${filter}`);
+
+    await waitFor(() => expect(urlParams().has('view')).toBe(false));
+    expect(urlParams().get('sortBy')).toBe('summary');
+    expect(await screen.findByRole('button', { name: 'Views' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Value for condition 1')).toHaveValue('crash');
   });
 });

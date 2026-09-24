@@ -71,7 +71,9 @@ export default function IssueList() {
     // `knownFields` is undefined and pruneTree cannot tell a live field from a retired one, so a
     // link built on a retired field would otherwise slip into the very first request. Once the
     // catalog fails for good the fallback is the same as always: send unchecked (see pruneTree).
-    enabled: !catalogPending,
+    // Also waits, on a bare URL only, until the saved views say whether a default view opens
+    // instead — otherwise the first request would flash the unfiltered list (see useSavedViews).
+    enabled: !catalogPending && !savedViews.holdQuery,
     // Bridges the *pending* phase of a new page/filter with the previous
     // result so an in-flight request doesn't blank the table.
     placeholderData: (prev) => prev,
