@@ -100,18 +100,44 @@ export function ViewsMenu({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const saveAsButtonRef = useRef<HTMLButtonElement>(null);
+  const renameButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Which list-mode button Cancel should hand focus back to. Set right before switchTo('list'),
+  // read by the effect below once that button has actually remounted (it doesn't exist yet at the
+  // moment Cancel is clicked — 'saveAs'/'rename' mode has it unmounted).
+  const returnFocusModeRef = useRef<'saveAs' | 'rename' | null>(null);
+
+  // create/edit's onError (below) can fire after the menu has already been closed — the user
+  // pressed Escape or clicked outside while the request was still in flight. Read fresh here
+  // rather than through a closure that may have captured the `open` of the render the request
+  // started in.
+  const openRef = useRef(open);
+  openRef.current = open;
+
+  const openMenu = () => {
+    setOpen(true);
+    // A failure from a request that resolved while the menu was last closed (see create/edit's
+    // onError below) must never surface just because the menu happens to reopen.
+    setError(null);
+  };
 
   const close = () => {
     setOpen(false);
     setMode('list');
     setError(null);
+    // Whatever inside the popover held focus is about to unmount; hand it back to the one control
+    // that's always on screen, rather than letting focus fall to <body>.
+    triggerRef.current?.focus();
   };
   const switchTo = (next: Mode) => {
     setError(null);
     setMode(next);
   };
 
-  // A click anywhere outside closes it, like every other popover.
+  // A click anywhere outside closes it, like every other popover. Deliberately not close(): an
+  // outside click has already moved focus to whatever was clicked, and clawing it back to the
+  // trigger would fight that.
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => {
@@ -124,11 +150,21 @@ export function ViewsMenu({
     return () => document.removeEventListener('mousedown', onPointerDown);
   }, [open]);
 
+  // Cancel's target button doesn't exist yet at the moment Cancel is clicked (mode is still
+  // 'saveAs'/'rename', so the list-mode buttons are unmounted) — this waits for the render where
+  // 'list' mode, and the button, is back before focusing it.
+  useEffect(() => {
+    if (mode !== 'list') return;
+    const target = returnFocusModeRef.current;
+    returnFocusModeRef.current = null;
+    if (target === 'saveAs') saveAsButtonRef.current?.focus();
+    else if (target === 'rename') renameButtonRef.current?.focus();
+  }, [mode]);
+
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'Escape' || !open) return;
     event.preventDefault();
     close();
-    triggerRef.current?.focus();
   };
 
   /** Puts a saved view into the cached list at once (so the label follows), then asks the server. */
@@ -143,6 +179,10 @@ export function ViewsMenu({
     onSuccess: store,
   });
 
+  // Both onError handlers below only show the failure if the menu is still open to show it in — a
+  // request that resolves after the user already closed the menu (Escape, click outside) must not
+  // leave a stale alert waiting for the next time it opens. openMenu() also clears `error`
+  // defensively on open, so the two guard the same thing from either direction.
   const create = useMutation({
     mutationFn: (name: string) => createView(projectId, saveRequest(name, snapshot)),
     onSuccess: (saved) => {
@@ -151,7 +191,9 @@ export function ViewsMenu({
       onLoad(saved.id);
       close();
     },
-    onError: (e) => setError(viewErrorMessage(e)),
+    onError: (e) => {
+      if (openRef.current) setError(viewErrorMessage(e));
+    },
   });
 
   // Rename and the default flag re-send what the view stores, never the list's current edits.
@@ -162,28 +204,50 @@ export function ViewsMenu({
       store(saved);
       close();
     },
-    onError: (e) => setError(viewErrorMessage(e)),
+    onError: (e) => {
+      if (openRef.current) setError(viewErrorMessage(e));
+    },
   });
 
   // A view whose delete just succeeded, waiting for `loaded` to actually stop naming it before its
   // cache entry is dropped (see the effect below).
+  //
+  // Why the wait: `loaded` can go undefined from two independent signals — the URL's view=
+  // dropping, or this view leaving the cached list — and here in MemoryRouter/BrowserRouter,
+  // react-router applies a navigation's new location by calling setState *inside
+  // React.startTransition* (confirmed by reading react-router's own source: MemoryRouter's
+  // `history.listen(setState)` wraps `setStateImpl` in `startTransition` unless a route
+  // explicitly opts out with `useTransitions={false}`, which this app does not). A transition is a
+  // LOW-PRIORITY update: React commits it in a later render than any plain, synchronous update
+  // requested in the same tick. react-query's cache notifications are exactly that — a plain
+  // update delivered through useSyncExternalStore — so writing the cache here, in the same tick as
+  // onLoad(null), would commit *before* the URL's transition does, even though onLoad ran first in
+  // program order. That render shows "no matching view" from the cache while the URL still names
+  // the deleted view — the menu button already reads "Views" before view= has actually left the
+  // address bar. Recording the id and updating the cache only once `loaded` itself has moved on (in
+  // the effect below) ties the write to the URL change having already landed, rather than to
+  // program order, which React's scheduler doesn't preserve across a transition boundary.
+  //
+  // Do NOT "fix" this by awaiting the navigation instead, or by wrapping the cache write in its own
+  // startTransition: setSearchParams exposes no promise for the transition's actual commit, and a
+  // useSyncExternalStore-backed update (what react-query uses) cannot be deferred with
+  // startTransition regardless of where the *call* to setQueryData sits — React always renders a
+  // store subscriber's update synchronously and eagerly, by design, specifically to prevent it from
+  // ever showing a torn/stale snapshot of the store. Wrapping the write in startTransition would not
+  // change when it commits.
   const pendingDeleteId = useRef<string | null>(null);
 
   const remove = useMutation({
     mutationFn: (view: SavedView) => deleteView(projectId, view.id),
     onSuccess: (_nothing, view) => {
-      // `loaded` can go undefined from two independent signals: the URL's view= dropping, or this
-      // view leaving the cached list. react-router's setSearchParams navigates asynchronously
-      // (it awaits the router internally), so writing the cache here, in the same tick as
-      // onLoad(null), would let the two signals settle in either order — a render could show "no
-      // matching view" from the cache before the URL has actually moved, tearing them apart (the
-      // menu button would already read "Views" while the URL still named the deleted view).
-      // Recording the id and letting the effect below react once `loaded` itself has moved on
-      // ties the cache write to the URL change having already landed, not to a guess about which
-      // async update wins. The list keeps showing what it shows; it is just no longer "that view".
+      // See pendingDeleteId's comment above. The list keeps showing what it shows; it is just no
+      // longer "that view".
       pendingDeleteId.current = view.id;
       onLoad(null);
       setConfirmingDelete(false);
+      // The confirm dialog (and its focused "Delete view" button) is about to unmount; hand focus
+      // back to the one control guaranteed to still be on screen.
+      triggerRef.current?.focus();
     },
   });
 
@@ -207,7 +271,7 @@ export function ViewsMenu({
             aria-haspopup="true"
             aria-expanded={open}
             className={TRIGGER_CLASS}
-            onClick={() => (open ? close() : setOpen(true))}
+            onClick={() => (open ? close() : openMenu())}
           >
             {label} <span aria-hidden="true">▾</span>
           </button>
@@ -273,12 +337,22 @@ export function ViewsMenu({
 
                 {mode === 'list' && (
                   <div className="flex flex-col">
-                    <button type="button" className={ITEM_CLASS} onClick={() => switchTo('saveAs')}>
+                    <button
+                      ref={saveAsButtonRef}
+                      type="button"
+                      className={ITEM_CLASS}
+                      onClick={() => switchTo('saveAs')}
+                    >
                       Save as new view…
                     </button>
                     {loaded && (
                       <>
-                        <button type="button" className={ITEM_CLASS} onClick={() => switchTo('rename')}>
+                        <button
+                          ref={renameButtonRef}
+                          type="button"
+                          className={ITEM_CLASS}
+                          onClick={() => switchTo('rename')}
+                        >
                           Rename…
                         </button>
                         <button
@@ -316,7 +390,10 @@ export function ViewsMenu({
                       setError(null);
                       create.mutate(name);
                     }}
-                    onCancel={() => switchTo('list')}
+                    onCancel={() => {
+                      returnFocusModeRef.current = 'saveAs';
+                      switchTo('list');
+                    }}
                   />
                 )}
 
@@ -328,7 +405,10 @@ export function ViewsMenu({
                       setError(null);
                       edit.mutate({ view: loaded, changes: { name } });
                     }}
-                    onCancel={() => switchTo('list')}
+                    onCancel={() => {
+                      returnFocusModeRef.current = 'rename';
+                      switchTo('list');
+                    }}
                   />
                 )}
 

@@ -38,11 +38,16 @@ function NavButtons() {
   );
 }
 
-/** Renders IssueList on the last of `entries` (so earlier entries are what Back returns to). */
+/**
+ * Renders IssueList on the last of `entries` (so earlier entries are what Back returns to).
+ * Returns the render result plus the QueryClient, so a test can inspect the mutation cache
+ * directly when there's no DOM signal for "a request has settled" (e.g. it failed while the menu
+ * that would have shown its error was already closed).
+ */
 function renderList(...entries: string[]) {
   const initial = entries.length > 0 ? entries : ['/projects/p1/issues'];
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const result = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={initial} initialIndex={initial.length - 1}>
         <LocationProbe />
@@ -54,6 +59,7 @@ function renderList(...entries: string[]) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...result, queryClient };
 }
 
 const urlParams = () => new URLSearchParams(screen.getByTestId('location').textContent ?? '');
@@ -368,12 +374,23 @@ describe('saved views — managing', () => {
     const dialog = screen.getByRole('dialog', { name: 'Delete view “My backlog”?' });
     await user.click(within(dialog).getByRole('button', { name: 'Delete view' }));
 
-    expect(await screen.findByRole('button', { name: 'Views' })).toBeInTheDocument();
-    expect(api.views).toEqual([]);
+    // The label and the URL must update together — the very next, synchronous check after finding
+    // the label is the URL, with no further await between them.
+    const trigger = await screen.findByRole('button', { name: 'Views' });
+    expect(trigger).toBeInTheDocument();
     expect(urlParams().has('view')).toBe(false);
     expect(urlParams().get('sortBy')).toBe('priority');
     expect(screen.getByLabelText('Value for condition 1')).toHaveValue('login');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(api.views).toEqual([]);
+    expect(trigger).toHaveFocus();
+
+    // Reopening shows the list without the deleted view — this is what actually proves the
+    // deferred cache write (ViewsMenu's effect keyed on `loaded`, see the comment on
+    // pendingDeleteId) ran, not merely that the URL moved on. Without it, the cache would still
+    // hold the deleted view and this would show "My backlog" instead.
+    await user.click(trigger);
+    expect(await within(menu()).findByText('No saved views yet')).toBeInTheDocument();
   });
 
   it('keeps the confirmation open with the reason when a delete fails', async () => {
@@ -392,5 +409,116 @@ describe('saved views — managing', () => {
 
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('Something went wrong on the server.');
     expect(urlParams().get('view')).toBe('v-backlog');
+  });
+
+  it('returns focus to the menu item that opened the form when Cancel is clicked', async () => {
+    mockIssues();
+    mockViewsApi([BACKLOG]);
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+    await openView(user, 'My backlog');
+
+    await user.click(screen.getByRole('button', { name: /^Views/ }));
+    await user.click(within(menu()).getByRole('button', { name: 'Save as new view…' }));
+    await user.click(within(menu()).getByRole('button', { name: 'Cancel' }));
+    expect(within(menu()).getByRole('button', { name: 'Save as new view…' })).toHaveFocus();
+
+    await user.click(within(menu()).getByRole('button', { name: 'Rename…' }));
+    await user.click(within(menu()).getByRole('button', { name: 'Cancel' }));
+    expect(within(menu()).getByRole('button', { name: 'Rename…' })).toHaveFocus();
+
+    // Cancel keeps the popover open (unlike a successful save) and lands focus back inside it, so
+    // Escape still reaches the root handler and closes the whole thing.
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('group', { name: 'Saved views' })).not.toBeInTheDocument();
+  });
+
+  it('focuses the Views trigger after a successful save closes the menu', async () => {
+    mockIssues();
+    mockViewsApi([]);
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary&sortDesc=false');
+    await screen.findByText('ACME-1');
+
+    await user.click(screen.getByRole('button', { name: 'Views' }));
+    await user.click(within(menu()).getByRole('button', { name: 'Save as new view…' }));
+    await user.type(within(menu()).getByLabelText('View name'), 'By summary');
+    await user.click(within(menu()).getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('button', { name: 'Views: By summary' })).toHaveFocus();
+  });
+
+  it('does not leak a create/rename failure into the next time the menu opens', async () => {
+    mockIssues();
+    mockViewsApi([]);
+    // A deferred response: the request stays "in flight" until the test explicitly resolves it,
+    // so the menu can be closed while it is still pending — the exact window the stale-error bug
+    // lived in (onError firing after close() had already cleared `error`).
+    let resolveRequest: ((response: Response) => void) | undefined;
+    server.use(http.post('/api/projects/p1/filters', () =>
+      new Promise<Response>((resolve) => { resolveRequest = resolve; })));
+    const user = userEvent.setup();
+    const { queryClient } = renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+
+    await user.click(screen.getByRole('button', { name: 'Views' }));
+    await user.click(within(menu()).getByRole('button', { name: 'Save as new view…' }));
+    await user.type(within(menu()).getByLabelText('View name'), 'Too many');
+    await user.click(within(menu()).getByRole('button', { name: 'Save' }));
+
+    // Close the menu while the request is still unresolved — via an outside click, not Escape:
+    // the pending Save button is disabled (aria-busy) and a disabled control can't hold focus, so
+    // Escape's keydown would land on <body> and never reach the root handler at all. (Not
+    // "ACME-1" either — that's a link to the issue detail route, which this test doesn't mount.)
+    await user.click(screen.getByText(/Page 1 of/));
+    expect(screen.queryByRole('group', { name: 'Saved views' })).not.toBeInTheDocument();
+
+    // Now let it fail, with the menu already closed. There is no DOM signal for "the mutation has
+    // settled" here (that's the whole point of the fix — closed means silent), so this reads
+    // react-query's own mutation cache instead of guessing at a timeout.
+    resolveRequest?.(HttpResponse.json({ title: 'A project may have at most 100 saved filters.' }, { status: 409 }));
+    await waitFor(() => {
+      const mutations = queryClient.getMutationCache().getAll();
+      expect(mutations.some((m) => m.state.status === 'error')).toBe(true);
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Views' }));
+    expect(within(menu()).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('submits the name form on Enter, not only by clicking Save', async () => {
+    mockIssues();
+    const api = mockViewsApi([]);
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary&sortDesc=false');
+    await screen.findByText('ACME-1');
+
+    await user.click(screen.getByRole('button', { name: 'Views' }));
+    await user.click(within(menu()).getByRole('button', { name: 'Save as new view…' }));
+    await user.type(within(menu()).getByLabelText('View name'), 'By summary{Enter}');
+
+    expect(await screen.findByRole('button', { name: 'Views: By summary' })).toBeInTheDocument();
+    expect(api.requests).toEqual([{
+      method: 'POST',
+      body: { name: 'By summary', columns: DEFAULT_COLUMNS, sortBy: 'summary', sortDescending: false },
+    }]);
+  });
+
+  it('closes the whole menu on Escape from inside the name field, focus back on the trigger', async () => {
+    mockIssues();
+    mockViewsApi([]);
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?sortBy=summary');
+    await screen.findByText('ACME-1');
+
+    const trigger = screen.getByRole('button', { name: 'Views' });
+    await user.click(trigger);
+    await user.click(within(menu()).getByRole('button', { name: 'Save as new view…' }));
+    await user.type(within(menu()).getByLabelText('View name'), 'Draft');
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('group', { name: 'Saved views' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });
