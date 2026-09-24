@@ -8,6 +8,7 @@ import { server } from '../../test/setup';
 import { setAuthBridge } from '../../api/client';
 import IssueList from './IssueList';
 import type { FilterCatalog } from '../../api/issues';
+import { noSavedViews } from '../../test/viewsFixture';
 
 const CATALOG: FilterCatalog = {
   fields: [{ name: 'status', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] }],
@@ -24,6 +25,7 @@ const ITEM = {
 function mockList(onRequest?: () => void) {
   server.use(
     http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)),
+    noSavedViews,
     http.post('/api/projects/p1/issues/query', () => {
       onRequest?.();
       return HttpResponse.json({ items: [ITEM], page: 1, pageSize: 50, totalCount: 1 });
@@ -115,6 +117,7 @@ describe('sortable headers', () => {
     const sent: Record<string, unknown>[] = [];
     server.use(
       http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)),
+      noSavedViews,
       http.post('/api/projects/p1/issues/query', async ({ request }) => {
         sent.push((await request.json()) as Record<string, unknown>);
         return HttpResponse.json({ items: [ITEM], page: 1, pageSize: 50, totalCount: 1 });
@@ -148,6 +151,7 @@ describe('sortable headers', () => {
     const sent: Record<string, unknown>[] = [];
     server.use(
       http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)),
+      noSavedViews,
       http.post('/api/projects/p1/issues/query', async ({ request }) => {
         sent.push((await request.json()) as Record<string, unknown>);
         return HttpResponse.json({ items: [ITEM], page: 1, pageSize: 50, totalCount: 1 });

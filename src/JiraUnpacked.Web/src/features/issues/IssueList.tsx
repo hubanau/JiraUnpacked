@@ -5,11 +5,14 @@ import { ApiError } from '../../api/errors';
 import { DEFAULT_PAGE_SIZE, exportIssuesCsv, queryIssues } from '../../api/issues';
 import type { IssueFilterRequest, IssueListItem, PagedResult } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
+import type { SavedView } from '../../api/views';
 import { Button, EmptyState, Spinner, Table, TBody, TD, TH, THead, TR } from '../../ui';
 import { FilterBuilder, useFilterCatalog } from './FilterBuilder';
 import { useListState } from './useListState';
 import { pruneTree } from './filterTree';
 import { ColumnChooser } from './ColumnChooser';
+import { ViewsMenu } from './ViewsMenu';
+import { useSavedViews } from './useSavedViews';
 import { ISSUE_COLUMNS, ALWAYS_ON } from './columns';
 import { saveBlob } from './saveBlob';
 
@@ -20,7 +23,10 @@ export default function IssueList() {
 
   // The view lives in the URL, not in component state: that makes a filtered list shareable as
   // a link and survives reload and Back, neither of which useState does.
-  const { tree, setTree, columns, setColumns, sortBy, sortDescending, setSort } = useListState();
+  const {
+    tree, setTree, columns, setColumns, sortBy, sortDescending, setSort,
+    viewId, hasListState, applyParams, setViewId,
+  } = useListState();
 
   const [page, setPage] = useState(1);
 
@@ -30,6 +36,20 @@ export default function IssueList() {
   useEffect(() => {
     setPage(1);
   }, [tree]);
+
+  // What a saved view can store, as the list shows it now. Memoised so "modified" is recomputed
+  // only when one of these actually changes.
+  const snapshot = useMemo(
+    () => ({ tree, sortBy, sortDescending, columns }),
+    [tree, sortBy, sortDescending, columns],
+  );
+  const savedViews = useSavedViews(id, { viewId, hasListState, applyParams, setViewId }, snapshot);
+
+  // A view is a new list: start it on page 1 even when only its sort differs from what was shown.
+  const openView = (view: SavedView) => {
+    setPage(1);
+    savedViews.apply(view);
+  };
 
   // Shared with FilterBuilder through the query cache: same key, fetched once.
   const { data: catalog, isPending: catalogPending } = useFilterCatalog();
@@ -114,6 +134,15 @@ export default function IssueList() {
           <FilterBuilder projectId={id} tree={tree} onChange={setTree} />
         </div>
         <div className="flex items-center gap-2">
+          <ViewsMenu
+            projectId={id}
+            views={savedViews.views}
+            unavailable={savedViews.unavailable}
+            loaded={savedViews.loaded}
+            modified={savedViews.modified}
+            snapshot={snapshot}
+            onApply={openView}
+          />
           <ColumnChooser selected={columns} onChange={setColumns} />
           <Button
             variant="secondary"

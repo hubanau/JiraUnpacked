@@ -11,6 +11,7 @@ import { ConditionRow } from './ConditionRow';
 import type { FilterCondition } from '../../api/issues';
 import { FILTER_CATALOG as CATALOG } from '../../test/filterCatalogFixture';
 import { emptyRoot, type EditorGroup } from './filterTree';
+import { noSavedViews } from '../../test/viewsFixture';
 
 /**
  * The conditions the SPA actually sent, whichever envelope carried them.
@@ -26,6 +27,7 @@ const sentConditions = (body: Record<string, unknown>): unknown =>
 function mockFilterCatalog() {
   server.use(
     http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)),
+    noSavedViews,
     // The default row's field is 'status', a dictionary field, so mounting a condition at all
     // (most tests below do, via addCondition or a filter already in the URL) fires this fetch
     // whether or not the test cares about the picker. Failing it keeps the value control exactly
