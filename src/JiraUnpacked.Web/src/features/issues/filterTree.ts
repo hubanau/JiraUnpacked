@@ -98,6 +98,31 @@ export function pruneTree(root: EditorGroup, knownFields?: ReadonlySet<string>):
   };
 }
 
+/**
+ * What a saved view stores: the tree as the user built it — disabled parts KEPT, so switching one
+ * back on after opening the view works — minus what is not a filter yet: unfinished conditions,
+ * and groups left empty by removing them. Ids stripped; (Empty) on is / is not in its wire form
+ * (the server refuses a null `value`). Undefined when nothing is left: an empty tree saves no filter.
+ *
+ * Deterministic key order, so two trees that mean the same thing stringify the same — which is
+ * how "modified" is decided (see viewState.isModified).
+ */
+export function toSavable(root: EditorGroup): FilterGroup | undefined {
+  const conditions = root.conditions
+    .filter(isCompleteCondition)
+    .map((c) => (c.disabled ? { ...toWireCondition(c), disabled: true } : toWireCondition(c)));
+  const groups = root.groups
+    .map((g) => toSavable(g))
+    .filter((g): g is FilterGroup => g !== undefined);
+  if (conditions.length === 0 && groups.length === 0) return undefined;
+  return {
+    logic: root.logic,
+    ...(conditions.length > 0 ? { conditions } : {}),
+    ...(groups.length > 0 ? { groups } : {}),
+    ...(root.disabled ? { disabled: true } : {}),
+  };
+}
+
 // ---- counting (matches the server's budget) ----
 
 /**

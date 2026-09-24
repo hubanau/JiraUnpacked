@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   blankGroup, cloneGroup, countEnabled, emptyRoot, insertAfter, isCompleteCondition,
-  parseFilterParam, pruneTree, toUrlJson, toggleDisabled, withIdentityOf,
+  parseFilterParam, pruneTree, toSavable, toUrlJson, toggleDisabled, withIdentityOf,
   type EditorCondition, type EditorGroup,
 } from './filterTree';
 import { OPERATOR_LABELS } from './filterCatalogHelpers';
@@ -259,6 +259,52 @@ describe('toUrlJson / parseFilterParam', () => {
       expect(tree.conditions[0].op).toBe('Neq');
       expect('value' in tree.conditions[0]).toBe(false);
       expect(isCompleteCondition(tree.conditions[0])).toBe(false);
+    });
+  });
+});
+
+describe('toSavable', () => {
+  it('keeps disabled parts, drops unfinished rows and the groups they empty, and strips ids', () => {
+    const tree = group('r', {
+      conditions: [
+        cond('a', { field: 'status', op: 'Eq', value: 'Done' }),
+        cond('b', { field: 'status', op: 'Eq', value: '' }),
+        cond('c', { field: 'priority', op: 'Eq', value: 'High', disabled: true }),
+      ],
+      groups: [
+        group('g1', { logic: 'Or', disabled: true, conditions: [cond('d', { field: 'assignee', op: 'Eq', value: 'Bob' })] }),
+        group('g2', { conditions: [cond('e', { field: 'sprint', op: 'In', values: [] })] }),
+      ],
+    });
+
+    expect(toSavable(tree)).toEqual({
+      logic: 'And',
+      conditions: [
+        { field: 'status', op: 'Eq', value: 'Done' },
+        { field: 'priority', op: 'Eq', value: 'High', disabled: true },
+      ],
+      groups: [{ logic: 'Or', disabled: true, conditions: [{ field: 'assignee', op: 'Eq', value: 'Bob' }] }],
+    });
+  });
+
+  it('writes (Empty) on is / is not as is empty / is not empty — the only form the server accepts', () => {
+    const tree = group('r', { conditions: [cond('a', { field: 'sprint', op: 'Neq', value: null, disabled: true })] });
+
+    expect(toSavable(tree)).toEqual({
+      logic: 'And', conditions: [{ field: 'sprint', op: 'IsNotNull', disabled: true }],
+    });
+  });
+
+  it('saves no filter for an empty tree, or one holding only unfinished rows', () => {
+    expect(toSavable(emptyRoot())).toBeUndefined();
+    expect(toSavable(group('r', { conditions: [cond('a', { field: 'status', op: 'In', values: [] })] }))).toBeUndefined();
+  });
+
+  it('keeps a switched-off root with its contents', () => {
+    const tree = group('r', { disabled: true, conditions: [cond('a', { field: 'summary', op: 'Contains', value: 'x' })] });
+
+    expect(toSavable(tree)).toEqual({
+      logic: 'And', disabled: true, conditions: [{ field: 'summary', op: 'Contains', value: 'x' }],
     });
   });
 });
