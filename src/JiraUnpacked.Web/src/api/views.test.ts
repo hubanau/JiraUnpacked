@@ -39,10 +39,10 @@ describe('saved views API', () => {
 
   it('surfaces a refusal’s title as an ApiError', async () => {
     server.use(http.post('/api/projects/p1/filters', () =>
-      HttpResponse.json({ title: "A saved filter named 'A' already exists in this project." }, { status: 409 })));
+      HttpResponse.json({ title: "A view named 'A' already exists in this project." }, { status: 409 })));
 
     await expect(createView('p1', { name: 'A' })).rejects.toMatchObject({
-      status: 409, title: "A saved filter named 'A' already exists in this project.",
+      status: 409, title: "A view named 'A' already exists in this project.",
     });
   });
 });

@@ -33,7 +33,7 @@ export function mockViewsApi(initial: SavedView[], projectId = 'p1'): ViewsApiMo
     Number(b.isDefault) - Number(a.isDefault) || a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
   const nameTaken = (name: string, except?: string) => mock.views.some((v) => v.name === name && v.id !== except);
   const taken = (name: string) =>
-    HttpResponse.json({ title: `A saved filter named '${name}' already exists in this project.` }, { status: 409 });
+    HttpResponse.json({ title: `A view named '${name}' already exists in this project.` }, { status: 409 });
   const clearDefaults = () => {
     mock.views = mock.views.map((v) => (v.isDefault ? { ...v, isDefault: false } : v));
   };

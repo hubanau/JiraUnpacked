@@ -4,6 +4,9 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using JiraUnpacked.Domain.Abstractions;
+using JiraUnpacked.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
 namespace JiraUnpacked.Tests.Integration;
@@ -60,6 +63,9 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
         var problem = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return problem.GetProperty("title").GetString()!;
     }
+
+    private static async Task<string> TitleAsync(HttpResponseMessage resp) =>
+        (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("title").GetString()!;
 
     [Fact]
     public async Task Create_list_get_update_and_delete_round_trip()
@@ -209,7 +215,7 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
         var blank = await client.PostAsJsonAsync($"/api/projects/{projectId}/filters",
             Body("   ", condition));
         Assert.Equal(HttpStatusCode.BadRequest, blank.StatusCode);
-        Assert.Contains("needs a name", await blank.Content.ReadAsStringAsync());
+        Assert.Equal("A view needs a name.", await TitleAsync(blank));
 
         var tooLong = await client.PostAsJsonAsync($"/api/projects/{projectId}/filters",
             Body(new string('x', 101), condition));
@@ -232,7 +238,8 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
         var duplicate = await client.PostAsJsonAsync($"/api/projects/{projectId}/filters",
             Body("Shared name", condition));
         Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
-        Assert.Contains("already exists", await duplicate.Content.ReadAsStringAsync());
+        // The SPA's own words for a taken name key off "already exists"; the rest is the user's word.
+        Assert.Equal("A view named 'Shared name' already exists in this project.", await TitleAsync(duplicate));
 
         // Uniqueness is per project, not global — another project may reuse the name.
         await CreateOkAsync(otherClient, otherProjectId, Body("Shared name", condition));
@@ -294,6 +301,30 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
     }
 
     [Fact]
+    public async Task A_project_holds_at_most_100_views_and_says_so_in_the_SPAs_words()
+    {
+        var (client, projectId) = await SeedAsync();
+        var first = await CreateOkAsync(client, projectId, new { name = "View 0" });
+
+        // The other 99 through the privileged connection (copying the owner from the API's row):
+        // 99 round trips would prove nothing more.
+        await using (var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString))
+        {
+            await conn.OpenAsync();
+            await FilterTestData.Exec(conn,
+                @"INSERT INTO ""SavedFilters""(""Id"",""EndUserId"",""JiraProjectId"",""Name"",""DefinitionJson"",""CreatedAt"",""UpdatedAt"")
+                  SELECT gen_random_uuid(), f.""EndUserId"", f.""JiraProjectId"", 'View ' || n, '{}'::jsonb, now(), now()
+                  FROM ""SavedFilters"" f, generate_series(1, 99) n WHERE f.""Id"" = @existing",
+                ("existing", first.Id));
+        }
+
+        var resp = await client.PostAsJsonAsync($"/api/projects/{projectId}/filters", new { name = "One too many" });
+
+        Assert.Equal(HttpStatusCode.Conflict, resp.StatusCode);
+        Assert.Equal("A project may have at most 100 saved views.", await TitleAsync(resp));
+    }
+
+    [Fact]
     public async Task An_oversized_definition_is_rejected()
     {
         var (client, projectId) = await SeedAsync();
@@ -305,7 +336,7 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
             Body("Huge", Condition("summary", "Contains", huge)));
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
-        Assert.Contains("at most 8192 bytes", await resp.Content.ReadAsStringAsync());
+        Assert.Equal("A view may be at most 8192 bytes once saved.", await TitleAsync(resp));
     }
 
     [Fact]
@@ -508,6 +539,33 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
             $"/api/projects/{projectId}/filters/{a.Id}", new { name = "A", isDefault = true });
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         Assert.Equal(a.Id, Assert.Single(await ListAsync(client, projectId), v => v.IsDefault).Id);
+    }
+
+    [Fact]
+    public async Task Saving_a_view_that_does_not_claim_the_default_never_clears_another_views_default()
+    {
+        var (client, tenant) = await FilterTestData.AuthedTenantAsync(_factory);
+        var projectId = await FilterTestData.SeedFilterFixtureAsync(tenant);
+        var y = await CreateOkAsync(client, projectId, new { name = "Y", isDefault = true });
+        var x = await CreateOkAsync(client, projectId, new { name = "X" });
+
+        // Tab B's save of Y, with its request already holding Y as it was: still the default.
+        using var tenantScope = _factory.Services.GetRequiredService<ITenantScope>().BeginScope(tenant);
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var service = scope.ServiceProvider.GetRequiredService<ISavedFilterService>();
+        Assert.True((await db.SavedFilters.SingleAsync(f => f.Id == y.Id)).IsDefault);
+
+        // Meanwhile tab A makes X the default.
+        var madeDefault = await client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/filters/{x.Id}", new { name = "X", isDefault = true });
+        Assert.Equal(HttpStatusCode.OK, madeDefault.StatusCode);
+
+        // B's save leaves isDefault out: it claims nothing, so it must clear nothing.
+        var saved = await service.UpdateAsync(projectId, y.Id, new SaveFilterRequest("Y", null, null, SortBy: "summary"));
+        Assert.Equal(SaveFilterError.None, saved.Error);
+
+        Assert.Equal(x.Id, Assert.Single(await ListAsync(client, projectId), v => v.IsDefault).Id);
     }
 
     [Fact]

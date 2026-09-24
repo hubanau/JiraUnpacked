@@ -104,10 +104,10 @@ public sealed class SavedFilterService : ISavedFilterService
         if (failure is not null) return failure;
 
         if (await _db.SavedFilters.CountAsync(f => f.JiraProjectId == projectId, ct) >= MaxPerProject)
-            return SaveFilterResult.Conflict($"A project may have at most {MaxPerProject} saved filters.");
+            return SaveFilterResult.Conflict($"A project may have at most {MaxPerProject} saved views.");
 
         if (await NameTakenAsync(projectId, name!, null, ct))
-            return SaveFilterResult.Conflict($"A saved filter named '{name}' already exists in this project.");
+            return DuplicateName(name!);
 
         var now = ToStoragePrecision(_clock.UtcNow);
         var row = new SavedFilter
@@ -122,7 +122,7 @@ public sealed class SavedFilterService : ISavedFilterService
         };
 
         _db.SavedFilters.Add(row);   // EndUserId is stamped by AppDbContext.SaveChanges.
-        return await SaveAsync(row, ct);
+        return await SaveAsync(row, claimsDefault: row.IsDefault, ct);
     }
 
     public async Task<SaveFilterResult> UpdateAsync(
@@ -136,15 +136,20 @@ public sealed class SavedFilterService : ISavedFilterService
 
         // Excludes this row, so re-saving under its own name is not a conflict with itself.
         if (await NameTakenAsync(projectId, name!, filterId, ct))
-            return SaveFilterResult.Conflict($"A saved filter named '{name}' already exists in this project.");
+            return DuplicateName(name!);
 
         row.Name = name!;
         row.DefinitionJson = definition!;
-        // Left out = unchanged, so renaming a view never silently un-defaults it.
-        if (request.IsDefault is { } isDefault) row.IsDefault = isDefault;
+        // Left out = unchanged, so renaming a view never silently un-defaults it. Set = written
+        // even when the loaded row already agrees: that row may be stale (see SaveAsync).
+        if (request.IsDefault is { } isDefault)
+        {
+            row.IsDefault = isDefault;
+            _db.Entry(row).Property(f => f.IsDefault).IsModified = true;
+        }
         row.UpdatedAt = ToStoragePrecision(_clock.UtcNow);
 
-        return await SaveAsync(row, ct);
+        return await SaveAsync(row, claimsDefault: request.IsDefault == true, ct);
     }
 
     public async Task<bool> DeleteAsync(Guid projectId, Guid filterId, CancellationToken ct = default)
@@ -161,13 +166,22 @@ public sealed class SavedFilterService : ISavedFilterService
         _db.SavedFilters.FirstOrDefaultAsync(
             f => f.Id == filterId && f.JiraProjectId == projectId, ct);
 
+    /// <summary>
+    /// Refusals reach the SPA's toolbar word for word, and the SPA calls these "views" — so every
+    /// message a user can see says view, whatever the route and the table are called.
+    /// </summary>
     private static SaveFilterResult DuplicateName(string name) =>
-        SaveFilterResult.Conflict($"A saved filter named '{name}' already exists in this project.");
+        SaveFilterResult.Conflict($"A view named '{name}' already exists in this project.");
 
     /// <summary>
     /// Writes the pending add/update. Taking the default clears the project's previous default
     /// FIRST, in the same transaction: the partial unique index is checked per statement, so
     /// writing the new default before clearing the old one would trip it.
+    ///
+    /// Only a request that CLAIMS the default clears anything — never one that merely finds the
+    /// row already flagged. The row was read before this transaction began, so its flag may be
+    /// stale: another tab may have made a different view the default since. A save that leaves
+    /// isDefault out would then wipe that newer default and leave the project with none.
     ///
     /// The unique indexes are the REAL guards; the pre-checks only give the common case a clean
     /// answer without provoking an exception. A concurrent writer that still wins a race trips an
@@ -175,11 +189,11 @@ public sealed class SavedFilterService : ISavedFilterService
     /// RegistrationService, JiraProjectService and SyncOrchestrator. A failed save rolls back the
     /// clear with it, so a loser never leaves the project with no default.
     /// </summary>
-    private async Task<SaveFilterResult> SaveAsync(SavedFilter row, CancellationToken ct)
+    private async Task<SaveFilterResult> SaveAsync(SavedFilter row, bool claimsDefault, CancellationToken ct)
     {
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
-        if (row.IsDefault)
+        if (claimsDefault)
         {
             await _db.SavedFilters
                 .Where(f => f.JiraProjectId == row.JiraProjectId && f.IsDefault && f.Id != row.Id)
@@ -216,7 +230,7 @@ public sealed class SavedFilterService : ISavedFilterService
     {
         var name = request.Name?.Trim();
         if (string.IsNullOrEmpty(name))
-            return (null, null, SaveFilterResult.Invalid("A saved filter needs a name."));
+            return (null, null, SaveFilterResult.Invalid("A view needs a name."));
         if (name.Length > MaxNameLength)
             return (null, null, SaveFilterResult.Invalid($"A name may be at most {MaxNameLength} characters."));
 
@@ -237,7 +251,7 @@ public sealed class SavedFilterService : ISavedFilterService
 
         if (System.Text.Encoding.UTF8.GetByteCount(definition) > MaxDefinitionBytes)
             return (null, null, SaveFilterResult.Invalid(
-                $"A saved filter definition may be at most {MaxDefinitionBytes} bytes."));
+                $"A view may be at most {MaxDefinitionBytes} bytes once saved."));
 
         return (name, definition, null);
     }
