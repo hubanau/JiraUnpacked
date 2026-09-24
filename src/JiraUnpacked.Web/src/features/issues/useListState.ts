@@ -27,6 +27,19 @@ export interface ListParams {
   view: string | null;
 }
 
+/** `ListParams`'s own keys, in the order this hook writes them into the URL. */
+const APPLIED_KEYS: readonly (keyof ListParams)[] = ['filter', 'sortBy', 'sortDesc', 'cols', 'view'];
+
+/**
+ * Same URL params regardless of insertion order — deleting and re-adding `LIST_PARAMS` moves them
+ * to the end, so a plain string comparison would see a "change" that never touched a single value.
+ */
+function sameParams(a: URLSearchParams, b: URLSearchParams): boolean {
+  const sorted = (p: URLSearchParams) => [...p.entries()].map(([key, value]) => `${key}=${value}`).sort();
+  const [sa, sb] = [sorted(a), sorted(b)];
+  return sa.length === sb.length && sa.every((entry, i) => entry === sb[i]);
+}
+
 /**
  * The list's whole view — filter tree, sort, columns — read from and written to the query string.
  *
@@ -39,6 +52,12 @@ export function useListState() {
   const [params, setParams] = useSearchParams();
   const rawFilter = params.get('filter');
   const rawLogic = params.get('logic');
+
+  // react-router hands back a new `setSearchParams` identity on every URL change. Every callback
+  // below that calls it is memoized with `[]` deps and reads it from this ref instead, so THEIR OWN
+  // identity stays stable across a URL write — Task 5/7 may put them in an effect's deps.
+  const setParamsRef = useRef(setParams);
+  setParamsRef.current = setParams;
 
   // The strings this hook itself wrote to `filter=`. React Router applies URL updates in a
   // transition, so our own write can land a render or more after the edit. When it does, that
@@ -93,8 +112,8 @@ export function useListState() {
       else out.set(key, value);
     }
     latestParams.current = out;
-    setParams(out, { replace: true });
-  }, [setParams]);
+    setParamsRef.current(out, { replace: true });
+  }, []);
 
   const setTree = useCallback((next: EditorGroup) => {
     const raw = toUrlJson(next);
@@ -122,26 +141,50 @@ export function useListState() {
    * and the URL's arrival is recognised as its echo. Holding it here, rather than waiting to adopt
    * it from the URL, is what makes the view win over an edit queued in the same tick (the URL may
    * not even move), and keeps a render in which the URL has not caught up yet from showing the
-   * old tree. The same no-op rule as setTree applies to what is remembered.
+   * old tree.
+   *
+   * Two guards keep this from disturbing more than it means to:
+   *  - if the composed params exactly match what the URL already holds (the view already open,
+   *    unmodified), there is nothing to navigate to — skipping it keeps a `push` from leaving a
+   *    pointless entry behind, and a `replace` from re-writing an identical URL.
+   *  - if only the FILTER is already the URL's (reapplying the same view under a different sort,
+   *    say), there is nothing of the filter's own to adopt: it is left untouched rather than
+   *    re-parsed into a fresh tree (which would mint new ids for no reason) or remembered as a
+   *    write that, with no URL change of its own to ever produce its echo, would sit in the window
+   *    forever and could misdirect a later, unrelated navigation that happens to share it — the
+   *    same reasoning as setTree's own no-op guard.
    */
   const applyParams = useCallback((next: ListParams, options: { replace: boolean }) => {
     const current = latestParams.current;
-    const unchanged = next.filter === current.get('filter') && !current.has('logic');
-    if (!unchanged) {
-      recentWrites.current = [...recentWrites.current.slice(-(REMEMBERED_WRITES - 1)), next.filter ?? ''];
-    }
     const out = new URLSearchParams(current);
     for (const key of LIST_PARAMS) out.delete(key);
-    for (const [key, value] of Object.entries(next)) {
+    for (const key of APPLIED_KEYS) {
+      const value = next[key];
       if (value !== null) out.set(key, value);
     }
-    const tree = parseFilterParam(next.filter, null);
-    setHeld((h) => ({ ...h, tree }));
+    if (sameParams(out, current)) return;
+
+    const unchangedFilter = next.filter === current.get('filter') && !current.has('logic');
+    if (!unchangedFilter) {
+      recentWrites.current = [...recentWrites.current.slice(-(REMEMBERED_WRITES - 1)), next.filter ?? ''];
+      const tree = parseFilterParam(next.filter, null);
+      setHeld((h) => ({ ...h, tree }));
+    }
+
     latestParams.current = out;
-    setParams(out, { replace: options.replace });
-  }, [setParams]);
+    setParamsRef.current(out, { replace: options.replace });
+  }, []);
 
   const setViewId = useCallback((id: string | null) => patch({ view: id }), [patch]);
+
+  const setSort = useCallback((by: string, descending: boolean) => patch({
+    sortBy: by === DEFAULT_SORT ? null : by,
+    sortDesc: descending ? null : 'false',
+  }), [patch]);
+
+  const setColumns = useCallback((next: string[]) => patch({
+    cols: next.join(',') === DEFAULT_COLUMNS.join(',') ? null : next.join(','),
+  }), [patch]);
 
   const columnsParam = params.get('cols');
   const columns = useMemo(
@@ -163,13 +206,7 @@ export function useListState() {
     setViewId,
     applyParams,
 
-    setSort: (by: string, descending: boolean) =>
-      patch({
-        sortBy: by === DEFAULT_SORT ? null : by,
-        sortDesc: descending ? null : 'false',
-      }),
-
-    setColumns: (next: string[]) =>
-      patch({ cols: next.join(',') === DEFAULT_COLUMNS.join(',') ? null : next.join(',') }),
+    setSort,
+    setColumns,
   };
 }

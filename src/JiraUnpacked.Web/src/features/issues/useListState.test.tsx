@@ -2,7 +2,7 @@ import { renderHook, act } from '@testing-library/react';
 import { MemoryRouter, useNavigate, useSearchParams } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import { useListState, type ListParams } from './useListState';
-import { emptyRoot, type EditorGroup } from './filterTree';
+import { emptyRoot, newId, type EditorGroup } from './filterTree';
 
 const wrap = (initial: string) =>
   function Wrapper({ children }: { children: React.ReactNode }) {
@@ -320,5 +320,80 @@ describe('useListState — opening a saved view', () => {
   ])('knows whether %s carries any list state', (url, expected) => {
     const { result } = renderHook(useProbe, { wrapper: wrap(url) });
     expect(result.current.state.hasListState).toBe(expected);
+  });
+});
+
+describe('useListState — fix round 1', () => {
+  it('keeps a stable identity for every setter across a URL change', () => {
+    // Task 5/7 may put these in an effect's dependency array; a fresh identity on every URL write
+    // (react-router hands back a new setSearchParams each time) would make that effect fire
+    // forever, so this is load-bearing, not tidiness.
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+    const first = result.current.state;
+
+    act(() => result.current.state.setSort('storyPoints', false)); // a URL change
+
+    expect(result.current.state.setTree).toBe(first.setTree);
+    expect(result.current.state.setSort).toBe(first.setSort);
+    expect(result.current.state.setColumns).toBe(first.setColumns);
+    expect(result.current.state.setViewId).toBe(first.setViewId);
+    expect(result.current.state.applyParams).toBe(first.applyParams);
+  });
+
+  it('adopts an applied view\'s tree once — it is not re-parsed again once the URL commits', () => {
+    // The tree applyParams builds is this hook's own write, held immediately (see the doc comment
+    // on applyParams): the URL commit that follows must be recognised as ITS echo, not treated as
+    // a fresh link and re-parsed all over again. Every parse mints fresh ids from a shared counter
+    // (filterTree's `newId`), so parsing VIEW_FILTER (one group, one condition -- two ids) exactly
+    // once, and not twice, is something a global id-count checkpoint can catch even though the two
+    // parses would otherwise be indistinguishable by content alone.
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+    const idNum = (id: string) => Number(id.slice(1));
+
+    const before = idNum(newId());
+    act(() => result.current.state.applyParams(APPLIED, { replace: false }));
+    const after = idNum(newId());
+
+    expect(after - before - 1).toBe(2);
+  });
+
+  it('does not re-mint the tree when re-applying a view whose filter the URL already holds, through Back and Forward', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => result.current.state.applyParams(APPLIED, { replace: false }));
+    const rootId = result.current.state.tree.id;
+    const rowId = result.current.state.tree.conditions[0].id;
+
+    // Re-applying under a different sort: the filter itself is already the URL's, so nothing
+    // about the tree should move.
+    act(() => result.current.state.applyParams({ ...APPLIED, sortBy: 'summary' }, { replace: false }));
+    act(() => result.current.navigate(-1));
+    act(() => result.current.navigate(1));
+
+    expect(result.current.state.tree.id).toBe(rootId);
+    expect(result.current.state.tree.conditions[0].id).toBe(rowId);
+  });
+
+  it('writes only the five ListParams keys onto the URL, ignoring any other key on the object', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+    const withExtra = { ...APPLIED, extra: 'nope' } as ListParams;
+
+    act(() => result.current.state.applyParams(withExtra, { replace: false }));
+
+    expect(result.current.params.has('extra')).toBe(false);
+  });
+
+  it('does not push a duplicate history entry when the view applied is already open and unmodified', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => result.current.state.applyParams(APPLIED, { replace: false })); // pushes one entry
+    act(() => result.current.state.applyParams(APPLIED, { replace: false })); // identical -- must not push again
+
+    act(() => result.current.navigate(-1));
+
+    // One Back is enough to land back on the bare list -- if the second call had pushed a
+    // duplicate entry, this Back would only land on the first (identical) applied entry instead.
+    expect(result.current.state.viewId).toBeNull();
+    expect(result.current.params.has('filter')).toBe(false);
   });
 });
