@@ -661,6 +661,9 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("EndUserId")
                         .HasColumnType("uuid");
 
+                    b.Property<bool>("IsDefault")
+                        .HasColumnType("boolean");
+
                     b.Property<Guid>("JiraProjectId")
                         .HasColumnType("uuid");
 
@@ -675,6 +678,11 @@ namespace JiraUnpacked.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("EndUserId");
+
+                    b.HasIndex("JiraProjectId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_SavedFilters_OneDefaultPerProject")
+                        .HasFilter("\"IsDefault\"");
 
                     b.HasIndex("JiraProjectId", "Name")
                         .IsUnique();

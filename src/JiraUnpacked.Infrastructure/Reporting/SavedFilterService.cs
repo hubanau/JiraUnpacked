@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Infrastructure.Persistence;
+using JiraUnpacked.Infrastructure.Persistence.Configurations;
 using JiraUnpacked.Infrastructure.Reporting.Filtering;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -81,7 +82,8 @@ public sealed class SavedFilterService : ISavedFilterService
 
         var rows = await _db.SavedFilters
             .Where(f => f.JiraProjectId == projectId)
-            .OrderByDescending(f => f.CreatedAt).ThenBy(f => f.Id)
+            // The dropdown's order: the default first, then by name as a person reads it.
+            .OrderByDescending(f => f.IsDefault).ThenBy(f => f.Name.ToLower()).ThenBy(f => f.Id)
             .ToListAsync(ct);
 
         return rows.Select(ToView).ToList();
@@ -114,22 +116,13 @@ public sealed class SavedFilterService : ISavedFilterService
             JiraProjectId = projectId,
             Name = name!,
             DefinitionJson = definition!,
+            IsDefault = request.IsDefault ?? false,
             CreatedAt = now,
             UpdatedAt = now,
         };
 
         _db.SavedFilters.Add(row);   // EndUserId is stamped by AppDbContext.SaveChanges.
-
-        try
-        {
-            await _db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateException ex) when (IsDuplicateName(ex))
-        {
-            return DuplicateName(name!);
-        }
-
-        return SaveFilterResult.Ok(ToView(row));
+        return await SaveAsync(row, ct);
     }
 
     public async Task<SaveFilterResult> UpdateAsync(
@@ -147,18 +140,11 @@ public sealed class SavedFilterService : ISavedFilterService
 
         row.Name = name!;
         row.DefinitionJson = definition!;
+        // Left out = unchanged, so renaming a view never silently un-defaults it.
+        if (request.IsDefault is { } isDefault) row.IsDefault = isDefault;
         row.UpdatedAt = ToStoragePrecision(_clock.UtcNow);
 
-        try
-        {
-            await _db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateException ex) when (IsDuplicateName(ex))
-        {
-            return DuplicateName(name!);
-        }
-
-        return SaveFilterResult.Ok(ToView(row));
+        return await SaveAsync(row, ct);
     }
 
     public async Task<bool> DeleteAsync(Guid projectId, Guid filterId, CancellationToken ct = default)
@@ -179,14 +165,41 @@ public sealed class SavedFilterService : ISavedFilterService
         SaveFilterResult.Conflict($"A saved filter named '{name}' already exists in this project.");
 
     /// <summary>
-    /// A concurrent write claimed the same name between the pre-check and this insert. The
-    /// unique index on (JiraProjectId, Name) is the REAL guard; the pre-check only exists to
-    /// give the common case a clean answer without provoking an exception. Mapping the race to
-    /// the same 409 keeps a lost race from surfacing as a 500. Same shape as
-    /// RegistrationService, JiraProjectService and SyncOrchestrator.
+    /// Writes the pending add/update. Taking the default clears the project's previous default
+    /// FIRST, in the same transaction: the partial unique index is checked per statement, so
+    /// writing the new default before clearing the old one would trip it.
+    ///
+    /// The unique indexes are the REAL guards; the pre-checks only give the common case a clean
+    /// answer without provoking an exception. A concurrent writer that still wins a race trips an
+    /// index, and that maps to the same 409 — a lost race never surfaces as a 500. Same shape as
+    /// RegistrationService, JiraProjectService and SyncOrchestrator. A failed save rolls back the
+    /// clear with it, so a loser never leaves the project with no default.
     /// </summary>
-    private static bool IsDuplicateName(DbUpdateException ex) =>
-        ex.InnerException is PostgresException { SqlState: "23505" };
+    private async Task<SaveFilterResult> SaveAsync(SavedFilter row, CancellationToken ct)
+    {
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+
+        if (row.IsDefault)
+        {
+            await _db.SavedFilters
+                .Where(f => f.JiraProjectId == row.JiraProjectId && f.IsDefault && f.Id != row.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(f => f.IsDefault, false), ct);
+        }
+
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: "23505" } pg)
+        {
+            return pg.ConstraintName == SavedFilterConfiguration.OneDefaultIndex
+                ? SaveFilterResult.Conflict("Another view was made this project's default at the same time. Try again.")
+                : DuplicateName(row.Name);
+        }
+
+        await tx.CommitAsync(ct);
+        return SaveFilterResult.Ok(ToView(row));
+    }
 
     private Task<bool> NameTakenAsync(Guid projectId, string name, Guid? excluding, CancellationToken ct) =>
         _db.SavedFilters.AnyAsync(
@@ -262,7 +275,7 @@ public sealed class SavedFilterService : ISavedFilterService
         var d = JsonSerializer.Deserialize<ViewDefinition>(row.DefinitionJson, DefinitionJson);
         return new SavedFilterView(
             row.Id, row.Name, d?.Conditions, d?.Filter, d?.Columns, d?.SortBy, d?.SortDescending,
-            row.CreatedAt, row.UpdatedAt);
+            row.IsDefault, row.CreatedAt, row.UpdatedAt);
     }
 }
 

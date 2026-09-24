@@ -8,15 +8,18 @@ public sealed record SavedFilterView(
     Guid Id, string Name,
     List<FilterCondition>? Conditions, FilterGroup? Filter,
     List<string>? Columns, string? SortBy, bool? SortDescending,
+    bool IsDefault,
     DateTime CreatedAt, DateTime UpdatedAt);
 
 /// <summary>
 /// Body of the create and update calls. Columns/SortBy/SortDescending are the list's
 /// presentation; left out, the view stores nothing for them and the list uses its defaults.
+/// IsDefault left out: false on create, unchanged on update.
 /// </summary>
 public sealed record SaveFilterRequest(
     string? Name, List<FilterCondition>? Conditions, FilterGroup? Filter,
-    List<string>? Columns = null, string? SortBy = null, bool? SortDescending = null)
+    List<string>? Columns = null, string? SortBy = null, bool? SortDescending = null,
+    bool? IsDefault = null)
 {
     public ReportFilter ToFilter() => new(Conditions, Filter);
 }

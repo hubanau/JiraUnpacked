@@ -492,4 +492,115 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
         Assert.Equal("A view may show at most 20 columns.",
             await RejectedAsync(client, projectId, new { name = "m", columns = Enumerable.Repeat("status", 21).ToArray() }));
     }
+
+    [Fact]
+    public async Task Making_a_view_the_default_clears_the_previous_default()
+    {
+        var (client, projectId) = await SeedAsync();
+
+        var a = await CreateOkAsync(client, projectId, new { name = "A", isDefault = true });
+        Assert.True(a.IsDefault);
+
+        var b = await CreateOkAsync(client, projectId, new { name = "B", isDefault = true });
+        Assert.Equal(b.Id, Assert.Single(await ListAsync(client, projectId), v => v.IsDefault).Id);
+
+        var resp = await client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/filters/{a.Id}", new { name = "A", isDefault = true });
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        Assert.Equal(a.Id, Assert.Single(await ListAsync(client, projectId), v => v.IsDefault).Id);
+    }
+
+    [Fact]
+    public async Task IsDefault_left_out_keeps_the_flag_on_update_and_means_false_on_create()
+    {
+        var (client, projectId) = await SeedAsync();
+
+        var plain = await CreateOkAsync(client, projectId, new { name = "Plain" });
+        Assert.False(plain.IsDefault);
+
+        var a = await CreateOkAsync(client, projectId, new { name = "A", isDefault = true });
+
+        // Renaming a view must never silently un-default it.
+        var renamed = await client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/filters/{a.Id}", new { name = "A renamed" });
+        Assert.True((await renamed.Content.ReadFromJsonAsync<SavedFilterView>(Json))!.IsDefault);
+
+        var cleared = await client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/filters/{a.Id}", new { name = "A renamed", isDefault = false });
+        Assert.False((await cleared.Content.ReadFromJsonAsync<SavedFilterView>(Json))!.IsDefault);
+        Assert.DoesNotContain(await ListAsync(client, projectId), v => v.IsDefault);
+    }
+
+    [Fact]
+    public async Task The_list_puts_the_default_first_then_orders_by_name_ignoring_case()
+    {
+        var (client, projectId) = await SeedAsync();
+        await CreateOkAsync(client, projectId, new { name = "Banana" });
+        await CreateOkAsync(client, projectId, new { name = "apple" });
+        await CreateOkAsync(client, projectId, new { name = "Cherry", isDefault = true });
+
+        // Ordinal order would put "Banana" before "apple".
+        Assert.Equal(
+            new List<string> { "Cherry", "apple", "Banana" },
+            (await ListAsync(client, projectId)).Select(v => v.Name).ToList());
+    }
+
+    [Fact]
+    public async Task The_database_allows_at_most_one_default_view_per_project()
+    {
+        var (client, projectId) = await SeedAsync();
+        var first = await CreateOkAsync(client, projectId, new { name = "First", isDefault = true });
+
+        await using var conn = new NpgsqlConnection(JiraUnpackedApiFactory.TestConnectionString);
+        await conn.OpenAsync();
+
+        // Copies EndUserId/JiraProjectId from the row the API wrote, through the privileged
+        // connection, so no service check is in the path — this is the index alone.
+        async Task InsertAsync(string name, bool? isDefault)
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = isDefault is null
+                ? @"INSERT INTO ""SavedFilters""(""Id"",""EndUserId"",""JiraProjectId"",""Name"",""DefinitionJson"",""CreatedAt"",""UpdatedAt"")
+                    SELECT @id,""EndUserId"",""JiraProjectId"",@name,'{}'::jsonb,now(),now()
+                    FROM ""SavedFilters"" WHERE ""Id"" = @existing"
+                : @"INSERT INTO ""SavedFilters""(""Id"",""EndUserId"",""JiraProjectId"",""Name"",""DefinitionJson"",""CreatedAt"",""UpdatedAt"",""IsDefault"")
+                    SELECT @id,""EndUserId"",""JiraProjectId"",@name,'{}'::jsonb,now(),now(),@isDefault
+                    FROM ""SavedFilters"" WHERE ""Id"" = @existing";
+            cmd.Parameters.AddWithValue("id", Guid.NewGuid());
+            cmd.Parameters.AddWithValue("name", name);
+            cmd.Parameters.AddWithValue("existing", first.Id);
+            if (isDefault is { } flag) cmd.Parameters.AddWithValue("isDefault", flag);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        // An insert that does not name the column (every writer that predates it, including the
+        // FR-B2 gate) gets false, and any number of non-defaults coexist: the index covers only
+        // rows with the flag set.
+        await InsertAsync("Written before the column", null);
+        await InsertAsync("Plain", false);
+
+        var ex = await Assert.ThrowsAsync<PostgresException>(() => InsertAsync("Second default", true));
+        Assert.Equal("23505", ex.SqlState);
+        Assert.Equal("IX_SavedFilters_OneDefaultPerProject", ex.ConstraintName);
+
+        var list = await ListAsync(client, projectId);
+        Assert.Equal(first.Id, Assert.Single(list, v => v.IsDefault).Id);
+        Assert.Contains(list, v => v.Name == "Written before the column" && !v.IsDefault);
+    }
+
+    [Fact]
+    public async Task Concurrent_default_claims_end_with_exactly_one_default_and_never_a_500()
+    {
+        var (client, projectId) = await SeedAsync();
+
+        // Opportunistic: Task.WhenAll does not guarantee overlap. What it pins is that NO
+        // interleaving yields a 500 or leaves two defaults — a loser either cleared the winner
+        // first (and won) or tripped the index (409, its own clear rolled back).
+        var responses = await Task.WhenAll(Enumerable.Range(0, 8).Select(i =>
+            client.PostAsJsonAsync($"/api/projects/{projectId}/filters", new { name = $"Default {i}", isDefault = true })));
+
+        Assert.All(responses, r =>
+            Assert.True(r.StatusCode is HttpStatusCode.Created or HttpStatusCode.Conflict, $"got {(int)r.StatusCode}"));
+        Assert.Single(await ListAsync(client, projectId), v => v.IsDefault);
+    }
 }
