@@ -116,6 +116,35 @@ describe('isModified', () => {
     expect(isModified(view(), plain)).toBe(false);
     expect(isModified(view(), { ...plain, sortBy: 'summary' })).toBe(true);
   });
+
+  it('does not call a view with relative and smart values modified when the server returns them in its own key order', () => {
+    const stored = view({
+      filter: {
+        logic: 'And',
+        conditions: [
+          { field: 'updatedAt', op: 'InPeriod', value: { timeZone: 'Europe/Warsaw', period: 'thisWeek' }, values: null, disabled: null },
+          { field: 'sprint', op: 'In', value: null, values: [null, { smart: 'open' }], disabled: null },
+        ],
+        groups: null,
+        disabled: null,
+      } as unknown as SavedView['filter'],
+    });
+    // The same list as the editor builds it: objects in the editor's own key order.
+    const built: ListSnapshot = {
+      tree: {
+        id: 'r', logic: 'And', groups: [],
+        conditions: [
+          { id: 'a', field: 'updatedAt', op: 'InPeriod', value: { period: 'thisWeek', timeZone: 'Europe/Warsaw' } },
+          { id: 'b', field: 'sprint', op: 'In', values: [null, { smart: 'open' }] },
+        ],
+      },
+      sortBy: 'updatedAt',
+      sortDescending: true,
+      columns: DEFAULT_COLUMNS,
+    };
+
+    expect(isModified(stored, built)).toBe(false);
+  });
 });
 
 describe('saveRequest', () => {

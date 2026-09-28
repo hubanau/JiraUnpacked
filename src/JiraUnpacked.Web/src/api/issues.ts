@@ -2,9 +2,41 @@ import { apiDownload, apiFetch, type Download } from './client';
 
 export type FilterOperator =
   | 'Eq' | 'Neq' | 'In' | 'NotIn' | 'Lt' | 'Lte' | 'Gt' | 'Gte'
-  | 'Contains' | 'NotContains' | 'StartsWith' | 'IsNull' | 'IsNotNull';
+  | 'Contains' | 'NotContains' | 'StartsWith' | 'IsNull' | 'IsNotNull'
+  | 'Between' | 'InLast' | 'NotInLast' | 'InPeriod';
 
-export type FieldType = 'DictName' | 'Decimal' | 'DateTime' | 'Text' | 'ParentRef';
+export type FieldType = 'DictName' | 'Decimal' | 'DateTime' | 'Text' | 'ParentRef' | 'StatusCategory';
+
+/** "in the last" / "more than … ago" take `value: { amount, unit }`. Months are calendar months. */
+export type RelativeUnit = 'hours' | 'days' | 'weeks' | 'months';
+export interface RelativeAmount {
+  amount: number;
+  unit: RelativeUnit;
+}
+
+/** "in period" takes `value: { period, timeZone }`. Weeks start Monday; the zone is IANA, missing = UTC. */
+export type PeriodKey =
+  | 'today' | 'yesterday' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth'
+  | 'thisQuarter' | 'lastQuarter' | 'thisYear' | 'lastYear';
+export interface PeriodValue {
+  period: PeriodKey;
+  timeZone?: string;
+}
+
+/**
+ * A sprint resolved from its state when the query runs. An object, never a string, so it cannot
+ * collide with a sprint someone NAMED "active".
+ */
+export type SmartSprintKey = 'active' | 'future' | 'open' | 'closed';
+export interface SmartValue {
+  smart: SmartSprintKey;
+}
+
+/** An element of `values`: a name or number, null for (Empty), or a smart sprint value. Between: [from, to], null = open. */
+export type ListValue = string | number | null | SmartValue;
+
+/** `value`: a name, number or date — null for (Empty) in the editor only — or one of the object shapes above. */
+export type ConditionValue = string | number | null | SmartValue | RelativeAmount | PeriodValue;
 
 export interface FilterFieldInfo {
   name: string;
@@ -33,18 +65,18 @@ export interface FilterCatalog {
 export type FilterLogic = 'And' | 'Or';
 
 /**
- * Mirrors the API's FilterCondition. `value` and `values` are mutually
- * exclusive: single-value operators send `value`, `In`/`NotIn` send `values`,
- * and `IsNull`/`IsNotNull` send neither. Inside `values`, `null` is (Empty).
- * A `value` of null exists only in the editor (Eq/Neq on (Empty)); pruneTree
- * turns it into IsNull/IsNotNull before anything is sent. `disabled` parts are
- * kept in the URL and skipped by the server.
+ * Mirrors the API's FilterCondition. `value` and `values` are mutually exclusive: single-value
+ * operators send `value` (an object for InLast/NotInLast/InPeriod, or a smart sprint value on
+ * Eq/Neq), `In`/`NotIn` send `values` (null = (Empty)), `Between` sends `values: [from, to]`
+ * (null = open), and `IsNull`/`IsNotNull` send neither. A `value` of null exists only in the
+ * editor (Eq/Neq on (Empty)); pruneTree turns it into IsNull/IsNotNull before anything is sent.
+ * `disabled` parts are kept in the URL and skipped by the server.
  */
 export interface FilterCondition {
   field: string;
   op: FilterOperator;
-  value?: string | number | null;
-  values?: (string | number | null)[];
+  value?: ConditionValue;
+  values?: ListValue[];
   disabled?: boolean;
 }
 
@@ -82,6 +114,8 @@ export interface IssueListItem {
   jiraKey: string;
   summary: string | null;
   status: string | null;
+  /** The status's category as Jira names it ("To Do", "In Progress", "Done"); null when there is none. */
+  statusCategory: string | null;
   issueType: string | null;
   priority: string | null;
   assignee: string | null;
@@ -139,11 +173,20 @@ export interface FilterValueOption {
   count: number;
 }
 
+/** A smart sprint value and how many of this project's issues it matches now. */
+export interface SmartValueOption {
+  key: SmartSprintKey;
+  label: string;
+  count: number;
+}
+
 export interface FilterValues {
   field: string;
   values: FilterValueOption[];
   /** Issues in this project with no value for the field: the count behind (Empty). */
   emptyCount: number;
+  /** Sprint only: the smart values, in the order to offer them. */
+  smart?: SmartValueOption[];
 }
 
 /** The values a dictionary field actually takes in this project, with counts. 400 for any other field. */

@@ -2,14 +2,15 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import type { ListValue } from '../../api/issues';
 import { MultiValuePicker, SingleValueSelect } from './ValuePicker';
 
 const OPTIONS = [{ name: 'Backlog', count: 42 }, { name: 'In Progress', count: 5 }];
 
-function renderMulti(initial: (string | null)[] = [], max = 100) {
+function renderMulti(initial: ListValue[] = [], max = 100) {
   let latest = initial;
   function Harness() {
-    const [selected, setSelected] = useState<(string | null)[]>(initial);
+    const [selected, setSelected] = useState<ListValue[]>(initial);
     return (
       <MultiValuePicker
         label="Values for condition 1"
@@ -102,6 +103,18 @@ describe('MultiValuePicker', () => {
 
     expect(details.open).toBe(false);
     expect(summary).toHaveFocus();
+  });
+
+  it('shows a smart value from a link as a chip named for what it means, and removes it', async () => {
+    const user = userEvent.setup();
+    const picker = renderMulti([{ smart: 'open' }, 'Backlog', { smart: 'open' }]);
+
+    expect(screen.getByText('Open sprints (active + future)')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^Remove Open sprints/ })).toHaveLength(1);
+
+    await user.click(screen.getByRole('button', { name: 'Remove Open sprints (active + future)' }));
+
+    expect(picker.latest()).toEqual(['Backlog']);
   });
 });
 

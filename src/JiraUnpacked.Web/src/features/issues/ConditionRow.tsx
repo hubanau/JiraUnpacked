@@ -8,8 +8,9 @@ import { ChipInput } from './ChipInput';
 import {
   fieldNames, isDictionaryField, operatorLabel, operatorsFor, resetOperatorIfDisallowed, typeFor,
 } from './filterCatalogHelpers';
-import { takesList, takesNoValue } from './filterTree';
+import { freshCondition, switchOperator, takesList, takesNoValue } from './filterTree';
 import { INPUT_CLASS } from './styles';
+import { browserTimeZone, isScalar, isSmartValue } from './valueShapes';
 import { MultiValuePicker, SingleValueSelect } from './ValuePicker';
 
 interface ConditionRowProps {
@@ -41,21 +42,12 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
     const nextField = event.target.value;
     const nextOp = resetOperatorIfDisallowed(catalog, nextField, op);
     // A value valid for the old field rarely is for the new one, so it is dropped, not carried.
-    onChange(takesList(nextOp) ? { field: nextField, op: nextOp, values: [] } : { field: nextField, op: nextOp });
+    onChange(freshCondition(nextField, nextOp, browserTimeZone()));
   };
 
-  const handleOperatorChange = (event: ChangeEvent<HTMLSelectElement>) => {
-    const nextOp = event.target.value as FilterOperator;
-    if (takesNoValue(nextOp)) {
-      onChange({ field, op: nextOp });
-    } else if (takesList(nextOp)) {
-      // "is any of" <-> "is none of" keeps the list: flipping the sense is the common edit.
-      onChange({ field, op: nextOp, values: takesList(op) ? [...(condition.values ?? [])] : [] });
-    } else {
-      const keep = !takesList(op) && !takesNoValue(op) && condition.value !== null;
-      onChange({ field, op: nextOp, value: keep ? condition.value ?? '' : '' });
-    }
-  };
+  // What carries over between operators, and what each one starts with, lives in switchOperator.
+  const handleOperatorChange = (event: ChangeEvent<HTMLSelectElement>) =>
+    onChange(switchOperator(condition, event.target.value as FilterOperator, browserTimeZone()));
 
   // Only dictionary fields have a value list, and only operators that take a value need one.
   const wantsValueList = isDict && !takesNoValue(op);
@@ -92,18 +84,19 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
         );
       }
       const isKey = field === 'jiraKey';
-      // Typing cannot produce (Empty), but one that arrived in a link is kept, not silently lost.
-      const keepsEmpty = values.includes(null);
+      // Typing cannot produce (Empty) or a smart value, but one that arrived in a link is kept,
+      // not silently lost.
+      const kept = values.filter((v) => v === null || isSmartValue(v));
       return (
         <ChipInput
           key={field}
           id={valueId}
           label={valueLabel}
-          values={values.filter((v): v is string | number => v !== null).map(String)}
-          max={catalog.maxInValues - (keepsEmpty ? 1 : 0)}
+          values={values.filter(isScalar).map(String)}
+          max={catalog.maxInValues - kept.length}
           splitOn={isKey ? JIRA_KEY_SEPARATORS : undefined}
           normalize={isKey ? toUpper : undefined}
-          onChange={(next) => onChange({ field, op, values: keepsEmpty ? [null, ...next] : next })}
+          onChange={(next) => onChange({ field, op, values: [...kept, ...next] })}
         />
       );
     }
@@ -129,7 +122,7 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
           <input
             type="number"
             className={INPUT_CLASS}
-            value={condition.value ?? ''}
+            value={isScalar(condition.value) ? condition.value : ''}
             onChange={(e) => onChange({ field, op, value: e.target.value === '' ? '' : Number(e.target.value) })}
           />
         </Field>

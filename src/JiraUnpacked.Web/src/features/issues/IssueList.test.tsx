@@ -57,6 +57,7 @@ function row(jiraKey: string, overrides: Partial<IssueListItem> = {}): IssueList
     jiraKey,
     summary: 'Some summary',
     status: 'Open',
+    statusCategory: 'To Do',
     issueType: 'Story',
     priority: 'Medium',
     assignee: 'Alice',

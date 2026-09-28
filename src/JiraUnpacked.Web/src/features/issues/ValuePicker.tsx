@@ -1,7 +1,8 @@
 import { useRef, useState, type KeyboardEvent, type SelectHTMLAttributes } from 'react';
-import type { FilterValueOption } from '../../api/issues';
+import type { FilterValueOption, ListValue, SmartValue } from '../../api/issues';
 import { Badge, Select } from '../../ui';
 import { INPUT_CLASS } from './styles';
+import { smartLabel } from './valueShapes';
 
 /** How (Empty) reads wherever a value is shown. */
 export const EMPTY_LABEL = '(Empty)';
@@ -53,13 +54,17 @@ interface MultiValuePickerProps {
   label: string;
   options: FilterValueOption[];
   emptyCount: number;
-  /** null = (Empty). */
-  selected: (string | number | null)[];
-  onChange: (next: (string | null)[]) => void;
+  /** null = (Empty); { smart } = a smart sprint value. */
+  selected: ListValue[];
+  onChange: (next: ListValue[]) => void;
   max: number;
 }
 
-const keyOf = (v: string | null) => (v === null ? 'empty' : `v:${v}`);
+type Choice = string | null | SmartValue;
+
+/** What a value MEANS, as a key: two equal smart objects are one choice, whatever their identity. */
+const keyOf = (v: Choice) => (v === null ? 'empty' : typeof v === 'string' ? `v:${v}` : `s:${v.smart}`);
+const labelOf = (v: Choice) => (v === null ? EMPTY_LABEL : typeof v === 'string' ? v : smartLabel(v));
 
 /**
  * "is any of" / "is none of" on a dictionary field: chips for what is chosen, and a popover with
@@ -83,18 +88,26 @@ export function MultiValuePicker({ label, options, emptyCount, selected, onChang
     summaryRef.current?.focus();
   };
 
-  // De-duplicated on the way in, so even a hand-edited link cannot show a value twice.
-  const chosen = [...new Set(selected.map((v) => (v === null ? null : String(v))))];
-  const isChosen = (v: string | null) => chosen.includes(v);
+  // De-duplicated on the way in, by meaning, so even a hand-edited link cannot show a value twice.
+  const chosen: Choice[] = [];
+  const chosenKeys = new Set<string>();
+  for (const raw of selected) {
+    const v: Choice = typeof raw === 'number' ? String(raw) : raw;
+    if (!chosenKeys.has(keyOf(v))) {
+      chosenKeys.add(keyOf(v));
+      chosen.push(v);
+    }
+  }
+  const isChosen = (v: Choice) => chosenKeys.has(keyOf(v));
   const atLimit = chosen.length >= max;
-  const toggle = (v: string | null) =>
-    onChange(isChosen(v) ? chosen.filter((x) => x !== v) : [...chosen, v]);
+  const toggle = (v: Choice) =>
+    onChange(isChosen(v) ? chosen.filter((x) => keyOf(x) !== keyOf(v)) : [...chosen, v]);
 
   const needle = query.trim().toLowerCase();
   const matches = options.filter((o) => o.name.toLowerCase().includes(needle));
   const showEmpty = needle === '' || EMPTY_LABEL.toLowerCase().includes(needle);
 
-  const choice = (v: string | null, text: string, count: number) => (
+  const choice = (v: Choice, text: string, count: number) => (
     <label key={keyOf(v)} className="flex items-center gap-2 text-sm text-[var(--ju-text)]">
       <input type="checkbox" checked={isChosen(v)} disabled={!isChosen(v) && atLimit} onChange={() => toggle(v)} />
       <span className="flex-1">{text}</span>{' '}
@@ -109,8 +122,8 @@ export function MultiValuePicker({ label, options, emptyCount, selected, onChang
         <div className="flex flex-wrap gap-1">
           {chosen.map((v) => (
             <Badge key={keyOf(v)}>
-              {v ?? EMPTY_LABEL}
-              <button type="button" className="ml-1" aria-label={`Remove ${v ?? EMPTY_LABEL}`} onClick={() => toggle(v)}>
+              {labelOf(v)}
+              <button type="button" className="ml-1" aria-label={`Remove ${labelOf(v)}`} onClick={() => toggle(v)}>
                 ×
               </button>
             </Badge>

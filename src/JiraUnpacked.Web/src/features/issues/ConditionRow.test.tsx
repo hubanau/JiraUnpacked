@@ -146,6 +146,16 @@ describe('ConditionRow', () => {
     expect(row.last()).toEqual({ field: 'summary', op: 'NotContains', value: 'spike' });
   });
 
+  it('keeps a smart value that arrived in a link when the fallback is used', async () => {
+    failValues();
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'sprint', op: 'In', values: [{ smart: 'active' }] });
+
+    await user.type(await screen.findByLabelText('Value for condition 1'), 'S1{Enter}');
+
+    expect(row.last()).toEqual({ field: 'sprint', op: 'In', values: [{ smart: 'active' }, 'S1'] });
+  });
+
   it('marks a field the catalog no longer has, instead of silently showing another', () => {
     renderRow({ field: 'retired', op: 'Eq', value: 'x' });
 

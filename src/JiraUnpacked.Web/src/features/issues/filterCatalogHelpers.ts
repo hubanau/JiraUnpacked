@@ -23,8 +23,11 @@ export const typeFor = (catalog: FilterCatalog, field: string): FieldType | unde
 export const isOperatorAllowed = (catalog: FilterCatalog, field: string, op: FilterOperator): boolean =>
   operatorsFor(catalog, field).includes(op);
 
-export const isDictionaryField = (catalog: FilterCatalog, field: string): boolean =>
-  typeFor(catalog, field) === 'DictName';
+/** Fields whose values come from this project's value list: dictionaries, and status category. */
+export const isDictionaryField = (catalog: FilterCatalog, field: string): boolean => {
+  const type = typeFor(catalog, field);
+  return type === 'DictName' || type === 'StatusCategory';
+};
 
 /**
  * When the user changes a row's field, the previously chosen operator may not
@@ -51,6 +54,10 @@ export const OPERATOR_LABELS: Record<FilterOperator, string> = {
   Contains: 'contains',
   NotContains: 'does not contain',
   StartsWith: 'starts with',
+  Between: 'between',
+  InLast: 'in the last',
+  NotInLast: 'more than … ago',
+  InPeriod: 'in period',
 };
 
 export const operatorLabel = (op: FilterOperator): string => OPERATOR_LABELS[op] ?? op;
