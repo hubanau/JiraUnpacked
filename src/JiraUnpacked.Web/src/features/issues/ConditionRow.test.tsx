@@ -1,9 +1,9 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/setup';
 import { FILTER_CATALOG } from '../../test/filterCatalogFixture';
 import type { FilterCondition } from '../../api/issues';
@@ -163,5 +163,107 @@ describe('ConditionRow', () => {
     expect(select).toHaveValue('retired');
     expect(select).toHaveAttribute('aria-invalid', 'true');
     expect(screen.getByRole('alert')).toHaveTextContent(/can no longer be filtered on/i);
+  });
+});
+
+describe('ConditionRow — ranges and relative dates', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const inZone = (timeZone: string) => {
+    const real = Intl.DateTimeFormat().resolvedOptions();
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ ...real, timeZone });
+  };
+
+  it('names the date operators in words, in the catalog’s order', () => {
+    renderRow({ field: 'createdAt', op: 'Lt', value: '' });
+
+    const ops = within(screen.getByLabelText('Operator for condition 1')).getAllByRole('option').map((o) => o.textContent);
+    expect(ops).toEqual(['<', '≤', '>', '≥', 'between', 'in the last', 'more than … ago', 'in period']);
+  });
+
+  it('takes a date range with either end left open', async () => {
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'createdAt', op: 'Lt', value: '2026-01-01' });
+
+    await user.selectOptions(screen.getByLabelText('Operator for condition 1'), 'Between');
+    expect(row.last()).toEqual({ field: 'createdAt', op: 'Between', values: [null, null] });
+
+    fireEvent.change(screen.getByLabelText('From for condition 1'), { target: { value: '2026-09-01' } });
+    fireEvent.change(screen.getByLabelText('To for condition 1'), { target: { value: '2026-09-30' } });
+    expect(row.last()).toEqual({ field: 'createdAt', op: 'Between', values: ['2026-09-01', '2026-09-30'] });
+
+    fireEvent.change(screen.getByLabelText('From for condition 1'), { target: { value: '' } });
+    expect(row.last()).toEqual({ field: 'createdAt', op: 'Between', values: [null, '2026-09-30'] });
+    expect(screen.getByLabelText('To for condition 1')).toHaveAttribute('type', 'date');
+  });
+
+  it('takes a story-point range as numbers', () => {
+    const row = renderRow({ field: 'storyPoints', op: 'Between', values: [null, null] });
+
+    expect(screen.getByLabelText('From for condition 1')).toHaveAttribute('type', 'number');
+    fireEvent.change(screen.getByLabelText('From for condition 1'), { target: { value: '1.5' } });
+    fireEvent.change(screen.getByLabelText('To for condition 1'), { target: { value: '8' } });
+
+    expect(row.last()).toEqual({ field: 'storyPoints', op: 'Between', values: [1.5, 8] });
+  });
+
+  it('starts "in the last" at 14 days and edits the amount and the unit', async () => {
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'updatedAt', op: 'Lt', value: '' });
+
+    await user.selectOptions(screen.getByLabelText('Operator for condition 1'), 'InLast');
+    expect(row.last()).toEqual({ field: 'updatedAt', op: 'InLast', value: { amount: 14, unit: 'days' } });
+    expect(screen.getByLabelText('Amount for condition 1')).toHaveValue(14);
+
+    fireEvent.change(screen.getByLabelText('Amount for condition 1'), { target: { value: '30' } });
+    await user.selectOptions(screen.getByLabelText('Unit for condition 1'), 'weeks');
+    expect(row.last()).toEqual({ field: 'updatedAt', op: 'InLast', value: { amount: 30, unit: 'weeks' } });
+
+    fireEvent.change(screen.getByLabelText('Amount for condition 1'), { target: { value: '' } });
+    expect(row.last()).toEqual({ field: 'updatedAt', op: 'InLast', value: { amount: 0, unit: 'weeks' } });
+    expect(screen.getByLabelText('Amount for condition 1')).toHaveValue(null);
+  });
+
+  it('reads "more than [14] [days] ago" and keeps the amount when flipped', async () => {
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'updatedAt', op: 'InLast', value: { amount: 3, unit: 'months' } });
+
+    await user.selectOptions(screen.getByLabelText('Operator for condition 1'), 'NotInLast');
+
+    expect(row.last()).toEqual({ field: 'updatedAt', op: 'NotInLast', value: { amount: 3, unit: 'months' } });
+    expect(screen.getByText('ago')).toBeInTheDocument();
+    expect(within(screen.getByLabelText('Unit for condition 1')).getAllByRole('option').map((o) => o.textContent))
+      .toEqual(['hours', 'days', 'weeks', 'months']);
+  });
+
+  it('captures the browser’s zone with "in period", shows it, and keeps it when the period changes', async () => {
+    inZone('Europe/Warsaw');
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'createdAt', op: 'Lt', value: '' });
+
+    await user.selectOptions(screen.getByLabelText('Operator for condition 1'), 'InPeriod');
+    expect(row.last()).toEqual({ field: 'createdAt', op: 'InPeriod', value: { period: 'thisWeek', timeZone: 'Europe/Warsaw' } });
+    expect(screen.getByText('Europe/Warsaw')).toBeInTheDocument();
+
+    const periods = within(screen.getByLabelText('Period for condition 1')).getAllByRole('option').map((o) => o.textContent);
+    expect(periods).toEqual([
+      'Today', 'Yesterday', 'This week', 'Last week', 'This month', 'Last month',
+      'This quarter', 'Last quarter', 'This year', 'Last year',
+    ]);
+
+    inZone('America/New_York');   // the zone was captured when the operator was chosen, not now
+    await user.selectOptions(screen.getByLabelText('Period for condition 1'), 'lastMonth');
+    expect(row.last()).toEqual({ field: 'createdAt', op: 'InPeriod', value: { period: 'lastMonth', timeZone: 'Europe/Warsaw' } });
+  });
+
+  it('keeps a zoneless period from a link zoneless — it means UTC and says so', async () => {
+    inZone('Europe/Warsaw');
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'updatedAt', op: 'InPeriod', value: { period: 'today' } });
+
+    expect(screen.getByText('UTC')).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Period for condition 1'), 'yesterday');
+
+    expect(row.last()).toEqual({ field: 'updatedAt', op: 'InPeriod', value: { period: 'yesterday' } });
   });
 });

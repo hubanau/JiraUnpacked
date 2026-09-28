@@ -1,6 +1,8 @@
 import type { ChangeEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { FilterCatalog, FilterCondition, FilterOperator } from '../../api/issues';
+import type {
+  FilterCatalog, FilterCondition, FilterOperator, ListValue, PeriodKey, PeriodValue, RelativeAmount, RelativeUnit,
+} from '../../api/issues';
 import { getFilterValues } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
 import { Field, Select } from '../../ui';
@@ -8,9 +10,13 @@ import { ChipInput } from './ChipInput';
 import {
   fieldNames, isDictionaryField, operatorLabel, operatorsFor, resetOperatorIfDisallowed, typeFor,
 } from './filterCatalogHelpers';
-import { freshCondition, switchOperator, takesList, takesNoValue } from './filterTree';
+import {
+  freshCondition, switchOperator, takesAmount, takesList, takesNoValue, takesPeriod, takesRange,
+} from './filterTree';
 import { INPUT_CLASS } from './styles';
-import { browserTimeZone, isScalar, isSmartValue } from './valueShapes';
+import {
+  DEFAULT_RELATIVE, PERIODS, RELATIVE_UNITS, browserTimeZone, isRelativeAmount, isScalar, isSmartValue, readPeriod,
+} from './valueShapes';
 import { MultiValuePicker, SingleValueSelect } from './ValuePicker';
 
 interface ConditionRowProps {
@@ -68,6 +74,95 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
 
   const renderValueControl = () => {
     if (takesNoValue(op)) return null;
+
+    if (takesRange(op)) {
+      // Two bounds, either left blank for an open end. Dates for the date fields, numbers for points.
+      const [from = null, to = null] = condition.values ?? [];
+      const numeric = fieldType === 'Decimal';
+      const shown = (v: ListValue) => (isScalar(v) ? String(v) : '');
+      const setBound = (index: 0 | 1, raw: string) => {
+        const bound: ListValue = raw === '' ? null : numeric ? Number(raw) : raw;
+        onChange({ field, op, values: index === 0 ? [bound, to] : [from, bound] });
+      };
+      return (
+        <>
+          <Field label={`From for condition ${label}`} id={`condition-${label}-from`}>
+            <input
+              type={numeric ? 'number' : 'date'}
+              step={numeric ? 'any' : undefined}
+              className={INPUT_CLASS}
+              value={shown(from)}
+              onChange={(e) => setBound(0, e.target.value)}
+            />
+          </Field>
+          <Field label={`To for condition ${label}`} id={`condition-${label}-to`}>
+            <input
+              type={numeric ? 'number' : 'date'}
+              step={numeric ? 'any' : undefined}
+              className={INPUT_CLASS}
+              value={shown(to)}
+              onChange={(e) => setBound(1, e.target.value)}
+            />
+          </Field>
+        </>
+      );
+    }
+
+    if (takesAmount(op)) {
+      // An amount of 0 is "not entered yet": the input shows blank and the row is unfinished.
+      const rel: RelativeAmount = isRelativeAmount(condition.value)
+        ? condition.value
+        : { amount: 0, unit: DEFAULT_RELATIVE.unit };
+      const set = (next: RelativeAmount) => onChange({ field, op, value: next });
+      return (
+        <>
+          <Field label={`Amount for condition ${label}`} id={`condition-${label}-amount`}>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              className={INPUT_CLASS}
+              value={rel.amount >= 1 ? rel.amount : ''}
+              onChange={(e) => set({
+                amount: e.target.value === '' ? 0 : Math.trunc(Number(e.target.value)),
+                unit: rel.unit,
+              })}
+            />
+          </Field>
+          <Field label={`Unit for condition ${label}`} id={`condition-${label}-unit`}>
+            <Select value={rel.unit} onChange={(e) => set({ amount: rel.amount, unit: e.target.value as RelativeUnit })}>
+              {RELATIVE_UNITS.map((u) => (
+                <option key={u} value={u}>{u}</option>
+              ))}
+            </Select>
+          </Field>
+          {/* "more than [14] [days] ago": the operator reads "more than … ago", the row ends the sentence. */}
+          {op === 'NotInLast' && <span className="pb-2 text-sm text-[var(--ju-text)]">ago</span>}
+        </>
+      );
+    }
+
+    if (takesPeriod(op)) {
+      const current = readPeriod(condition.value);
+      const pick = (period: PeriodKey) => {
+        const next: PeriodValue = { period };
+        // The zone captured with the operator stays with the condition. One that never had a zone
+        // (a link from elsewhere) means UTC on the server, and keeps meaning it.
+        const zone = current ? current.timeZone : browserTimeZone();
+        if (zone) next.timeZone = zone;
+        onChange({ field, op, value: next });
+      };
+      return (
+        <Field label={`Period for condition ${label}`} id={`condition-${label}-period`} hint={current?.timeZone ?? 'UTC'}>
+          <Select value={current?.period ?? ''} onChange={(e) => pick(e.target.value as PeriodKey)}>
+            {!current && <option value="">— choose —</option>}
+            {PERIODS.map((p) => (
+              <option key={p.key} value={p.key}>{p.label}</option>
+            ))}
+          </Select>
+        </Field>
+      );
+    }
 
     if (takesList(op)) {
       const values = condition.values ?? [];
