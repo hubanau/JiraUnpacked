@@ -24,6 +24,19 @@ function renderList() {
   );
 }
 
+function renderListAt(url: string) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[url]}>
+        <Routes>
+          <Route path="/projects/:id/issues" element={<IssueList />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
 // Drives a same-app navigation between two projects' issue lists, the way a
 // real project switcher (or EX5's Home/ProjectDetail links) eventually will,
 // so the regression test below exercises the actual route wiring rather
@@ -284,5 +297,29 @@ describe('IssueList', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/unknown field/i);
     expect(screen.queryByText('ACME-1')).not.toBeInTheDocument();
+  });
+
+  it('sends relative, range and smart values from a link exactly as they are written', async () => {
+    const bodies: { filter?: unknown }[] = [];
+    server.use(
+      http.post('/api/projects/p1/issues/query', async ({ request }) => {
+        bodies.push((await request.json()) as { filter?: unknown });
+        return HttpResponse.json({ items: [row('ACME-1')], page: 1, pageSize: 50, totalCount: 1 });
+      }),
+    );
+    const filter = {
+      logic: 'And',
+      conditions: [
+        { field: 'updatedAt', op: 'InLast', value: { amount: 14, unit: 'days' } },
+        { field: 'createdAt', op: 'InPeriod', value: { period: 'lastMonth', timeZone: 'Europe/Warsaw' } },
+        { field: 'createdAt', op: 'Between', values: ['2026-08-01', null] },
+        { field: 'sprint', op: 'In', values: [{ smart: 'open' }, null] },
+        { field: 'statusCategory', op: 'NotIn', values: ['Done'] },
+      ],
+    };
+
+    renderListAt(`/projects/p1/issues?filter=${encodeURIComponent(JSON.stringify(filter))}`);
+
+    await waitFor(() => expect(bodies.at(-1)?.filter).toEqual(filter));
   });
 });

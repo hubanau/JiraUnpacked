@@ -232,3 +232,9 @@ describe('shownColumns', () => {
     expect(shownColumns(['priority', 'jiraKey', 'nope', 'jiraKey'])).toEqual(['jiraKey', 'priority']);
   });
 });
+
+describe('the Category column', () => {
+  it('keeps its place right after Status whatever order a view lists it in', () => {
+    expect(shownColumns(['statusCategory', 'jiraKey', 'status'])).toEqual(['jiraKey', 'status', 'statusCategory']);
+  });
+});
