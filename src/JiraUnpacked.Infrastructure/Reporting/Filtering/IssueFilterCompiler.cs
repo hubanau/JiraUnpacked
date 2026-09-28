@@ -73,6 +73,10 @@ public sealed class IssueFilterCompiler : IIssueFilterCompiler
             "assignee"  => await _db.JiraUsers.Where(x => names.Contains(x.DisplayName)).Select(x => x.Id).ToListAsync(ct),
             "sprint"    => await _db.Sprints.Where(x => names.Contains(x.Name)).Select(x => x.Id).ToListAsync(ct),
             "team"      => await _db.Teams.Where(x => names.Contains(x.Name)).Select(x => x.Id).ToListAsync(ct),
+            // Lookups beyond display names (FilterLookups). Same tenant-scoped context, so a smart
+            // value can no more reach another tenant's sprints than a name can; the caller's
+            // project filter on Issues keeps the match to this project's own sprints.
+            FilterLookups.SprintState => await _db.Sprints.Where(x => x.State != null && names.Contains(x.State)).Select(x => x.Id).ToListAsync(ct),
             _ => Array.Empty<Guid>(),
         };
         return ids;

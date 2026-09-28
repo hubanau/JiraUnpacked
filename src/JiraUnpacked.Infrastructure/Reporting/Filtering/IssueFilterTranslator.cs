@@ -10,9 +10,23 @@ namespace JiraUnpacked.Infrastructure.Reporting.Filtering;
 
 public sealed record FilterBuildResult(Expression<Func<Issue, bool>>? Predicate, string? Error);
 
-/// <summary>Resolves a dict field's display names to surrogate Ids (tenant-scoped, injected by the service).</summary>
+/// <summary>
+/// Resolves display names to surrogate Ids (tenant-scoped, injected by the service). `field` is a
+/// dict field's name — or one of the closed <see cref="FilterLookups"/> keys, for lookups that
+/// are not by display name. Nothing a caller sends ever becomes a lookup key.
+/// </summary>
 public delegate Task<IReadOnlyList<Guid>> DictNameResolver(
     string field, IReadOnlyList<string> names, CancellationToken ct);
+
+/// <summary>
+/// Lookups the translator asks the resolver for besides display names. A closed set: the
+/// compiler's resolver has an arm for each, over the same tenant-scoped context as the names.
+/// </summary>
+public static class FilterLookups
+{
+    /// <summary>names = sprint states ("active", "future", "closed") → ids of the sprints in them.</summary>
+    public const string SprintState = "sprint.state";
+}
 
 public interface IIssueFilterTranslator
 {
@@ -154,31 +168,15 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
         if (c.Op == FilterOperator.IsNull) return (Lambda(isEmpty, p), null);
         if (c.Op == FilterOperator.IsNotNull) return (Lambda(Expression.NotEqual(fkBody, NullGuid), p), null);
 
-        // Names to resolve, and whether (Empty) — a JSON null inside 'values' — was asked for.
-        List<string> names;
-        var wantsEmpty = false;
-        if (c.Op is FilterOperator.In or FilterOperator.NotIn)
-        {
-            if (c.Values is null) return (null, $"Field '{c.Field}' with '{c.Op}' requires 'values'.");
-            if (c.Values.Count > MaxInValues) return (null, $"'{c.Op}' accepts at most {MaxInValues} values.");
-            names = new List<string>();
-            foreach (var v in c.Values)
-            {
-                if (v.ValueKind == JsonValueKind.Null) { wantsEmpty = true; continue; }
-                if (v.ValueKind != JsonValueKind.String)
-                    return (null, $"Field '{c.Field}' values must be strings, or null for (Empty).");
-                names.Add(v.GetString()!);
-            }
-        }
-        else // Eq / Neq
-        {
-            if (c.Value is not { ValueKind: JsonValueKind.String } sv)
-                return (null, $"Field '{c.Field}' requires a string 'value'.");
-            names = new List<string> { sv.GetString()! };
-        }
+        var (pick, error) = ReadDictValues(field, c);
+        if (error is not null) return (null, error);
 
-        // In [null] is IsNull by another name: nothing to resolve, so no round trip.
-        var ids = names.Count == 0 ? new List<Guid>() : (await resolveDict(field.Name, names, ct)).ToList();
+        // Names and smart values resolve separately into ONE id set: "Sprint 7 or the active
+        // sprint" is a single In. In [null] has nothing to resolve, so no round trip.
+        var ids = new List<Guid>();
+        if (pick!.Names.Count > 0) ids.AddRange(await resolveDict(field.Name, pick.Names, ct));
+        if (pick.States.Count > 0)
+            ids.AddRange(await resolveDict(FilterLookups.SprintState, pick.States.Distinct().ToList(), ct));
 
         // i.Fk.HasValue && ids.Contains(i.Fk.Value)
         var hasValue = Expression.Property(fkBody, nameof(Nullable<Guid>.HasValue));
@@ -192,9 +190,74 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
             // and "is none of" therefore require a value — a NULL null-in-NotIn adds nothing.
             FilterOperator.Neq or FilterOperator.NotIn =>
                 (Lambda(Expression.AndAlso(hasValue, Expression.Not(contains)), p), null),
-            FilterOperator.In when wantsEmpty => (Lambda(Expression.OrElse(isEmpty, inSet), p), null),
+            FilterOperator.In when pick.WantsEmpty => (Lambda(Expression.OrElse(isEmpty, inSet), p), null),
             _ => (Lambda(inSet, p), null),   // Eq, In
         };
+    }
+
+    /// <summary>
+    /// What a dictionary condition asked for: display names, sprint states (from smart values), and
+    /// whether (Empty) — a JSON null inside 'values' — was among them.
+    /// </summary>
+    private sealed record DictPick(List<string> Names, List<string> States, bool WantsEmpty);
+
+    private static (DictPick?, string?) ReadDictValues(FilterField field, FilterCondition c)
+    {
+        var pick = new DictPick(new List<string>(), new List<string>(), false);
+
+        if (c.Op is FilterOperator.In or FilterOperator.NotIn)
+        {
+            if (c.Values is null) return (null, $"Field '{c.Field}' with '{c.Op}' requires 'values'.");
+            if (c.Values.Count > MaxInValues) return (null, $"'{c.Op}' accepts at most {MaxInValues} values.");
+            var wantsEmpty = false;
+            foreach (var v in c.Values)
+            {
+                switch (v.ValueKind)
+                {
+                    case JsonValueKind.Null:
+                        wantsEmpty = true;
+                        break;
+                    case JsonValueKind.String:
+                        pick.Names.Add(v.GetString()!);
+                        break;
+                    case JsonValueKind.Object:
+                        if (ReadSmart(field, v, pick.States) is { } smartError) return (null, smartError);
+                        break;
+                    default:
+                        return (null, $"Field '{c.Field}' values must be strings, or null for (Empty).");
+                }
+            }
+            return (pick with { WantsEmpty = wantsEmpty }, null);
+        }
+
+        // Eq / Neq: one name, or one smart value.
+        if (c.Value is { ValueKind: JsonValueKind.String } sv)
+        {
+            pick.Names.Add(sv.GetString()!);
+        }
+        else if (c.Value is { ValueKind: JsonValueKind.Object } ov)
+        {
+            if (ReadSmart(field, ov, pick.States) is { } smartError) return (null, smartError);
+        }
+        else
+        {
+            return (null, $"Field '{c.Field}' requires a string 'value'.");
+        }
+        return (pick, null);
+    }
+
+    /// <summary>A smart value, {"smart": "active"}: valid on sprint only, and only with a known key.</summary>
+    private static string? ReadSmart(FilterField field, JsonElement v, List<string> states)
+    {
+        if (field.Name != "sprint")
+            return $"Smart values are only available on 'sprint', not '{field.Name}'.";
+        if (!v.TryGetProperty("smart", out var key) || key.ValueKind != JsonValueKind.String)
+            return "A smart value must look like {\"smart\": \"active\"}.";
+        var smart = SmartSprints.Find(key.GetString()!);
+        if (smart is null)
+            return $"Unknown smart value '{key.GetString()}'. Use one of: {string.Join(", ", SmartSprints.All.Select(s => s.Key))}.";
+        states.AddRange(smart.States);
+        return null;
     }
 
     private static (Expression<Func<Issue, bool>>?, string?) BuildDecimal(FilterField field, FilterCondition c)

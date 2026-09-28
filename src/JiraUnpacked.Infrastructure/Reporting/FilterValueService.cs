@@ -1,6 +1,7 @@
 using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Infrastructure.Persistence;
+using JiraUnpacked.Infrastructure.Reporting.Filtering;
 using Microsoft.EntityFrameworkCore;
 
 namespace JiraUnpacked.Infrastructure.Reporting;
@@ -67,7 +68,23 @@ public sealed class FilterValueService : IFilterValueService
             .ToListAsync(ct);
         var emptyCount = await empty.CountAsync(ct);
 
+        IReadOnlyList<SmartValueCount>? smart = null;
+        if (field == "sprint")
+        {
+            // One grouped read by state; each smart value is then a sum of states ("open" is
+            // active + future). Over the whole project, like every other count here.
+            var byState = await issues
+                .Join(_db.Sprints, i => i.SprintId, s => (Guid?)s.Id, (_, s) => s.State)
+                .GroupBy(state => state)
+                .Select(g => new { State = g.Key, Count = g.Count() })
+                .ToListAsync(ct);
+            smart = SmartSprints.All
+                .Select(s => new SmartValueCount(s.Key, s.Label,
+                    byState.Where(x => x.State != null && s.States.Contains(x.State)).Sum(x => x.Count)))
+                .ToList();
+        }
+
         return new FilterValuesResult(
-            rows.Select(r => new FilterValueCount(r.Name, r.Count)).ToList(), emptyCount, null);
+            rows.Select(r => new FilterValueCount(r.Name, r.Count)).ToList(), emptyCount, null, smart);
     }
 }

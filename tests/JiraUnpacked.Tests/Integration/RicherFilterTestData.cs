@@ -45,6 +45,19 @@ internal static class RicherFilterTestData
             ("st", statusId), ("sp", sprintId), ("at", at));
     }
 
+    /// <summary>A sprint of this project in the given state ("active", "future", "closed").</summary>
+    internal static async Task<Guid> SeedSprintAsync(SeedContext ctx, string name, string state)
+    {
+        var id = Guid.NewGuid();
+        await using var conn = Conn();
+        await conn.OpenAsync();
+        await MetricsTestData.Exec(conn,
+            @"INSERT INTO ""Sprints""(""Id"",""EndUserId"",""JiraProjectId"",""JiraSprintId"",""Name"",""State"")
+              VALUES (@i,@t,@p,@js,@n,@s)",
+            ("i", id), ("t", ctx.Tenant), ("p", ctx.ProjectId), ("js", id.ToString("N")[..12]), ("n", name), ("s", state));
+        return id;
+    }
+
     private static Task<HttpResponseMessage> QueryAsync(HttpClient client, Guid projectId, object[] conditions) =>
         client.PostAsJsonAsync($"/api/projects/{projectId}/issues/query",
             new { filter = new { logic = "And", conditions } });
