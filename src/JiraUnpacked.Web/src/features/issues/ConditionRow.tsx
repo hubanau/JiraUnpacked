@@ -172,6 +172,7 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
             label={`Values for condition ${label}`}
             options={picked.values}
             emptyCount={picked.emptyCount}
+            smart={picked.smart}
             selected={values}
             max={catalog.maxInValues}
             onChange={(next) => onChange({ field, op, values: next })}
@@ -203,7 +204,10 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
             value={textValue}
             options={picked.values}
             emptyCount={picked.emptyCount}
+            smart={picked.smart}
+            smartValue={isSmartValue(condition.value) ? condition.value.smart : undefined}
             onPick={(name) => onChange({ field, op, value: name })}
+            onPickSmart={(key) => onChange({ field, op, value: { smart: key } })}
             // "is (Empty)" is "is empty": the operator changes, so a null value never reaches the wire.
             onPickEmpty={() => onChange({ field, op: op === 'Neq' ? 'IsNotNull' : 'IsNull' })}
           />

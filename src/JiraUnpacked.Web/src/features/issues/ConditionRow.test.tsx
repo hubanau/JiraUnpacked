@@ -46,6 +46,20 @@ function failValues() {
 const waitForPicker = () =>
   waitFor(() => expect(screen.getByLabelText('Value for condition 1').tagName).toBe('SELECT'));
 
+function mockSprintValues() {
+  server.use(http.get('/api/projects/p1/filter-values', () => HttpResponse.json({
+    field: 'sprint',
+    values: [{ name: 'Sprint 7', count: 3 }],
+    emptyCount: 2,
+    smart: [
+      { key: 'active', label: 'Active sprint', count: 3 },
+      { key: 'future', label: 'Future sprints', count: 0 },
+      { key: 'open', label: 'Open sprints (active + future)', count: 3 },
+      { key: 'closed', label: 'Closed sprints', count: 9 },
+    ],
+  })));
+}
+
 describe('ConditionRow', () => {
   it('names operators in words, in the catalog’s order', () => {
     renderRow({ field: 'jiraKey', op: 'Eq', value: '' });
@@ -265,5 +279,33 @@ describe('ConditionRow — ranges and relative dates', () => {
     await user.selectOptions(screen.getByLabelText('Period for condition 1'), 'yesterday');
 
     expect(row.last()).toEqual({ field: 'updatedAt', op: 'InPeriod', value: { period: 'yesterday' } });
+  });
+});
+
+describe('ConditionRow — smart sprint values', () => {
+  it('picks a smart value for "is", and keeps it when flipped to "is not"', async () => {
+    mockSprintValues();
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'sprint', op: 'Eq', value: '' });
+    await waitForPicker();
+
+    await user.selectOptions(screen.getByLabelText('Value for condition 1'), 'Active sprint (3)');
+    expect(row.last()).toEqual({ field: 'sprint', op: 'Eq', value: { smart: 'active' } });
+
+    await user.selectOptions(screen.getByLabelText('Operator for condition 1'), 'Neq');
+    expect(row.last()).toEqual({ field: 'sprint', op: 'Neq', value: { smart: 'active' } });
+    expect(screen.getByLabelText('Value for condition 1')).toHaveDisplayValue('Active sprint (3)');
+  });
+
+  it('picks smart values and names together for "is any of"', async () => {
+    mockSprintValues();
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'sprint', op: 'In', values: [] });
+
+    await user.click(await screen.findByText('Choose values'));
+    await user.click(await screen.findByRole('checkbox', { name: /^open sprints/i }));
+    await user.click(screen.getByRole('checkbox', { name: /^sprint 7/i }));
+
+    expect(row.last()).toEqual({ field: 'sprint', op: 'In', values: [{ smart: 'open' }, 'Sprint 7'] });
   });
 });
