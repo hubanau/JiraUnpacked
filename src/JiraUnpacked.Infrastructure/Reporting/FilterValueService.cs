@@ -42,6 +42,14 @@ public sealed class FilterValueService : IFilterValueService
         (IQueryable<string> Names, IQueryable<Issue> Empty)? source = field switch
         {
             "status"    => (issues.Join(_db.Statuses,   i => i.StatusId,    d => (Guid?)d.Id, (_, d) => d.Name),        issues.Where(i => i.StatusId == null)),
+            // A category is reached through the status. Blank counts as none, as in the filter.
+            // (Empty) is an issue with no status OR whose status has no category — the same two
+            // cases the filter's empty rule matches.
+            "statusCategory" => (
+                issues.Join(_db.Statuses.Where(s => s.StatusCategory != null && s.StatusCategory != ""),
+                            i => i.StatusId, d => (Guid?)d.Id, (_, d) => d.StatusCategory!),
+                issues.Where(i => i.StatusId == null || !_db.Statuses.Any(
+                    s => s.Id == i.StatusId && s.StatusCategory != null && s.StatusCategory != ""))),
             "issueType" => (issues.Join(_db.IssueTypes, i => i.IssueTypeId, d => (Guid?)d.Id, (_, d) => d.Name),        issues.Where(i => i.IssueTypeId == null)),
             "priority"  => (issues.Join(_db.Priorities, i => i.PriorityId,  d => (Guid?)d.Id, (_, d) => d.Name),        issues.Where(i => i.PriorityId == null)),
             "assignee"  => (issues.Join(_db.JiraUsers,  i => i.AssigneeId,  d => (Guid?)d.Id, (_, d) => d.DisplayName), issues.Where(i => i.AssigneeId == null)),
@@ -54,7 +62,7 @@ public sealed class FilterValueService : IFilterValueService
             return new FilterValuesResult(
                 null, 0,
                 $"'{field}' has no value list. Only dictionary fields can be picked from: "
-                + "status, issueType, priority, assignee, sprint, team.");
+                + "status, statusCategory, issueType, priority, assignee, sprint, team.");
 
         var (names, empty) = source.Value;
 

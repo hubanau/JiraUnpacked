@@ -37,7 +37,8 @@ public sealed class IssueQueryService : IIssueQueryService
         _db.JiraUsers.Where(u => u.Id == i.AssigneeId).Select(u => u.DisplayName).FirstOrDefault(),
         _db.Sprints.Where(sp => sp.Id == i.SprintId).Select(sp => sp.Name).FirstOrDefault(),
         _db.Teams.Where(tm => tm.Id == i.TeamId).Select(tm => tm.Name).FirstOrDefault(),
-        i.StoryPoints, i.ParentJiraIssueId, i.JiraCreatedAt, i.JiraUpdatedAt);
+        i.StoryPoints, i.ParentJiraIssueId, i.JiraCreatedAt, i.JiraUpdatedAt,
+        _db.Statuses.Where(s => s.Id == i.StatusId).Select(s => s.StatusCategory).FirstOrDefault());
 
     /// <summary>
     /// Orders by one catalogued column, then ALWAYS by JiraKey.
@@ -60,6 +61,7 @@ public sealed class IssueQueryService : IIssueQueryService
             "jiraKey"     => By(i => i.JiraKey),
             "summary"     => By(i => i.Summary),
             "status"      => By(i => _db.Statuses.Where(s => s.Id == i.StatusId).Select(s => s.Name).FirstOrDefault()),
+            "statusCategory" => By(i => _db.Statuses.Where(s => s.Id == i.StatusId).Select(s => s.StatusCategory).FirstOrDefault()),
             "issueType"   => By(i => _db.IssueTypes.Where(t => t.Id == i.IssueTypeId).Select(t => t.Name).FirstOrDefault()),
             "priority"    => By(i => _db.Priorities.Where(p => p.Id == i.PriorityId).Select(p => p.Name).FirstOrDefault()),
             "assignee"    => By(i => _db.JiraUsers.Where(u => u.Id == i.AssigneeId).Select(u => u.DisplayName).FirstOrDefault()),

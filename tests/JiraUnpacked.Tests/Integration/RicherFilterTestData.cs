@@ -58,6 +58,19 @@ internal static class RicherFilterTestData
         return id;
     }
 
+    /// <summary>A status on this project's connection with the given category (null = none).</summary>
+    internal static async Task<Guid> SeedStatusAsync(SeedContext ctx, string name, string? category)
+    {
+        var id = Guid.NewGuid();
+        await using var conn = Conn();
+        await conn.OpenAsync();
+        await MetricsTestData.Exec(conn,
+            @"INSERT INTO ""Statuses""(""Id"",""EndUserId"",""JiraConnectionId"",""JiraStatusId"",""Name"",""StatusCategory"")
+              VALUES (@i,@t,@c,@sid,@n,@cat)",
+            ("i", id), ("t", ctx.Tenant), ("c", ctx.ConnectionId), ("sid", id.ToString("N")[..8]), ("n", name), ("cat", category));
+        return id;
+    }
+
     private static Task<HttpResponseMessage> QueryAsync(HttpClient client, Guid projectId, object[] conditions) =>
         client.PostAsJsonAsync($"/api/projects/{projectId}/issues/query",
             new { filter = new { logic = "And", conditions } });

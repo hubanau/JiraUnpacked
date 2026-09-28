@@ -77,6 +77,8 @@ public sealed class IssueFilterCompiler : IIssueFilterCompiler
             // value can no more reach another tenant's sprints than a name can; the caller's
             // project filter on Issues keeps the match to this project's own sprints.
             FilterLookups.SprintState => await _db.Sprints.Where(x => x.State != null && names.Contains(x.State)).Select(x => x.Id).ToListAsync(ct),
+            FilterLookups.StatusCategory => await _db.Statuses.Where(x => x.StatusCategory != null && names.Contains(x.StatusCategory)).Select(x => x.Id).ToListAsync(ct),
+            FilterLookups.UncategorisedStatus => await _db.Statuses.Where(x => x.StatusCategory == null || x.StatusCategory == "").Select(x => x.Id).ToListAsync(ct),
             _ => Array.Empty<Guid>(),
         };
         return ids;

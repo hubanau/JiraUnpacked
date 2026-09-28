@@ -26,6 +26,12 @@ public static class FilterLookups
 {
     /// <summary>names = sprint states ("active", "future", "closed") → ids of the sprints in them.</summary>
     public const string SprintState = "sprint.state";
+
+    /// <summary>names = status category names → ids of the statuses in those categories.</summary>
+    public const string StatusCategory = "statusCategory";
+
+    /// <summary>names ignored → ids of the statuses with no category (null or blank).</summary>
+    public const string UncategorisedStatus = "statusCategory.none";
 }
 
 public interface IIssueFilterTranslator
@@ -143,6 +149,7 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
         return field.Type switch
         {
             FieldType.DictName  => await BuildDictAsync(field, c, resolveDict, ct),
+            FieldType.StatusCategory => await BuildStatusCategoryAsync(field, c, resolveDict, ct),
             FieldType.Decimal   => BuildDecimal(field, c),
             FieldType.DateTime  => BuildDate(field, c),
             FieldType.Text      => BuildText(field, c),
@@ -258,6 +265,54 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
             return $"Unknown smart value '{key.GetString()}'. Use one of: {string.Join(", ", SmartSprints.All.Select(s => s.Key))}.";
         states.AddRange(smart.States);
         return null;
+    }
+
+    /// <summary>
+    /// Status category, through the status: category names → the ids of the statuses in those
+    /// categories → StatusId in set. No join in the issue query. (Empty) is an issue with no
+    /// status OR whose status has no category — both answer "which category?" with nothing, and
+    /// the empty rule applies to that meaning exactly as it does to every dictionary field.
+    /// </summary>
+    private static async Task<(Expression<Func<Issue, bool>>?, string?)> BuildStatusCategoryAsync(
+        FilterField field, FilterCondition c, DictNameResolver resolveDict, CancellationToken ct)
+    {
+        var fk = (Expression<Func<Issue, Guid?>>)field.Selector;   // i.StatusId
+        var p = fk.Parameters[0];
+        var fkBody = fk.Body;
+        var hasValue = Expression.Property(fkBody, nameof(Nullable<Guid>.HasValue));
+        var value = Expression.Property(fkBody, nameof(Nullable<Guid>.Value));
+        Expression IdIn(List<Guid> ids) => Expression.Call(Expression.Constant(ids), ListContains<Guid>(), value);
+
+        // Read first, so a malformed condition is refused before any lookup runs.
+        DictPick? pick = null;
+        if (c.Op is not (FilterOperator.IsNull or FilterOperator.IsNotNull))
+        {
+            var (read, error) = ReadDictValues(field, c);
+            if (error is not null) return (null, error);
+            pick = read;
+        }
+
+        var uncategorised = (await resolveDict(FilterLookups.UncategorisedStatus, Array.Empty<string>(), ct)).ToList();
+        // AndAlso/OrElse short-circuit before .Value in memory; in SQL they are plain NULL checks.
+        var isEmpty = Expression.OrElse(Expression.Equal(fkBody, NullGuid), IdIn(uncategorised));
+        var categorised = Expression.AndAlso(hasValue, Expression.Not(IdIn(uncategorised)));
+
+        if (c.Op == FilterOperator.IsNull) return (Lambda(isEmpty, p), null);
+        if (c.Op == FilterOperator.IsNotNull) return (Lambda(categorised, p), null);
+
+        var ids = pick!.Names.Count == 0
+            ? new List<Guid>()
+            : (await resolveDict(FilterLookups.StatusCategory, pick.Names, ct)).ToList();
+        var inSet = Expression.AndAlso(hasValue, IdIn(ids));
+
+        return c.Op switch
+        {
+            // "Is not Done" = has a category, and it is not Done.
+            FilterOperator.Neq or FilterOperator.NotIn =>
+                (Lambda(Expression.AndAlso(categorised, Expression.Not(IdIn(ids))), p), null),
+            FilterOperator.In when pick.WantsEmpty => (Lambda(Expression.OrElse(isEmpty, inSet), p), null),
+            _ => (Lambda(inSet, p), null),   // Eq, In
+        };
     }
 
     private static (Expression<Func<Issue, bool>>?, string?) BuildDecimal(FilterField field, FilterCondition c)

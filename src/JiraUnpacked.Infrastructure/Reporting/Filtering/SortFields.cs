@@ -20,7 +20,7 @@ internal static class SortFields
 
     internal static readonly IReadOnlyList<string> Names = new[]
     {
-        "jiraKey", "summary", "status", "issueType", "priority", "assignee",
+        "jiraKey", "summary", "status", "statusCategory", "issueType", "priority", "assignee",
         "sprint", "team", "storyPoints", "createdAt", "updatedAt",
     };
 

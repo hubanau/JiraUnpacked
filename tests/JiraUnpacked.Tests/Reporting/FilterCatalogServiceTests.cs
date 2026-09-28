@@ -14,6 +14,7 @@ public sealed class FilterCatalogServiceTests
         // FilterOperator is append-only (NotIn/IsNotNull/NotContains went last), so ordinal order
         // would put "is empty" between "is any of" and "is none of" in the editor.
         Assert.Equal(new[] { "Eq", "Neq", "In", "NotIn", "IsNull", "IsNotNull" }, OpsOf("status"));
+        Assert.Equal(new[] { "Eq", "Neq", "In", "NotIn", "IsNull", "IsNotNull" }, OpsOf("statusCategory"));
         Assert.Equal(new[] { "Eq", "Neq", "Lt", "Lte", "Gt", "Gte", "Between", "IsNull", "IsNotNull" }, OpsOf("storyPoints"));
         Assert.Equal(new[] { "Lt", "Lte", "Gt", "Gte", "Between", "InLast", "NotInLast", "InPeriod" }, OpsOf("createdAt"));
         Assert.Equal(new[] { "Lt", "Lte", "Gt", "Gte", "Between", "InLast", "NotInLast", "InPeriod" }, OpsOf("updatedAt"));
