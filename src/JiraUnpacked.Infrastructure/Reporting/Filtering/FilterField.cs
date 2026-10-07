@@ -4,7 +4,7 @@ using JiraUnpacked.Domain.Entities;
 
 namespace JiraUnpacked.Infrastructure.Reporting.Filtering;
 
-internal enum FieldType { DictName, Decimal, DateTime, Text, ParentRef, StatusCategory }
+internal enum FieldType { DictName, Decimal, DateTime, Text, ParentRef, StatusCategory, History }
 
 /// <summary>A filterable field: its type, its allowed operators, and (for the builder) the member selector.</summary>
 internal sealed record FilterField(
@@ -52,6 +52,11 @@ internal static class FilterFields
             ["parent"]     = new("parent", FieldType.ParentRef,
                                  Ops(FilterOperator.Eq, FilterOperator.IsNull, FilterOperator.IsNotNull),
                                  (Expression<Func<Issue, string?>>)(i => i.ParentJiraIssueId)),
+            // Not a column of Issue: what happened to one of its fields, answered from
+            // IssueChangeHistory (IssueFilterTranslator.History). The selector is the correlation key.
+            ["history"]    = new("history", FieldType.History,
+                                 Ops(FilterOperator.Changed),
+                                 (Expression<Func<Issue, string>>)(i => i.JiraIssueId)),
         };
 
     private static FilterField Dict(string name, Expression<Func<Issue, Guid?>> sel) =>

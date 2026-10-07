@@ -34,18 +34,26 @@ public static class FilterLookups
 public interface IIssueFilterTranslator
 {
     /// <summary>Flat AND over a condition list — the original FR-E4 shape. Empty = unfiltered.</summary>
+    /// <param name="history">
+    /// The tenant-scoped changelog the history conditions query (the compiler passes
+    /// <c>_db.IssueChangeHistory</c>). Last and optional so every existing positional call keeps
+    /// compiling; without it a history condition is refused, never silently dropped.
+    /// </param>
     Task<FilterBuildResult> BuildAsync(
-        IReadOnlyList<FilterCondition> conditions, DictNameResolver resolveDict, CancellationToken ct = default);
+        IReadOnlyList<FilterCondition> conditions, DictNameResolver resolveDict, CancellationToken ct = default,
+        IQueryable<IssueChangeHistory>? history = null);
 
     /// <summary>Boolean tree. Every group must be non-empty; the guards are counted over the whole tree.</summary>
+    /// <param name="history">As for the flat overload.</param>
     Task<FilterBuildResult> BuildAsync(
-        FilterGroup group, DictNameResolver resolveDict, CancellationToken ct = default);
+        FilterGroup group, DictNameResolver resolveDict, CancellationToken ct = default,
+        IQueryable<IssueChangeHistory>? history = null);
 }
 
 /// <summary>
 /// Turns a request's filter into a predicate over Issue. Split by concern across partial files:
 /// this one walks the tree, enforces the guards and dispatches by field type; .Dictionary,
-/// .Dates and .Scalars build each type's conditions; .Expressions holds the shared helpers.
+/// .Dates, .Scalars and .History build each type's conditions; .Expressions holds the shared helpers.
 /// </summary>
 public sealed partial class IssueFilterTranslator : IIssueFilterTranslator
 {
@@ -56,10 +64,11 @@ public sealed partial class IssueFilterTranslator : IIssueFilterTranslator
 
     /// <summary>Running totals for the guards. Counted over the WHOLE tree: a per-node limit is
     /// defeated by adding nodes, which is the shape a hostile request would take.</summary>
-    private sealed class Budget { public int Conditions; public int Groups; }
+    private sealed class Budget { public int Conditions; public int Groups; public int History; }
 
     public async Task<FilterBuildResult> BuildAsync(
-        IReadOnlyList<FilterCondition> conditions, DictNameResolver resolveDict, CancellationToken ct = default)
+        IReadOnlyList<FilterCondition> conditions, DictNameResolver resolveDict, CancellationToken ct = default,
+        IQueryable<IssueChangeHistory>? history = null)
     {
         // Preserved verbatim from FR-E4: an omitted or empty 'conditions' has always meant
         // "no filter", never "an empty group". Only a group a caller actually wrote is rejected
@@ -67,17 +76,18 @@ public sealed partial class IssueFilterTranslator : IIssueFilterTranslator
         if (conditions.Count == 0) return new FilterBuildResult(MatchAll, null);
 
         return await BuildAsync(
-            new FilterGroup(FilterLogic.And, conditions.ToList(), null), resolveDict, ct);
+            new FilterGroup(FilterLogic.And, conditions.ToList(), null), resolveDict, ct, history);
     }
 
     public async Task<FilterBuildResult> BuildAsync(
-        FilterGroup group, DictNameResolver resolveDict, CancellationToken ct = default)
+        FilterGroup group, DictNameResolver resolveDict, CancellationToken ct = default,
+        IQueryable<IssueChangeHistory>? history = null)
     {
         // A root switched off — or one whose every part is switched off — is "no filter": the
         // user turned the parts off on purpose. A group WRITTEN empty is still refused below.
         if (group.Disabled == true) return new FilterBuildResult(MatchAll, null);
 
-        var (predicate, error) = await BuildGroupAsync(group, resolveDict, new Budget(), 1, ct);
+        var (predicate, error) = await BuildGroupAsync(group, resolveDict, history, new Budget(), 1, ct);
         return error is not null ? Err(error) : new FilterBuildResult(predicate ?? MatchAll, null);
     }
 
@@ -86,7 +96,8 @@ public sealed partial class IssueFilterTranslator : IIssueFilterTranslator
     /// group is absent, and its parent joins only its other parts.
     /// </summary>
     private async Task<(Expression<Func<Issue, bool>>? Predicate, string? Error)> BuildGroupAsync(
-        FilterGroup group, DictNameResolver resolveDict, Budget budget, int depth, CancellationToken ct)
+        FilterGroup group, DictNameResolver resolveDict, IQueryable<IssueChangeHistory>? history,
+        Budget budget, int depth, CancellationToken ct)
     {
         if (depth > MaxDepth)
             return (null, $"A filter may nest at most {MaxDepth} levels deep.");
@@ -110,15 +121,18 @@ public sealed partial class IssueFilterTranslator : IIssueFilterTranslator
         {
             if (++budget.Conditions > MaxConditions)
                 return (null, $"A filter may have at most {MaxConditions} conditions.");
+            // Each history condition is a correlated subquery over the largest table: capped on its own too.
+            if (IsHistory(c) && ++budget.History > MaxHistoryConditions)
+                return (null, $"A filter may have at most {MaxHistoryConditions} history conditions.");
 
-            var (predicate, error) = await BuildConditionAsync(c, resolveDict, ct);
+            var (predicate, error) = await BuildConditionAsync(c, resolveDict, history, ct);
             if (error is not null) return (null, error);
             parts.Add(predicate!);
         }
 
         foreach (var g in groups.Where(g => g.Disabled != true))
         {
-            var (predicate, error) = await BuildGroupAsync(g, resolveDict, budget, depth + 1, ct);
+            var (predicate, error) = await BuildGroupAsync(g, resolveDict, history, budget, depth + 1, ct);
             if (error is not null) return (null, error);
             if (predicate is not null) parts.Add(predicate);
         }
@@ -133,7 +147,7 @@ public sealed partial class IssueFilterTranslator : IIssueFilterTranslator
     }
 
     private async Task<(Expression<Func<Issue, bool>>?, string?)> BuildConditionAsync(
-        FilterCondition c, DictNameResolver resolveDict, CancellationToken ct)
+        FilterCondition c, DictNameResolver resolveDict, IQueryable<IssueChangeHistory>? history, CancellationToken ct)
     {
         if (!FilterFields.All.TryGetValue(c.Field, out var field))
             return (null, $"Unknown field '{c.Field}'.");
@@ -148,6 +162,7 @@ public sealed partial class IssueFilterTranslator : IIssueFilterTranslator
             FieldType.DateTime  => BuildDate(field, c),
             FieldType.Text      => BuildText(field, c),
             FieldType.ParentRef => BuildParent(field, c),
+            FieldType.History   => BuildHistory(c, history),
             _ => (null, "Unsupported field type."),
         };
     }
