@@ -21,7 +21,7 @@ public sealed class FilterCatalogServiceTests
         Assert.Equal(new[] { "Contains", "NotContains", "StartsWith", "IsNull", "IsNotNull" }, OpsOf("summary"));
         Assert.Equal(new[] { "Eq", "In", "NotIn", "Contains", "StartsWith" }, OpsOf("jiraKey"));
         Assert.Equal(new[] { "Eq", "IsNull", "IsNotNull" }, OpsOf("parent"));
-        Assert.Equal(new[] { "Was", "Changed" }, OpsOf("history"));
+        Assert.Equal(new[] { "Was", "Changed", "ChangeCount" }, OpsOf("history"));
     }
 
     [Fact]

@@ -106,7 +106,7 @@ public sealed class FilterCatalogEndpointTests : IClassFixture<JiraUnpackedApiFa
         Assert.True(new HashSet<string> { "Eq", "IsNull", "IsNotNull" }.SetEquals(parent.Operators));
 
         var history = catalog.Fields.Single(f => f.Name == "history");
-        Assert.True(new HashSet<string> { "Was", "Changed" }.SetEquals(history.Operators));
+        Assert.True(new HashSet<string> { "Was", "Changed", "ChangeCount" }.SetEquals(history.Operators));
 
         // Exact per-field `type`, and — via SetEquals against
         // ExpectedFieldTypes.Values.Distinct() — the exact distinct set of
