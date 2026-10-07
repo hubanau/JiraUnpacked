@@ -28,6 +28,7 @@ const CATALOG: FilterCatalog = {
   maxInValues: 100,
   maxGroups: 10,
   maxDepth: 3,
+  maxHistoryConditions: 5,
 };
 
 describe('fieldNames', () => {
@@ -122,10 +123,14 @@ describe('richer values', () => {
       .toEqual(['between', 'in the last', 'more than … ago', 'in period']);
   });
 
+  it('names the history operators in words', () => {
+    expect((['Was', 'Changed', 'ChangeCount'] as const).map(operatorLabel)).toEqual(['was', 'changed', 'number of changes']);
+  });
+
   it('gives status category the value picker, like a dictionary field', () => {
     const catalog: FilterCatalog = {
       fields: [{ name: 'statusCategory', type: 'StatusCategory', operators: ['Eq', 'In'] }],
-      maxConditions: 20, maxInValues: 100, maxGroups: 10, maxDepth: 3,
+      maxConditions: 20, maxInValues: 100, maxGroups: 10, maxDepth: 3, maxHistoryConditions: 5,
     };
     expect(isDictionaryField(catalog, 'statusCategory')).toBe(true);
   });

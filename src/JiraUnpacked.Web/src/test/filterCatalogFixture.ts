@@ -23,9 +23,11 @@ export const FILTER_CATALOG: FilterCatalog = {
     { name: 'summary', type: 'Text', operators: ['Contains', 'NotContains', 'StartsWith', 'IsNull', 'IsNotNull'] },
     { name: 'jiraKey', type: 'Text', operators: ['Eq', 'In', 'NotIn', 'Contains', 'StartsWith'] },
     { name: 'parent', type: 'ParentRef', operators: ['Eq', 'IsNull', 'IsNotNull'] },
+    { name: 'history', type: 'History', operators: ['Was', 'Changed', 'ChangeCount'] },
   ],
   maxConditions: 20,
   maxInValues: 100,
   maxGroups: 10,
   maxDepth: 3,
+  maxHistoryConditions: 5,
 };

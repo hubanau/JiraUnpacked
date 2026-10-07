@@ -57,9 +57,9 @@ export function GroupEditor({
     if (counts.groups + extra.groups > catalog.maxGroups) return `Limit: ${catalog.maxGroups} groups`;
     return undefined;
   };
-  const addConditionHint = limitHint({ conditions: 1, groups: 0 });
+  const addConditionHint = limitHint({ conditions: 1, groups: 0, history: 0 });
   // A new group arrives with one blank condition, so it needs room for both.
-  const addGroupHint = limitHint({ conditions: 1, groups: 1 });
+  const addGroupHint = limitHint({ conditions: 1, groups: 1, history: 0 });
   const duplicateHint = limitHint(countEnabled(group));
   // Switching a disabled group back on adds back whatever it holds (respecting ITS children's own
   // on/off state) — counted as if only its own `disabled` flag had already flipped.

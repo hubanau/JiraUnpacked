@@ -12,7 +12,7 @@ import { noSavedViews } from '../../test/viewsFixture';
 
 const CATALOG: FilterCatalog = {
   fields: [{ name: 'status', type: 'DictName', operators: ['Eq', 'Neq', 'In', 'IsNull'] }],
-  maxConditions: 20, maxInValues: 100, maxGroups: 10, maxDepth: 3,
+  maxConditions: 20, maxInValues: 100, maxGroups: 10, maxDepth: 3, maxHistoryConditions: 5,
 };
 
 const ITEM = {
