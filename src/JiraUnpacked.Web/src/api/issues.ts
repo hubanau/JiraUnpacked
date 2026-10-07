@@ -222,6 +222,30 @@ export const getFilterValues = (projectId: string, field: string) =>
   apiFetch<FilterValues>(
     `/api/projects/${projectId}/filter-values?field=${encodeURIComponent(field)}`);
 
+export interface HistoryFieldOption {
+  name: string;
+  /** Changelog rows this project has for the field. */
+  count: number;
+}
+
+/** The changelog fields this project has history for, most-changed first (at most 200). */
+export const getHistoryFields = (projectId: string) =>
+  apiFetch<{ fields: HistoryFieldOption[] }>(`/api/projects/${projectId}/history-fields`);
+
+/** `value`: the From/To values, Jira's ", "-joined lists split into elements. `author`: who made the changes. */
+export type HistoryValueKind = 'value' | 'author';
+
+export interface HistoryValueList {
+  values: FilterValueOption[];
+  /** Changelog sides (value) or rows (author) with nothing in them: the count behind (Empty). */
+  emptyCount: number;
+}
+
+/** One history field's values or authors in this project, by name (at most 1000). An unknown field lists nothing. */
+export const getHistoryValues = (projectId: string, field: string, kind: HistoryValueKind) =>
+  apiFetch<HistoryValueList>(
+    `/api/projects/${projectId}/history-values?field=${encodeURIComponent(field)}&kind=${kind}`);
+
 export interface ExportView {
   /** The pruned tree the list was queried with; undefined = no filter. */
   filter?: FilterGroup;
