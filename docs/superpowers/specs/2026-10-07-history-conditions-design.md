@@ -35,8 +35,10 @@ A new pseudo-field **`history`** (field type `History`) with three new operators
   names it. A name no row uses simply matches nothing (it is data, not a closed catalog), except
   that `ChangeCount` with `Eq 0` then matches everything — correct by definition.
 - Value matching (`values`, `from`, `to`): a string matches a stored value if it is **equal** or is
-  one **element** of a `", "`-joined list (`v`, `v, …`, `…, v`, `…, v, …`), so "Sprint was PLAT 101"
-  works for multi-sprint entries. `null` in a list means (Empty): a null or empty stored value.
+  one **element** of a joined list (`v`, `v, …`, `…, v`, `…, v, …`), so "Sprint was PLAT 101"
+  works for multi-sprint entries. The separator is `", "` for every field **except `labels`, which Jira
+  writes space-separated** (`"DataOps ansible tested"`; labels cannot contain spaces) — one helper,
+  `ListSeparatorFor(field)`, decides it for matching and for value-list splitting alike. `null` in a list means (Empty): a null or empty stored value.
   Strings are matched exactly (no case folding), lists ≤ 100 entries, each ≤ 255 chars.
 - `by`: author display names, exact match; `null` not allowed.
 - `compare` ∈ `Eq, Neq, Gt, Gte, Lt, Lte`; `count` integer 0…10000.
@@ -83,7 +85,7 @@ in a migration — measured first, added only if needed.
   row counts for this project, most-changed first, capped at 200.
 - `GET /api/projects/{id}/history-values?field=<historyField>&kind=value|author` →
   `{ values: [{ name, count }], emptyCount }`: for `value`, distinct elements of From/To values
-  (lists split on `", "` in memory after a grouped, capped read), for `author`, distinct authors;
+  (lists split with `ListSeparatorFor(field)` in memory after a grouped, capped read), for `author`, distinct authors;
   sorted by name, capped at 1000. Unknown field → empty list (not 400).
 Both tenant-scoped, 404 for unknown project, like `filter-values`.
 
