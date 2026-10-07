@@ -59,6 +59,12 @@ internal static class RelativeDates
         }
         catch (TimeZoneNotFoundException) { return false; }
         catch (InvalidTimeZoneException) { return false; }
+        // On Linux the id is a path under the tzdata directory. An id naming a directory there
+        // ("Europe", "America/Argentina", "Etc") throws SecurityException rather than
+        // TimeZoneNotFoundException; unreadable or vanishing files surface as these two.
+        catch (System.Security.SecurityException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        catch (IOException) { return false; }
     }
 
     /// <summary>

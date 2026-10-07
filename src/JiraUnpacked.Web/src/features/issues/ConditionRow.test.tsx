@@ -238,6 +238,14 @@ describe('ConditionRow — ranges and relative dates', () => {
     expect(screen.getByLabelText('Amount for condition 1')).toHaveValue(null);
   });
 
+  it('bounds the amount from 1 to 3650, as the server does', () => {
+    renderRow({ field: 'updatedAt', op: 'InLast', value: { amount: 14, unit: 'days' } });
+
+    const amount = screen.getByLabelText('Amount for condition 1');
+    expect(amount).toHaveAttribute('min', '1');
+    expect(amount).toHaveAttribute('max', '3650');
+  });
+
   it('reads "more than [14] [days] ago" and keeps the amount when flipped', async () => {
     const user = userEvent.setup();
     const row = renderRow({ field: 'updatedAt', op: 'InLast', value: { amount: 3, unit: 'months' } });
@@ -268,6 +276,18 @@ describe('ConditionRow — ranges and relative dates', () => {
     inZone('America/New_York');   // the zone was captured when the operator was chosen, not now
     await user.selectOptions(screen.getByLabelText('Period for condition 1'), 'lastMonth');
     expect(row.last()).toEqual({ field: 'createdAt', op: 'InPeriod', value: { period: 'lastMonth', timeZone: 'Europe/Warsaw' } });
+  });
+
+  it('names the browser’s zone on an unfinished period row — the zone picking one will capture', async () => {
+    inZone('Europe/Warsaw');
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'updatedAt', op: 'InPeriod' });
+
+    expect(screen.getByText('Europe/Warsaw')).toBeInTheDocument();
+    expect(screen.queryByText('UTC')).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Period for condition 1'), 'today');
+    expect(row.last()).toEqual({ field: 'updatedAt', op: 'InPeriod', value: { period: 'today', timeZone: 'Europe/Warsaw' } });
   });
 
   it('keeps a zoneless period from a link zoneless — it means UTC and says so', async () => {

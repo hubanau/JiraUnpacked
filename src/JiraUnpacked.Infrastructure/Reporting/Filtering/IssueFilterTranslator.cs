@@ -28,10 +28,11 @@ public static class FilterLookups
     public const string SprintState = "sprint.state";
 
     /// <summary>names = status category names → ids of the statuses in those categories.</summary>
-    public const string StatusCategory = "statusCategory";
+    /// <remarks>Dotted like the others, so it cannot be mistaken for the 'statusCategory' field.</remarks>
+    public const string StatusCategory = "status.category";
 
-    /// <summary>names ignored → ids of the statuses with no category (null or blank).</summary>
-    public const string UncategorisedStatus = "statusCategory.none";
+    /// <summary>names ignored → ids of the statuses with no category (null, empty or whitespace).</summary>
+    public const string UncategorisedStatus = "status.category.none";
 }
 
 public interface IIssueFilterTranslator
@@ -451,6 +452,11 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
             if (!TryReadDate(t, out var d, out toDateOnly)) return (null, notDates);
             to = d;
         }
+        // "Through 9999-12-31" is through the last day a DateTime can hold: it has no next midnight
+        // (AddDays would overflow), and it excludes no instant at all — so it is an open end,
+        // which is exactly what it means, rather than a 400 for a date the parser accepted.
+        if (toDateOnly && to!.Value.Date == DateTime.MaxValue.Date) to = null;
+
         // Judged against the effective end, so "from 10:00 on the 30th to the 30th" is not reversed.
         if (from is { } a && to is { } b && (toDateOnly ? a >= b.AddDays(1) : a > b))
             return (null, $"'Between' on '{c.Field}': 'from' is after 'to'.");
@@ -461,7 +467,8 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
             cmp = And(cmp, toDateOnly
                 ? Expression.LessThan(body, Expression.Constant(hi.AddDays(1)))
                 : Expression.LessThanOrEqual(body, Expression.Constant(hi)));
-        return (Lambda(cmp!, p), null);
+        // Only an open-ended `to` with no `from` leaves nothing to compare: every issue matches.
+        return (Lambda(cmp ?? Expression.Constant(true), p), null);
     }
 
     /// <summary>InLast: `x ≥ now − amount·unit`. NotInLast: `x < now − amount·unit` ("more than … ago").</summary>
@@ -478,7 +485,9 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
         if (!RelativeDates.Units.Contains(unit))
             return (null, $"Unknown unit '{unit}'. Use one of: {string.Join(", ", RelativeDates.Units)}.");
 
-        var since = Expression.Constant(RelativeDates.Subtract(_clock.UtcNow, amount, unit));
+        // A parameter, not a constant: the boundary moves on every request, and a constant would
+        // make each request a new query to EF — a compiled-query cache entry per tick, never reused.
+        var since = Parameter(RelativeDates.Subtract(_clock.UtcNow, amount, unit));
         return (Lambda(c.Op == FilterOperator.InLast
             ? Expression.GreaterThanOrEqual(body, since)
             : Expression.LessThan(body, since), p), null);
@@ -577,6 +586,19 @@ public sealed class IssueFilterTranslator : IIssueFilterTranslator
         typeof(NpgsqlDbFunctionsExtensions).GetMethod(
             nameof(NpgsqlDbFunctionsExtensions.ILike),
             new[] { typeof(DbFunctions), typeof(string), typeof(string), typeof(string) })!;
+
+    /// <summary>
+    /// A value EF sends as a query parameter rather than inlining: a member read off a captured
+    /// object, which is how EF sees a closure variable.
+    /// </summary>
+    private static MemberExpression Parameter<T>(T value) =>
+        Expression.Field(Expression.Constant(new Captured<T>(value)), nameof(Captured<T>.Value));
+
+    private sealed class Captured<T>
+    {
+        public readonly T Value;
+        public Captured(T value) => Value = value;
+    }
 
     private static System.Reflection.MethodInfo ListContains<T>() =>
         typeof(List<T>).GetMethod(nameof(List<T>.Contains), new[] { typeof(T) })!;

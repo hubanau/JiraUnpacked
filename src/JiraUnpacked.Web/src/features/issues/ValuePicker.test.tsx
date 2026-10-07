@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import type { ListValue } from '../../api/issues';
+import type { ListValue, SmartSprintKey } from '../../api/issues';
 import { MultiValuePicker, SingleValueSelect } from './ValuePicker';
 
 const OPTIONS = [{ name: 'Backlog', count: 42 }, { name: 'In Progress', count: 5 }];
@@ -190,6 +190,27 @@ describe('Smart section', () => {
     await user.type(screen.getByRole('searchbox'), 'clos');
 
     expect(screen.getAllByRole('checkbox').map((b) => b.closest('label')?.textContent)).toEqual(['Closed sprints 4']);
+  });
+
+  it('skips a smart value this SPA cannot name, in both pickers', async () => {
+    // A newer server may offer a key this build has no label for: skipped, never shown raw.
+    const withUnknown = [...SMART, { key: 'nextQuarter' as unknown as SmartSprintKey, label: 'Next quarter', count: 6 }];
+
+    const user = userEvent.setup();
+    renderMulti([], 100, withUnknown);
+    await user.click(screen.getByText('Choose values'));
+    expect(within(screen.getByRole('group', { name: 'Smart' })).getAllByRole('checkbox')).toHaveLength(4);
+    expect(screen.queryByText(/next quarter|nextQuarter/i)).not.toBeInTheDocument();
+
+    render(
+      <SingleValueSelect aria-label="Value" value="" options={OPTIONS} emptyCount={7} smart={withUnknown}
+        onPick={vi.fn()} onPickEmpty={vi.fn()} onPickSmart={vi.fn()} />,
+    );
+    const single = within(screen.getByLabelText('Value')).getAllByRole('option').map((o) => o.textContent);
+    expect(single).toEqual([
+      '— choose —', '(Empty) (7)', 'Active sprint (1)', 'Future sprints (0)', 'Open sprints (active + future) (1)',
+      'Closed sprints (4)', 'Backlog (42)', 'In Progress (5)',
+    ]);
   });
 
   it('offers the smart values in the single select, and shows the chosen one', async () => {

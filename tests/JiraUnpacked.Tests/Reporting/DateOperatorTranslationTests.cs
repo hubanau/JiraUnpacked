@@ -2,8 +2,11 @@ using System.Globalization;
 using System.Text.Json;
 using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Entities;
+using JiraUnpacked.Infrastructure.Persistence;
 using JiraUnpacked.Infrastructure.Reporting.Filtering;
+using JiraUnpacked.Infrastructure.Tenancy;
 using JiraUnpacked.Tests.Security;
+using Microsoft.EntityFrameworkCore;
 
 namespace JiraUnpacked.Tests.Reporting;
 
@@ -84,6 +87,34 @@ public sealed class DateOperatorTranslationTests
     }
 
     [Theory]
+    [InlineData(FilterOperator.InLast)]
+    [InlineData(FilterOperator.NotInLast)]
+    public async Task InLast_sends_its_moving_boundary_as_a_parameter_so_ef_reuses_the_query(FilterOperator op)
+    {
+        // Two requests a minute apart. Inlined as a literal, each boundary would be a different
+        // query to EF's compiled-query cache — a new entry per request, never reused.
+        static async Task<string> Sql(DateTime now, FilterOperator op)
+        {
+            var built = await new IssueFilterTranslator(new FakeClock(now))
+                .BuildAsync(new[] { Last(14, "days", op) }, NoDictionary, CancellationToken.None);
+            var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql("Host=unused").Options;
+            await using var db = new AppDbContext(options, new NullCurrentTenant());
+            return db.Issues.Where(built.Predicate!).ToQueryString();
+        }
+
+        var first = await Sql(Now, op);
+        var second = await Sql(Now.AddMinutes(1), op);
+
+        // The boundary appears only in the parameter header, never in the statement itself.
+        static string Statement(string sql) =>
+            string.Join('\n', sql.Split('\n').Where(l => !l.StartsWith("--", StringComparison.Ordinal)));
+        Assert.Contains("2026-09-09T12:00:00", first);                   // the header: @p = now − 14 days
+        Assert.DoesNotContain("2026-09-09", Statement(first));
+        Assert.Matches(@"""JiraUpdatedAt"" (>=|<) @", Statement(first));
+        Assert.Equal(Statement(first), Statement(second));               // one query shape, one cache entry
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(3651)]
     public async Task InLast_refuses_an_amount_outside_1_to_3650(int amount) =>
@@ -139,6 +170,7 @@ public sealed class DateOperatorTranslationTests
     [InlineData("Nope/Nowhere")]
     [InlineData("../../etc/passwd")]
     [InlineData("Central European Standard Time")]
+    [InlineData("Europe")]
     public async Task InPeriod_refuses_a_time_zone_that_is_not_an_iana_id_this_host_has(string zone) =>
         Assert.Contains("Unknown time zone", await Error(Period("today", zone)));
 
@@ -190,6 +222,23 @@ public sealed class DateOperatorTranslationTests
         // 10:00 on the 30th is inside "to 2026-09-30", which runs to the end of that day.
         var pred = await Pred(Between("updatedAt", "2026-09-30T10:00:00Z", "2026-09-30"));
         Assert.True(pred(At(U(2026, 9, 30, 11))));
+    }
+
+    [Fact]
+    public async Task Between_dates_through_the_last_representable_day_is_an_open_end()
+    {
+        // "Through 9999-12-31" has no next midnight to stop before; it once overflowed into a 500.
+        var bounded = await Pred(Between("updatedAt", "2026-09-01", "9999-12-31"));
+        Assert.True(bounded(At(U(2026, 9, 1))));
+        Assert.True(bounded(At(DateTime.SpecifyKind(DateTime.MaxValue, DateTimeKind.Utc))));
+        Assert.False(bounded(At(U(2026, 8, 31, 23, 59, 59))));
+
+        var unbounded = await Pred(Between("updatedAt", null, "9999-12-31"));
+        Assert.True(unbounded(At(U(1, 1, 1))));
+        Assert.True(unbounded(At(U(2099, 1, 1))));
+
+        // A `from` on that same last day is not "after" it.
+        Assert.True((await Pred(Between("updatedAt", "9999-12-31T10:00:00Z", "9999-12-31")))(At(U(9999, 12, 31, 11))));
     }
 
     [Fact]

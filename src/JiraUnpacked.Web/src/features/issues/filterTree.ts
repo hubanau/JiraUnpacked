@@ -3,7 +3,7 @@ import type {
 } from '../../api/issues';
 import { OPERATOR_LABELS } from './filterCatalogHelpers';
 import {
-  DEFAULT_PERIOD, DEFAULT_RELATIVE, isRelativeAmount, isScalar, isSmartValue, readPeriod, readRelativeAmount,
+  DEFAULT_PERIOD, DEFAULT_RELATIVE, MAX_RELATIVE_AMOUNT, isRelativeAmount, isScalar, isSmartValue, readPeriod, readRelativeAmount,
   readSmart,
 } from './valueShapes';
 
@@ -78,7 +78,7 @@ function copyValue<T>(v: T): T {
 /**
  * A condition the user has started but not finished is unfinished, not invalid: it is left out
  * of the request rather than sent to earn a 400 mid-edit. A null `value` is (Empty) and complete.
- * Between needs at least one bound; in the last / more than … ago a whole amount of at least 1;
+ * Between needs at least one bound; in the last / more than … ago a whole amount from 1 to 3650;
  * in period a period.
  */
 export function isCompleteCondition(c: FilterCondition): boolean {
@@ -87,7 +87,7 @@ export function isCompleteCondition(c: FilterCondition): boolean {
   if (takesRange(c.op)) return (c.values ?? []).some(isBound);
   if (takesAmount(c.op)) {
     const rel = readRelativeAmount(c.value);
-    return rel !== undefined && Number.isInteger(rel.amount) && rel.amount >= 1;
+    return rel !== undefined && Number.isInteger(rel.amount) && rel.amount >= 1 && rel.amount <= MAX_RELATIVE_AMOUNT;
   }
   if (takesPeriod(c.op)) return readPeriod(c.value) !== undefined;
   return c.value !== undefined && c.value !== '';

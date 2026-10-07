@@ -154,6 +154,9 @@ public sealed class RelativeDatesTests
     [InlineData("../../etc/passwd")]                 // a path: never handed to the OS
     [InlineData("Central European Standard Time")]   // a Windows id: resolves on Windows only
     [InlineData("Europe/Warsaw\n")]                  // a trailing newline is not part of an id
+    [InlineData("Europe")]                           // tzdata directories: on Linux these throw
+    [InlineData("America/Argentina")]                // SecurityException, not TimeZoneNotFound,
+    [InlineData("Etc")]                              // which once escaped as a 500
     public void Anything_else_is_refused_on_every_host(string id) =>
         Assert.False(RelativeDates.TryResolveZone(id, out _));
 

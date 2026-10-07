@@ -51,6 +51,59 @@ public sealed class SmartSprintTests : IClassFixture<JiraUnpackedApiFactory>, IA
     }
 
     [Fact]
+    public async Task Several_smart_values_in_one_list_are_one_set()
+    {
+        var s = await SeedAsync();
+        Task<string[]> Keys(object c) => RicherFilterTestData.KeysAsync(s.Client, s.Ctx.ProjectId, c);
+
+        Assert.Equal(new[] { "S-A", "S-C", "S-N" }, await Keys(SprintIn("In", Smart("active"), Smart("closed"))));
+        Assert.Equal(new[] { "S-A", "S-F" }, await Keys(SprintIn("In", Smart("open"), Smart("active"))));   // overlapping
+        // Every state named: "is none of" leaves nothing, not even the sprintless issue (empty rule).
+        Assert.Empty(await Keys(SprintIn("NotIn", Smart("open"), Smart("closed"))));
+    }
+
+    [Fact]
+    public async Task A_malformed_smart_value_on_is_is_a_400()
+    {
+        var s = await SeedAsync();
+
+        Assert.Contains("{\"smart\"", await RicherFilterTestData.RejectionAsync(
+            s.Client, s.Ctx.ProjectId, SprintIs("Eq", new { smart = 5 })));
+        Assert.Contains("{\"smart\"", await RicherFilterTestData.RejectionAsync(
+            s.Client, s.Ctx.ProjectId, SprintIs("Neq", new { name = "Sprint 12" })));
+        Assert.Contains("'soon'", await RicherFilterTestData.RejectionAsync(
+            s.Client, s.Ctx.ProjectId, SprintIs("Eq", Smart("soon"))));
+    }
+
+    [Fact]
+    public async Task Another_tenants_active_sprint_and_categories_neither_count_nor_match()
+    {
+        var (clientA, tenantA) = await MetricsTestData.AuthedTenantAsync(_factory);
+        var (_, tenantB) = await MetricsTestData.AuthedTenantAsync(_factory);
+        var a = await MetricsTestData.SeedProjectAsync(tenantA);
+        var b = await MetricsTestData.SeedProjectAsync(tenantB);
+
+        var bActive = await RicherFilterTestData.SeedSprintAsync(b, "B Sprint", "active");
+        var bShipped = await RicherFilterTestData.SeedStatusAsync(b, "B Shipped", "shipped");
+        await RicherFilterTestData.SeedIssueAsync(b, "B-1", statusId: bShipped, sprintId: bActive);
+        // A's issue pointing at B's rows. No API path writes this; it stands in for a lookup that
+        // leaks across tenants — only tenant-scoped lookups keep it from matching or counting.
+        await RicherFilterTestData.SeedIssueAsync(a, "A-X", statusId: bShipped, sprintId: bActive);
+        await RicherFilterTestData.SeedIssueAsync(a, "A-1", statusId: a.DoneStatusId);
+
+        Task<string[]> Keys(object c) => RicherFilterTestData.KeysAsync(clientA, a.ProjectId, c);
+        Assert.Empty(await Keys(SprintIn("In", Smart("active"))));
+        Assert.Empty(await Keys(SprintIs("Eq", Smart("open"))));
+        Assert.Empty(await Keys(new { field = "statusCategory", op = "Eq", value = "shipped" }));
+        Assert.Empty(await Keys(new { field = "statusCategory", op = "In", values = new[] { "shipped" } }));
+
+        var sprint = await clientA.GetFromJsonAsync<JsonElement>($"/api/projects/{a.ProjectId}/filter-values?field=sprint");
+        Assert.All(sprint.GetProperty("smart").EnumerateArray(), x => Assert.Equal(0, x.GetProperty("count").GetInt32()));
+        var category = await clientA.GetFromJsonAsync<JsonElement>($"/api/projects/{a.ProjectId}/filter-values?field=statusCategory");
+        Assert.DoesNotContain("shipped", category.GetProperty("values").EnumerateArray().Select(v => v.GetProperty("name").GetString()));
+    }
+
+    [Fact]
     public async Task A_string_still_means_a_sprint_name()
     {
         var s = await SeedAsync();
@@ -93,7 +146,7 @@ public sealed class SmartSprintTests : IClassFixture<JiraUnpackedApiFactory>, IA
         var smart = sprint.GetProperty("smart").EnumerateArray()
             .Select(x => (x.GetProperty("key").GetString(), x.GetProperty("label").GetString(), x.GetProperty("count").GetInt32()))
             .ToArray();
-        Assert.Equal(new[]
+        Assert.Equal(new (string?, string?, int)[]
         {
             ("active", "Active sprint", 1),
             ("future", "Future sprints", 1),

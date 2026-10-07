@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Entities;
@@ -107,6 +108,27 @@ public sealed class StatusCategoryFilterTests
         Assert.True(isNotNull(With(DoneId)));
         Assert.False(isNotNull(With(LimboId)));
         Assert.False(isNotNull(With(null)));
+    }
+
+    public static TheoryData<string> LookupKeys()
+    {
+        var data = new TheoryData<string>();
+        foreach (var f in typeof(FilterLookups).GetFields(BindingFlags.Public | BindingFlags.Static).Where(f => f.IsLiteral))
+            data.Add((string)f.GetRawConstantValue()!);
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(LookupKeys))]
+    public async Task A_lookup_key_is_never_a_field_a_request_can_name(string lookup)
+    {
+        // The lookups are the resolver's private vocabulary. A key that is also a field name (as
+        // "statusCategory" once was) reads as if a request could reach it.
+        Assert.False(FilterFields.All.ContainsKey(lookup), $"'{lookup}' is also a filter field.");
+
+        var r = await Sut.BuildAsync(new[] { new FilterCondition(lookup, FilterOperator.In, null,
+            new List<JsonElement> { J("Done") }) }, Resolver, CancellationToken.None);
+        Assert.Equal($"Unknown field '{lookup}'.", r.Error);
     }
 
     [Fact]

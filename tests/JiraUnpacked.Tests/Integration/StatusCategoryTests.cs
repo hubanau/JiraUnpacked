@@ -86,4 +86,34 @@ public sealed class StatusCategoryTests : IClassFixture<JiraUnpackedApiFactory>,
         Assert.StartsWith("Key,Category\r\n", csv);
         Assert.Contains("C-D,done\r\n", csv);
     }
+
+    [Fact]
+    public async Task A_blank_category_is_no_category_everywhere()
+    {
+        // One rule for "no category": null, empty or whitespace. The column shows the dash, the
+        // filter's (Empty) matches it, and the value list counts it as empty, never as a name.
+        var (client, tenant) = await MetricsTestData.AuthedTenantAsync(_factory);
+        var ctx = await MetricsTestData.SeedProjectAsync(tenant);
+        var empty = await RicherFilterTestData.SeedStatusAsync(ctx, "Empty Category", "");
+        var spaces = await RicherFilterTestData.SeedStatusAsync(ctx, "Spaces Category", "   ");
+        await RicherFilterTestData.SeedIssueAsync(ctx, "B-E", statusId: empty);
+        await RicherFilterTestData.SeedIssueAsync(ctx, "B-S", statusId: spaces);
+        await RicherFilterTestData.SeedIssueAsync(ctx, "B-D", statusId: ctx.DoneStatusId);
+
+        var resp = await client.PostAsJsonAsync($"/api/projects/{ctx.ProjectId}/issues/query",
+            new { sortBy = "statusCategory", sortDescending = false });
+        var page = (await resp.Content.ReadFromJsonAsync<PagedResult<IssueListItem>>())!;
+        Assert.Null(page.Items.Single(i => i.JiraKey == "B-E").StatusCategory);
+        Assert.Null(page.Items.Single(i => i.JiraKey == "B-S").StatusCategory);
+        Assert.Equal("B-D", page.Items[0].JiraKey);   // blanks sort with the empties, after every name
+
+        Task<string[]> Keys(object c) => RicherFilterTestData.KeysAsync(client, ctx.ProjectId, c);
+        Assert.Equal(new[] { "B-E", "B-S" }, await Keys(Empty("IsNull")));
+        Assert.Equal(new[] { "B-D" }, await Keys(Empty("IsNotNull")));
+        Assert.Equal(new[] { "B-D" }, await Keys(Any("NotIn", "new")));
+
+        var body = await client.GetFromJsonAsync<ValuesDto>($"/api/projects/{ctx.ProjectId}/filter-values?field=statusCategory");
+        Assert.Equal(new[] { new ValueDto("done", 1) }, body!.Values);
+        Assert.Equal(2, body.EmptyCount);
+    }
 }

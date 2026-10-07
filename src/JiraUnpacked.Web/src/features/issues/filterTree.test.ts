@@ -348,6 +348,9 @@ describe('object values', () => {
     expect(isCompleteCondition(c({ field: 'updatedAt', op: 'InLast', value: { amount: 0, unit: 'days' } }))).toBe(false);
     expect(isCompleteCondition(c({ field: 'updatedAt', op: 'InLast', value: { amount: 1.5, unit: 'days' } }))).toBe(false);
     expect(isCompleteCondition(c({ field: 'updatedAt', op: 'NotInLast', value: { amount: 1, unit: 'hours' } }))).toBe(true);
+    // The server refuses more than 3650: past it the row is unfinished, never a 400.
+    expect(isCompleteCondition(c({ field: 'updatedAt', op: 'InLast', value: { amount: 3650, unit: 'days' } }))).toBe(true);
+    expect(isCompleteCondition(c({ field: 'updatedAt', op: 'InLast', value: { amount: 3651, unit: 'days' } }))).toBe(false);
     expect(isCompleteCondition(c({ field: 'updatedAt', op: 'InPeriod', value: { period: 'today' } }))).toBe(true);
     expect(isCompleteCondition(c({ field: 'updatedAt', op: 'InPeriod' }))).toBe(false);
     expect(isCompleteCondition(c({ field: 'sprint', op: 'Eq', value: { smart: 'active' } }))).toBe(true);

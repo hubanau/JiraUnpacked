@@ -15,7 +15,7 @@ import {
 } from './filterTree';
 import { INPUT_CLASS } from './styles';
 import {
-  DEFAULT_RELATIVE, PERIODS, RELATIVE_UNITS, browserTimeZone, isRelativeAmount, isScalar, isSmartValue, readPeriod,
+  DEFAULT_RELATIVE, MAX_RELATIVE_AMOUNT, PERIODS, RELATIVE_UNITS, browserTimeZone, isRelativeAmount, isScalar, isSmartValue, readPeriod,
 } from './valueShapes';
 import { MultiValuePicker, SingleValueSelect } from './ValuePicker';
 
@@ -120,6 +120,7 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
             <input
               type="number"
               min={1}
+              max={MAX_RELATIVE_AMOUNT}
               step={1}
               className={INPUT_CLASS}
               value={rel.amount >= 1 ? rel.amount : ''}
@@ -144,16 +145,17 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
 
     if (takesPeriod(op)) {
       const current = readPeriod(condition.value);
+      // The zone captured with the operator stays with the condition. One that never had a zone
+      // (a link from elsewhere) means UTC on the server, and keeps meaning it. A row with no
+      // period yet will capture the browser's zone when one is picked, so that is the one named.
+      const zone = current ? current.timeZone : browserTimeZone();
       const pick = (period: PeriodKey) => {
         const next: PeriodValue = { period };
-        // The zone captured with the operator stays with the condition. One that never had a zone
-        // (a link from elsewhere) means UTC on the server, and keeps meaning it.
-        const zone = current ? current.timeZone : browserTimeZone();
         if (zone) next.timeZone = zone;
         onChange({ field, op, value: next });
       };
       return (
-        <Field label={`Period for condition ${label}`} id={`condition-${label}-period`} hint={current?.timeZone ?? 'UTC'}>
+        <Field label={`Period for condition ${label}`} id={`condition-${label}-period`} hint={zone ?? 'UTC'}>
           <Select value={current?.period ?? ''} onChange={(e) => pick(e.target.value as PeriodKey)}>
             {!current && <option value="">— choose —</option>}
             {PERIODS.map((p) => (

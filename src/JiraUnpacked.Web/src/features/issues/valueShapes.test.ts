@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  PERIODS, SMART_SPRINT_LABELS, browserTimeZone, readPeriod, readRelativeAmount, readSmart,
+  MAX_RELATIVE_AMOUNT, PERIODS, SMART_SPRINT_LABELS, browserTimeZone, readPeriod, readRelativeAmount, readSmart,
 } from './valueShapes';
 
 afterEach(() => vi.restoreAllMocks());
@@ -38,6 +38,10 @@ describe('vocabularies', () => {
       'Today', 'Yesterday', 'This week', 'Last week', 'This month', 'Last month',
       'This quarter', 'Last quarter', 'This year', 'Last year',
     ]);
+  });
+
+  it('caps a relative amount where the server does', () => {
+    expect(MAX_RELATIVE_AMOUNT).toBe(3650);
   });
 
   it('names the smart values as the spec does', () => {

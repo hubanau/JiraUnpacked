@@ -33,6 +33,9 @@ export const SMART_SPRINT_LABELS: Record<SmartSprintKey, string> = {
   closed: 'Closed sprints',
 };
 
+/** The largest "in the last" / "more than … ago" amount the server takes (RelativeDates.MaxAmount). */
+export const MAX_RELATIVE_AMOUNT = 3650;
+
 /** "in the last" starts at 14 days, so choosing the operator already filters. */
 export const DEFAULT_RELATIVE: RelativeAmount = { amount: 14, unit: 'days' };
 
