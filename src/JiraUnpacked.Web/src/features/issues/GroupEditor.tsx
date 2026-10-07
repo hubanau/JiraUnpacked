@@ -2,6 +2,7 @@ import type { ButtonHTMLAttributes } from 'react';
 import type { FilterCatalog, FilterLogic } from '../../api/issues';
 import { Button, Select } from '../../ui';
 import { ConditionRow } from './ConditionRow';
+import { HISTORY_FIELD } from './historyShapes';
 import {
   blankCondition, blankGroup, cloneCondition, cloneGroup, countEnabled, insertAfter, toggleDisabled,
   withIdentityOf,
@@ -55,6 +56,9 @@ export function GroupEditor({
   const limitHint = (extra: TreeCounts): string | undefined => {
     if (counts.conditions + extra.conditions > catalog.maxConditions) return `Limit: ${catalog.maxConditions} conditions`;
     if (counts.groups + extra.groups > catalog.maxGroups) return `Limit: ${catalog.maxGroups} groups`;
+    if (counts.history + extra.history > catalog.maxHistoryConditions) {
+      return `Limit: ${catalog.maxHistoryConditions} history conditions`;
+    }
     return undefined;
   };
   const addConditionHint = limitHint({ conditions: 1, groups: 0, history: 0 });
@@ -115,10 +119,12 @@ export function GroupEditor({
 
       {conditions.map((c, i) => {
         const rowLabel = childLabel(i + 1);
-        // Copying a switched-off row adds nothing that counts, so it is never blocked.
-        const copyHint = c.disabled ? undefined : addConditionHint;
-        // Switching a disabled condition back on adds exactly one condition, same as adding a new one.
-        const enableHint = c.disabled ? addConditionHint : undefined;
+        const isHistory = c.field === HISTORY_FIELD;
+        // Copying a row, or switching a disabled one back on, adds exactly that row — a history
+        // row counts against the history cap too. Copying a switched-off row adds nothing that counts.
+        const rowHint = limitHint({ conditions: 1, groups: 0, history: isHistory ? 1 : 0 });
+        const copyHint = c.disabled ? undefined : rowHint;
+        const enableHint = c.disabled ? rowHint : undefined;
         return (
           <div
             key={c.id}
@@ -140,6 +146,7 @@ export function GroupEditor({
                 catalog={catalog}
                 condition={c}
                 label={rowLabel}
+                historyAtCap={!isHistory && counts.history >= catalog.maxHistoryConditions}
                 onChange={(next) =>
                   set({ conditions: conditions.map((x) => (x.id === c.id ? withIdentityOf(x, next) : x)) })}
               />

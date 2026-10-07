@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
@@ -57,5 +57,34 @@ describe('HistoryFieldSelect', () => {
     expect(await screen.findByText(/type the name as Jira reports it/i)).toBeInTheDocument();
     await user.type(screen.getByLabelText('History field for condition 1'), 'Sprint');
     expect(select.last()).toBe('Sprint');
+  });
+
+  it('does not take the input away from someone typing when the list arrives', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    server.use(http.get('/api/projects/p1/history-fields', async () => {
+      await gate;
+      return HttpResponse.json({ fields: [{ name: 'Sprint', count: 42 }] });
+    }));
+    const user = userEvent.setup();
+    const select = renderSelect();
+
+    const input = screen.getByLabelText('History field for condition 1');
+    await user.type(input, 'Spr');
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    // Still the same, focused input, with what was typed — the list waits.
+    expect(screen.getByLabelText('History field for condition 1')).toBe(input);
+    expect(input).toHaveFocus();
+    await user.type(input, 'int');
+    expect(select.last()).toBe('Sprint');
+
+    // Leaving the input lets the list take over, keeping the typed name.
+    await user.tab();
+    await waitForSelect();
+    expect(screen.getByLabelText('History field for condition 1')).toHaveValue('Sprint');
   });
 });

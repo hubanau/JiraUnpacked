@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getHistoryFields } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
@@ -26,20 +27,25 @@ export function HistoryFieldSelect({ projectId, label, value, onChange }: Histor
     // A project's changelog changes only when a sync runs.
     staleTime: 5 * 60 * 1000,
   });
+  // The list arriving must not pull the input out from under someone typing: the swap to the
+  // select waits until the input is left.
+  const [typing, setTyping] = useState(false);
   const id = `condition-${label}-history-field`;
   const name = `History field for condition ${label}`;
 
-  if (!fields.data) {
+  if (!fields.data || typing) {
     return (
       <Field
         label={name}
         id={id}
-        hint={fields.isError ? 'Field list unavailable — type the name as Jira reports it' : undefined}
+        hint={fields.isError && !fields.data ? 'Field list unavailable — type the name as Jira reports it' : undefined}
       >
         <input
           type="text"
           className={INPUT_CLASS}
           maxLength={MAX_HISTORY_FIELD_LENGTH}
+          onFocus={() => setTyping(true)}
+          onBlur={() => setTyping(false)}
           value={value}
           onChange={(e) => onChange(e.target.value)}
         />

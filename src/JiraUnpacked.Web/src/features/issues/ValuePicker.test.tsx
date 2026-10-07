@@ -124,6 +124,22 @@ describe('MultiValuePicker', () => {
 
     expect(picker.latest()).toEqual(['Backlog']);
   });
+
+  it('leaves (Empty) out when it is not allowed', () => {
+    render(
+      <MultiValuePicker
+        label="Authors"
+        options={[{ name: 'Alice', count: 3 }]}
+        emptyCount={2}
+        selected={[]}
+        max={100}
+        allowEmpty={false}
+        onChange={() => {}}
+      />,
+    );
+    expect(screen.queryByRole('checkbox', { name: /^\(empty\)/i })).toBeNull();
+    expect(screen.getByRole('checkbox', { name: /^alice/i })).toBeInTheDocument();
+  });
 });
 
 describe('SingleValueSelect', () => {

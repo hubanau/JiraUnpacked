@@ -9,7 +9,7 @@ import { FILTER_CATALOG } from '../../test/filterCatalogFixture';
 import type { FilterCondition } from '../../api/issues';
 import { ConditionRow } from './ConditionRow';
 
-function renderRow(initial: FilterCondition) {
+function renderRow(initial: FilterCondition, extra: { historyAtCap?: boolean } = {}) {
   const seen: FilterCondition[] = [];
   function Harness() {
     const [condition, setCondition] = useState(initial);
@@ -19,6 +19,7 @@ function renderRow(initial: FilterCondition) {
         catalog={FILTER_CATALOG}
         condition={condition}
         label="1"
+        historyAtCap={extra.historyAtCap}
         onChange={(next) => { seen.push(next); setCondition(next); }}
       />
     );
@@ -327,5 +328,110 @@ describe('ConditionRow — smart sprint values', () => {
     await user.click(screen.getByRole('checkbox', { name: /^sprint 7/i }));
 
     expect(row.last()).toEqual({ field: 'sprint', op: 'In', values: [{ smart: 'open' }, 'Sprint 7'] });
+  });
+});
+
+describe('ConditionRow — history', () => {
+  function mockHistory() {
+    server.use(
+      // The first tests start on a plain field, whose values are fetched.
+      http.get('/api/projects/p1/filter-values', () => HttpResponse.json({ field: 'status', values: [], emptyCount: 0 })),
+      http.get('/api/projects/p1/history-fields', () =>
+        HttpResponse.json({ fields: [{ name: 'Sprint', count: 9 }, { name: 'status', count: 4 }] })),
+      http.get('/api/projects/p1/history-values', ({ request }) =>
+        HttpResponse.json(new URL(request.url).searchParams.get('kind') === 'author'
+          ? { values: [{ name: 'Alice', count: 3 }], emptyCount: 1 }
+          : { values: [{ name: 'PLAT 101', count: 5 }, { name: 'PLAT 102', count: 2 }], emptyCount: 4 })),
+    );
+  }
+
+  it('lists "History of a field…" last, and starts it at "was" with nothing chosen', async () => {
+    mockHistory();
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'status', op: 'Eq', value: '' });
+
+    const fields = within(screen.getByLabelText('Field for condition 1')).getAllByRole('option');
+    expect(fields.at(-1)).toHaveTextContent('History of a field…');
+    await user.selectOptions(screen.getByLabelText('Field for condition 1'), 'history');
+
+    expect(row.last()).toEqual({ field: 'history', op: 'Was', value: { historyField: '', values: [] } });
+    expect(within(screen.getByLabelText('Operator for condition 1')).getAllByRole('option').map((o) => o.textContent))
+      .toEqual(['was', 'changed', 'number of changes']);
+  });
+
+  it('"was": picks the field, then values — (Empty) included', async () => {
+    mockHistory();
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'history', op: 'Was', value: { historyField: '', values: [] } });
+
+    await waitFor(() => expect(screen.getByLabelText('History field for condition 1').tagName).toBe('SELECT'));
+    await user.selectOptions(screen.getByLabelText('History field for condition 1'), 'Sprint');
+    expect(row.last()).toEqual({ field: 'history', op: 'Was', value: { historyField: 'Sprint', values: [] } });
+
+    const values = await screen.findByRole('group', { name: 'Values for condition 1' });
+    await user.click(within(values).getByRole('checkbox', { name: /^PLAT 101/ }));
+    await user.click(within(values).getByRole('checkbox', { name: /^\(Empty\)/ }));
+    expect(row.last()).toEqual({ field: 'history', op: 'Was', value: { historyField: 'Sprint', values: ['PLAT 101', null] } });
+  });
+
+  it('"changed": from, to and by are optional; authors offer no (Empty); unticking drops the key', async () => {
+    mockHistory();
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'history', op: 'Changed', value: { historyField: 'status' } });
+
+    expect(await screen.findByRole('group', { name: 'From values for condition 1' })).toBeInTheDocument();
+    expect(await screen.findByRole('group', { name: 'To values for condition 1' })).toBeInTheDocument();
+    const by = await screen.findByRole('group', { name: 'Authors for condition 1' });
+    expect(within(by).queryByRole('checkbox', { name: /^\(Empty\)/ })).toBeNull();
+
+    await user.click(within(by).getByRole('checkbox', { name: /^Alice/ }));
+    expect(row.last()).toEqual({ field: 'history', op: 'Changed', value: { historyField: 'status', by: ['Alice'] } });
+    await user.click(within(by).getByRole('checkbox', { name: /^Alice/ }));
+    expect(row.last()).toEqual({ field: 'history', op: 'Changed', value: { historyField: 'status' } });
+  });
+
+  it('"number of changes": starts at ≥ 2, takes a count and a window', async () => {
+    mockHistory();
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'history', op: 'Was', value: { historyField: 'Sprint', values: ['PLAT 101'] } });
+
+    await user.selectOptions(screen.getByLabelText('Operator for condition 1'), 'ChangeCount');
+    expect(row.last()).toEqual({ field: 'history', op: 'ChangeCount', value: { historyField: 'Sprint', compare: 'Gte', count: 2 } });
+    expect(within(screen.getByLabelText('Compare for condition 1')).getAllByRole('option').map((o) => o.textContent))
+      .toEqual(['=', '≠', '>', '≥', '<', '≤']);
+
+    await user.clear(screen.getByLabelText('Count for condition 1'));
+    expect(row.last()).toEqual({ field: 'history', op: 'ChangeCount', value: { historyField: 'Sprint', compare: 'Gte' } });
+    await user.type(screen.getByLabelText('Count for condition 1'), '3');
+    await user.selectOptions(screen.getByLabelText('During for condition 1'), 'inLast');
+    expect(row.last()).toEqual({
+      field: 'history', op: 'ChangeCount',
+      value: { historyField: 'Sprint', compare: 'Gte', count: 3, during: { kind: 'inLast', amount: 30, unit: 'days' } },
+    });
+  });
+
+  it('keeps the field, and the window, when switching between history operators', async () => {
+    mockHistory();
+    const user = userEvent.setup();
+    const row = renderRow({
+      field: 'history', op: 'ChangeCount',
+      value: { historyField: 'Sprint', compare: 'Gte', count: 3, during: { kind: 'inLast', amount: 7, unit: 'days' } },
+    });
+
+    await user.selectOptions(screen.getByLabelText('Operator for condition 1'), 'Changed');
+    expect(row.last()).toEqual({
+      field: 'history', op: 'Changed', value: { historyField: 'Sprint', during: { kind: 'inLast', amount: 7, unit: 'days' } },
+    });
+    await user.selectOptions(screen.getByLabelText('Operator for condition 1'), 'Was');
+    expect(row.last()).toEqual({ field: 'history', op: 'Was', value: { historyField: 'Sprint', values: [] } });
+  });
+
+  it('disables "History of a field…" at the cap, saying so', () => {
+    mockHistory();
+    renderRow({ field: 'status', op: 'Eq', value: '' }, { historyAtCap: true });
+
+    const option = within(screen.getByLabelText('Field for condition 1')).getByRole('option', { name: /History of a field/ });
+    expect(option).toBeDisabled();
+    expect(option).toHaveTextContent('History of a field… (limit: 5)');
   });
 });

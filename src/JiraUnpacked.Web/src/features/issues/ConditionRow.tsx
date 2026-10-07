@@ -9,6 +9,8 @@ import { AmountInputs, PeriodSelect, RangeInputs, conditionParts } from './DateC
 import {
   fieldNames, isDictionaryField, operatorLabel, operatorsFor, resetOperatorIfDisallowed, typeFor,
 } from './filterCatalogHelpers';
+import { HistoryConditionControls } from './HistoryConditionControls';
+import { HISTORY_FIELD, readHistoryValue, takesHistory } from './historyShapes';
 import {
   freshCondition, switchOperator, takesAmount, takesList, takesNoValue, takesPeriod, takesRange,
 } from './filterTree';
@@ -24,6 +26,11 @@ interface ConditionRowProps {
   onChange: (next: FilterCondition) => void;
   /** Position in the tree, e.g. "1" or "2.1" — part of every control's accessible name. */
   label: string;
+  /**
+   * The filter already holds the most history conditions it may (catalog.maxHistoryConditions),
+   * so this row may not become one. False for a row that already is one.
+   */
+  historyAtCap?: boolean;
 }
 
 const JIRA_KEY_SEPARATORS = /[,\s]+/;
@@ -35,7 +42,7 @@ const toUpper = (s: string) => s.toUpperCase();
  * rides along to a 400. The row's identity (id, on/off) belongs to GroupEditor, which puts it
  * back (withIdentityOf).
  */
-export function ConditionRow({ projectId, condition, catalog, onChange, label }: ConditionRowProps) {
+export function ConditionRow({ projectId, condition, catalog, onChange, label, historyAtCap = false }: ConditionRowProps) {
   const { field, op } = condition;
   const fieldType = typeFor(catalog, field);
   const known = fieldType !== undefined;
@@ -70,6 +77,21 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
   const textValue = typeof condition.value === 'string' ? condition.value : '';
 
   const renderValueControl = () => {
+    if (fieldType === 'History') {
+      if (!takesHistory(op)) return null;
+      // Its own second line (basis-full): the field, then what the operator takes.
+      return (
+        <HistoryConditionControls
+          projectId={projectId}
+          label={label}
+          op={op}
+          value={readHistoryValue(op, condition.value)}
+          maxInValues={catalog.maxInValues}
+          onChange={(next) => onChange({ field, op, value: next })}
+        />
+      );
+    }
+
     if (takesNoValue(op)) return null;
 
     if (takesRange(op)) {
@@ -195,9 +217,15 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
       >
         <Select value={field} onChange={handleFieldChange}>
           {!known && <option value={field} disabled>{field}</option>}
-          {fieldNames(catalog).map((f) => (
+          {fieldNames(catalog).filter((f) => f !== HISTORY_FIELD).map((f) => (
             <option key={f} value={f}>{f}</option>
           ))}
+          {/* Last, and named for what it is: not a column of the issue, but its past. */}
+          {fieldNames(catalog).includes(HISTORY_FIELD) && (
+            <option value={HISTORY_FIELD} disabled={historyAtCap}>
+              {historyAtCap ? `History of a field… (limit: ${catalog.maxHistoryConditions})` : 'History of a field…'}
+            </option>
+          )}
         </Select>
       </Field>
 
