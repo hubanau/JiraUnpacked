@@ -22,8 +22,10 @@ namespace JiraUnpacked.Tests.Performance;
 /// not read-only; without it the test returns at once, so the normal suite never touches a real
 /// database. Every statement IssueQueryService sends is first run under
 /// EXPLAIN (ANALYZE, BUFFERS) on the same connection, and the plans go to the test output.
-/// The history pickers' reads (history-fields, history-values) are timed the same way and
-/// recorded, but not gated: they run once per picker opening, not per list page.
+/// The session gets the app's settings (jit=off, PostgresSessionOptions) unless JU_PERF_DB's
+/// Options set jit explicitly — `-c jit=on` measures the with-JIT baseline.
+/// The history pickers' reads (history-fields, history-values), field churn, filter-values and
+/// the unfiltered list are timed the same way and recorded, but not gated.
 /// </summary>
 public sealed class HistoryQueryPlanTests
 {
@@ -81,12 +83,15 @@ public sealed class HistoryQueryPlanTests
     [Fact]
     public async Task Every_history_operator_lists_the_largest_project_under_two_seconds()
     {
-        var connectionString = Environment.GetEnvironmentVariable("JU_PERF_DB");
-        if (string.IsNullOrEmpty(connectionString))
+        var configured = Environment.GetEnvironmentVariable("JU_PERF_DB");
+        if (string.IsNullOrEmpty(configured))
         {
             _out.WriteLine("JU_PERF_DB is not set: the performance gate did not run.");
             return;
         }
+        // The session the app runs: jit=off, added the way the app adds it (an explicit jit in
+        // JU_PERF_DB's Options wins, which is how a with-JIT comparison is measured).
+        var connectionString = PostgresSessionOptions.WithoutJit(configured);
 
         // ---- the read-only guard, and what to measure, on a plain connection ----
         Guid tenant, project;
@@ -104,7 +109,7 @@ public sealed class HistoryQueryPlanTests
 
             // Never a write, by construction: refuse a session that could make one.
             Assert.Equal("on", (string?)await Scalar("SHOW default_transaction_read_only"));
-            _out.WriteLine($"Connected as {await Scalar("SELECT current_user")} (read-only).");
+            _out.WriteLine($"Connected as {await Scalar("SELECT current_user")} (read-only), jit {await Scalar("SHOW jit")}.");
             _out.WriteLine($"Running syncs: {await Scalar(@"SELECT count(*) FROM ""SyncRuns"" WHERE ""Status"" = 'Running'")}.");
 
             await using (var cmd = new NpgsqlCommand(
@@ -185,28 +190,39 @@ public sealed class HistoryQueryPlanTests
             if (total >= BudgetMs) failures.Add($"{name}: {total:F0} ms");
         }
 
-        // ---- the pickers: recorded, not gated ----
-        var pickers = new (string Name, Func<HistoryValueService, Task<int>> Run)[]
+        // ---- recorded, not gated: the history pickers, and the reads the session settings also
+        // reach (so a change to them shows up as a before/after here) ----
+        IIssueFilterCompiler Compiler(AppDbContext db) =>
+            new IssueFilterCompiler(db, new IssueFilterTranslator(new FakeClock(DateTime.UtcNow)));
+        var recorded = new (string Name, Func<AppDbContext, Task<int>> Run)[]
         {
-            ("history-fields", async s => (await s.GetFieldsAsync(project)).Fields!.Count),
-            ("history-values status", async s => (await s.GetValuesAsync(project, "status", "value")).Values!.Count),
-            ("history-values Sprint", async s => (await s.GetValuesAsync(project, "Sprint", "value")).Values!.Count),
-            ("history-values description", async s => (await s.GetValuesAsync(project, "description", "value")).Values!.Count),
-            ("history-values Sprint authors", async s => (await s.GetValuesAsync(project, "Sprint", "author")).Values!.Count),
+            ("picker history-fields", async db => (await new HistoryValueService(db).GetFieldsAsync(project)).Fields!.Count),
+            ("picker history-values status", async db => (await new HistoryValueService(db).GetValuesAsync(project, "status", "value")).Values!.Count),
+            ("picker history-values Sprint", async db => (await new HistoryValueService(db).GetValuesAsync(project, "Sprint", "value")).Values!.Count),
+            ("picker history-values description", async db => (await new HistoryValueService(db).GetValuesAsync(project, "description", "value")).Values!.Count),
+            ("picker history-values Sprint authors", async db => (await new HistoryValueService(db).GetValuesAsync(project, "Sprint", "author")).Values!.Count),
+            ("field churn Sprint", async db => (await new FieldChurnQueryService(db, Compiler(db))
+                .GetFieldChurnAsync(project, "Sprint", 2, null, 1, 50)).Report!.Items.TotalCount),
+            ("field churn status", async db => (await new FieldChurnQueryService(db, Compiler(db))
+                .GetFieldChurnAsync(project, "status", 2, null, 1, 50)).Report!.Items.TotalCount),
+            ("filter-values status", async db => (await new FilterValueService(db).GetAsync(project, "status")).Values!.Count),
+            ("filter-values sprint", async db => (await new FilterValueService(db).GetAsync(project, "sprint")).Values!.Count),
+            ("issue list, no filter", async db => (await new IssueQueryService(db, Compiler(db))
+                .QueryAsync(project, new IssueFilterRequest(null, null, 1, 50))).Result!.TotalCount),
         };
-        var slowPickers = new List<string>();
-        foreach (var (name, run) in pickers)
+        var slow = new List<string>();
+        foreach (var (name, run) in recorded)
         {
             var explain = new ExplainInterceptor();
             await using var db = NewContext(explain);
-            var count = await run(new HistoryValueService(db));
+            var count = await run(db);
             var total = explain.Statements.Sum(s => s.Ms);
-            _out.WriteLine($"== picker {name}: {count} entries, {total:F0} ms over {explain.Statements.Count} statements");
+            _out.WriteLine($"== {name}: {count} entries, {total:F0} ms over {explain.Statements.Count} statements");
             foreach (var s in explain.Statements.Where(s => s.Sql.Contains("IssueChangeHistory")))
                 foreach (var line in s.Plan) _out.WriteLine(line);
-            if (total >= BudgetMs) slowPickers.Add($"{name}: {total:F0} ms");
+            if (total >= BudgetMs) slow.Add($"{name}: {total:F0} ms");
         }
-        if (slowPickers.Count > 0) _out.WriteLine("NOTE (not gated): pickers over 2 s: " + string.Join("; ", slowPickers));
+        if (slow.Count > 0) _out.WriteLine("NOTE (not gated): over 2 s: " + string.Join("; ", slow));
 
         Assert.True(failures.Count == 0, "Over the 2 s budget: " + string.Join("; ", failures));
     }

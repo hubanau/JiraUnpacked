@@ -54,7 +54,8 @@ public static class DependencyInjection
 
         services.AddScoped<TenantConnectionInterceptor>();
         services.AddDbContext<AppDbContext>((sp, options) =>
-            options.UseNpgsql(appConnectionString)
+            // jit=off: short OLTP queries, where JIT compile time dominated (see PostgresSessionOptions).
+            options.UseNpgsql(PostgresSessionOptions.WithoutJit(appConnectionString))
                    .AddInterceptors(sp.GetRequiredService<TenantConnectionInterceptor>()));
 
         services.AddSingleton<IClock, SystemClock>();

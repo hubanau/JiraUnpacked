@@ -21,6 +21,6 @@ public interface IHistoryValueService
 {
     Task<HistoryFieldsResult> GetFieldsAsync(Guid projectId, CancellationToken ct = default);
 
-    /// <param name="kind">"value" (From and To, lists split on the field's list separator) or "author".</param>
+    /// <param name="kind">"value" (From and To, lists split on the field's list separator; a stored value longer than a filter value may be is left out) or "author".</param>
     Task<HistoryValuesResult> GetValuesAsync(Guid projectId, string? field, string? kind, CancellationToken ct = default);
 }

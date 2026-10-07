@@ -51,8 +51,8 @@ public sealed class HistoryValueService : IHistoryValueService
         var rows = _db.IssueChangeHistory.Where(h => h.JiraProjectId == projectId && h.Field == field);
         var groups = kind == "author"
             ? await GroupedAsync(rows.Select(h => h.Author), ct)
-            : (await GroupedAsync(rows.Select(h => h.FromValue), ct))
-                .Concat(await GroupedAsync(rows.Select(h => h.ToValue), ct)).ToList();
+            : (await GroupedAsync(Pickable(rows.Select(h => h.FromValue)), ct))
+                .Concat(await GroupedAsync(Pickable(rows.Select(h => h.ToValue)), ct)).ToList();
 
         var separator = IssueFilterTranslator.ListSeparatorFor(field);
         var counts = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -74,6 +74,15 @@ public sealed class HistoryValueService : IHistoryValueService
             .ToList();
         return new HistoryValuesResult(values, empty, null);
     }
+
+    /// <summary>
+    /// The stored values a filter could name: none longer than a filter value may be (255), so a
+    /// description's text is never offered. Bounded in SQL, before grouping — grouping free text
+    /// is what made a description picker slow. A list longer than that drops out whole; its
+    /// elements are almost always in shorter lists of the same field too.
+    /// </summary>
+    private static IQueryable<string?> Pickable(IQueryable<string?> side) =>
+        side.Where(v => v == null || v.Length <= IssueFilterTranslator.MaxHistoryValueLength);
 
     /// <summary>One side's distinct strings with their row counts, most frequent first, capped.</summary>
     private static async Task<List<(string? Value, int Count)>> GroupedAsync(IQueryable<string?> side, CancellationToken ct) =>

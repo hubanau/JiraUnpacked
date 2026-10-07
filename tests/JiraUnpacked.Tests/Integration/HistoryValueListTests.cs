@@ -97,6 +97,23 @@ public sealed class HistoryValueListTests : IClassFixture<JiraUnpackedApiFactory
     }
 
     [Fact]
+    public async Task A_stored_value_longer_than_a_filter_value_can_be_is_not_listed()
+    {
+        var (client, ctx) = await TenantAsync();
+        // A description's text is no value to pick: nothing longer than 255 characters can be a
+        // filter value. The bound is on the raw stored value, before any list split.
+        var longest = new string('a', 255);
+        var tooLong = new string('b', 250) + ", " + new string('c', 4);
+        await HistoryTestData.SeedChangeAsync(ctx, "1", "description", null, longest);
+        await HistoryTestData.SeedChangeAsync(ctx, "1", "description", longest, tooLong);
+        await HistoryTestData.SeedChangeAsync(ctx, "2", "description", tooLong, "short");
+
+        var dto = await OkAsync<ValuesDto>(client, $"/api/projects/{ctx.ProjectId}/history-values?field=description");
+        Assert.Equal(new[] { new NameCount(longest, 2), new NameCount("short", 1) }, dto.Values);
+        Assert.Equal(1, dto.EmptyCount);   // the null FromValue; a long value is not (Empty)
+    }
+
+    [Fact]
     public async Task At_most_1000_values_are_listed()
     {
         var (client, ctx) = await TenantAsync();
