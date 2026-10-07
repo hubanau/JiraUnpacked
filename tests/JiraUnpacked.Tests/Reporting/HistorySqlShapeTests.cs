@@ -55,4 +55,17 @@ public sealed class HistorySqlShapeTests
         Assert.DoesNotContain("'Sprint'", sql);
         Assert.Matches(@"""Field"" = @\w+", sql);
     }
+
+    [Fact]
+    public async Task Values_travel_as_parameters_so_the_statement_is_the_same_for_any_value()
+    {
+        static FilterCondition Was(string v) => new("history", FilterOperator.Was,
+            J(new { historyField = "Labels", values = new[] { v } }), null);
+        var first = Statement(await SqlAsync(Was("PLAT 101")));
+        var second = Statement(await SqlAsync(Was("100%_done")));
+
+        Assert.DoesNotContain("PLAT", first);
+        Assert.DoesNotContain("100%", second);
+        Assert.Equal(first, second);   // one shape, one compiled-query cache entry
+    }
 }

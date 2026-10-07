@@ -135,4 +135,161 @@ public sealed class HistoryTranslationTests
             tree, NoDictionary, CancellationToken.None, Array.Empty<IssueChangeHistory>().AsQueryable());
         Assert.Equal("A filter may have at most 5 history conditions.", r.Error);
     }
+
+    // ---- value matching ----
+
+    [Theory]
+    [InlineData("PLAT 101", true)]                       // equal
+    [InlineData("PLAT 101, PLAT 102", true)]             // first element
+    [InlineData("PLAT 100, PLAT 101", true)]             // last element
+    [InlineData("PLAT 100, PLAT 101, PLAT 102", true)]   // middle element
+    [InlineData("PLAT 1010", false)]                     // never a partial word
+    [InlineData("PLAT 10, PLAT 1011", false)]
+    [InlineData("XPLAT 101", false)]
+    [InlineData(null, false)]
+    public async Task A_value_matches_the_whole_stored_value_or_one_element_of_its_list(string? stored, bool matches)
+    {
+        var was = await Pred(History(FilterOperator.Was, new { historyField = "Labels", values = new[] { "PLAT 101" } }),
+            new[] { Row("1", "Labels", null, stored) });
+        Assert.Equal(matches, was(I("1")));
+    }
+
+    [Fact]
+    public async Task A_shorter_name_never_matches_a_longer_one()
+    {
+        var was = await Pred(History(FilterOperator.Was, new { historyField = "Labels", values = new[] { "PLAT 10" } }),
+            new[] { Row("1", "Labels", "PLAT 101", "PLAT 101, PLAT 102") });
+        Assert.False(was(I("1")));
+    }
+
+    [Fact]
+    public async Task Was_looks_at_both_sides_of_every_change()
+    {
+        var was = await Pred(History(FilterOperator.Was, new { historyField = "Team", values = new[] { "Red" } }), new[]
+        {
+            Row("1", "Team", "Red", "Blue"),    // left Red
+            Row("2", "Team", "Blue", "Red"),    // arrived at Red
+            Row("3", "Team", "Blue", "Green"),
+        });
+        Assert.True(was(I("1")));
+        Assert.True(was(I("2")));
+        Assert.False(was(I("3")));
+    }
+
+    [Fact]
+    public async Task Empty_matches_a_null_or_empty_stored_value()
+    {
+        var was = await Pred(History(FilterOperator.Was, new { historyField = "Team", values = new string?[] { null } }), new[]
+        {
+            Row("1", "Team", null, "Red"),
+            Row("2", "Team", "", "Red"),
+            Row("3", "Team", "Blue", "Red"),
+        });
+        Assert.True(was(I("1")));
+        Assert.True(was(I("2")));
+        Assert.False(was(I("3")));
+    }
+
+    [Theory]
+    [InlineData("status", "status", nameof(Issue.StatusId))]
+    [InlineData("assignee", "assignee", nameof(Issue.AssigneeId))]
+    [InlineData("priority", "priority", nameof(Issue.PriorityId))]
+    [InlineData("issuetype", "issueType", nameof(Issue.IssueTypeId))]
+    [InlineData("Sprint", "sprint", nameof(Issue.SprintId))]
+    public async Task Was_also_matches_the_current_value_of_the_five_fields_the_issue_holds(
+        string historyField, string dictField, string fk)
+    {
+        var id = Guid.NewGuid();
+        string? asked = null;
+        DictNameResolver resolve = (field, names, ct) =>
+        {
+            asked = field;
+            return Task.FromResult<IReadOnlyList<Guid>>(names.Contains("Blocked") ? new[] { id } : Array.Empty<Guid>());
+        };
+        var was = await Pred(History(FilterOperator.Was, new { historyField, values = new[] { "Blocked" } }),
+            Array.Empty<IssueChangeHistory>(), resolve);
+
+        Assert.Equal(dictField, asked);                 // resolved through the dictionary filters' own path
+        var now = I("1");
+        typeof(Issue).GetProperty(fk)!.SetValue(now, (Guid?)id);
+        Assert.True(was(now));                          // never changed, but is Blocked now
+        Assert.False(was(I("2")));
+    }
+
+    [Fact]
+    public async Task Was_empty_on_a_current_value_field_matches_an_issue_with_no_value_now()
+    {
+        var was = await Pred(History(FilterOperator.Was, new { historyField = "status", values = new string?[] { null } }),
+            Array.Empty<IssueChangeHistory>());
+        var withStatus = I("2");
+        withStatus.StatusId = Guid.NewGuid();
+
+        Assert.True(was(I("1")));     // no status now
+        Assert.False(was(withStatus));
+    }
+
+    [Fact]
+    public async Task Other_fields_rely_on_history_alone()
+    {
+        var asked = false;
+        DictNameResolver resolve = (_, _, _) => { asked = true; return Task.FromResult<IReadOnlyList<Guid>>(Array.Empty<Guid>()); };
+        await Pred(History(FilterOperator.Was, new { historyField = "Story Points", values = new[] { "3" } }),
+            Array.Empty<IssueChangeHistory>(), resolve);
+        Assert.False(asked);
+    }
+
+    // ---- Changed: from / to / by ----
+
+    [Fact]
+    public async Task Changed_requires_every_part_given_on_the_same_row()
+    {
+        var rows = new[]
+        {
+            Row("1", "status", "To Do", "Blocked", author: "Bob"),
+            Row("2", "status", "To Do", "Done", author: "Bob"),
+            Row("2", "status", "Done", "Blocked", author: "Alice"),   // to Blocked — but from Done, by Alice
+            Row("3", "status", "To Do", "Blocked", author: null),
+        };
+        var changed = await Pred(History(FilterOperator.Changed, new
+        {
+            historyField = "status", from = new[] { "To Do" }, to = new[] { "Blocked" }, by = new[] { "Bob" },
+        }), rows);
+
+        Assert.True(changed(I("1")));
+        Assert.False(changed(I("2")));   // the parts hold, but on different rows
+        Assert.False(changed(I("3")));   // no author matches no name
+    }
+
+    [Fact]
+    public async Task Changed_from_empty_finds_the_first_assignment()
+    {
+        var changed = await Pred(History(FilterOperator.Changed, new { historyField = "Team", from = new string?[] { null } }),
+            new[] { Row("1", "Team", null, "Red"), Row("2", "Team", "", "Blue"), Row("3", "Team", "Red", "Blue") });
+        Assert.True(changed(I("1")));
+        Assert.True(changed(I("2")));
+        Assert.False(changed(I("3")));
+    }
+
+    [Fact]
+    public async Task Value_lists_are_validated()
+    {
+        FilterCondition Was(object value) => History(FilterOperator.Was, value);
+        FilterCondition Changed(object value) => History(FilterOperator.Changed, value);
+
+        Assert.Contains("'Was' needs 'values'", await Error(Was(new { historyField = "status" })));
+        Assert.Contains("at least one value", await Error(Was(new { historyField = "status", values = Array.Empty<string>() })));
+        Assert.Contains("at least one value", await Error(Changed(new { historyField = "status", from = Array.Empty<string>() })));
+        Assert.Contains("at most 100 values", await Error(Was(new
+        {
+            historyField = "status", values = Enumerable.Range(0, 101).Select(i => $"v{i}").ToArray(),
+        })));
+        Assert.Contains("at most 255 characters", await Error(Was(new { historyField = "status", values = new[] { new string('x', 256) } })));
+        Assert.Contains("(Empty) is not one", await Error(Changed(new { historyField = "status", by = new string?[] { null } })));
+        Assert.Contains("must be a list", await Error(Changed(new { historyField = "status", to = "Done" })));
+        Assert.Contains("must be a list", await Error(Was(new { historyField = "status", values = new object[] { 7 } })));
+        Assert.StartsWith("'during' is not part of 'Was'.", await Error(Was(new
+        {
+            historyField = "status", values = new[] { "x" }, during = new { kind = "inLast", amount = 1, unit = "days" },
+        })));
+    }
 }

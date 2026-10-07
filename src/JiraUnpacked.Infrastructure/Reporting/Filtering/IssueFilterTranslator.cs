@@ -162,7 +162,7 @@ public sealed partial class IssueFilterTranslator : IIssueFilterTranslator
             FieldType.DateTime  => BuildDate(field, c),
             FieldType.Text      => BuildText(field, c),
             FieldType.ParentRef => BuildParent(field, c),
-            FieldType.History   => BuildHistory(c, history),
+            FieldType.History   => await BuildHistoryAsync(c, resolveDict, history, ct),
             _ => (null, "Unsupported field type."),
         };
     }

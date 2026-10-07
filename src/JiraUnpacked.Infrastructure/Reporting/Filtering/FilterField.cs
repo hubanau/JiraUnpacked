@@ -55,7 +55,7 @@ internal static class FilterFields
             // Not a column of Issue: what happened to one of its fields, answered from
             // IssueChangeHistory (IssueFilterTranslator.History). The selector is the correlation key.
             ["history"]    = new("history", FieldType.History,
-                                 Ops(FilterOperator.Changed),
+                                 Ops(FilterOperator.Was, FilterOperator.Changed),
                                  (Expression<Func<Issue, string>>)(i => i.JiraIssueId)),
         };
 
