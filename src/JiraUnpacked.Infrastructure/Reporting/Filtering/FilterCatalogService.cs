@@ -19,15 +19,16 @@ namespace JiraUnpacked.Infrastructure.Reporting.Filtering;
 public sealed class FilterCatalogService : IFilterCatalogService
 {
     /// <summary>
-    /// The order the editor offers operators in: equality, lists, comparisons, text matching,
-    /// then the two that take no value. Explicit because FilterOperator is append-only, which
-    /// makes its declaration order a history rather than a reading order. Every member must
-    /// appear here — FilterCatalogServiceTests checks.
+    /// The order the editor offers operators in: equality, lists, comparisons, ranges and
+    /// relative dates, text matching, then the two that take no value. Explicit because
+    /// FilterOperator is append-only, which makes its declaration order a history rather than a
+    /// reading order. Every member must appear here — FilterCatalogServiceTests checks.
     /// </summary>
     internal static readonly FilterOperator[] DisplayOrder =
     {
         FilterOperator.Eq, FilterOperator.Neq, FilterOperator.In, FilterOperator.NotIn,
         FilterOperator.Lt, FilterOperator.Lte, FilterOperator.Gt, FilterOperator.Gte,
+        FilterOperator.Between, FilterOperator.InLast, FilterOperator.NotInLast, FilterOperator.InPeriod,
         FilterOperator.Contains, FilterOperator.NotContains, FilterOperator.StartsWith,
         FilterOperator.IsNull, FilterOperator.IsNotNull,
     };

@@ -17,7 +17,7 @@ const CATALOG: FilterCatalog = {
 
 const ITEM = {
   jiraIssueId: '10001', jiraKey: 'ACME-1', summary: 'Login fails',
-  status: 'Backlog', issueType: 'Bug', priority: 'High', assignee: 'Ada',
+  status: 'Backlog', statusCategory: 'To Do', issueType: 'Bug', priority: 'High', assignee: 'Ada',
   sprint: 'PRP 20', team: 'CI/CD', storyPoints: 3,
   parentJiraIssueId: '99', jiraCreatedAt: '2026-01-01T00:00:00Z', jiraUpdatedAt: '2026-02-01T00:00:00Z',
 };
@@ -109,6 +109,39 @@ describe('ColumnChooser', () => {
     expect(await screen.findByRole('columnheader', { name: /priority/i })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /team/i })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: /summary/i })).not.toBeInTheDocument();
+  });
+
+  it('offers a Category column, off by default', async () => {
+    mockList();
+    const user = userEvent.setup();
+    renderList();
+
+    await openChooser(user);
+
+    expect(screen.getByRole('checkbox', { name: /category/i })).not.toBeChecked();
+    expect(screen.queryByRole('columnheader', { name: /category/i })).not.toBeInTheDocument();
+  });
+
+  it('shows each issue’s status category, next to Status, and sorts by it', async () => {
+    const sent: Record<string, unknown>[] = [];
+    server.use(
+      http.get('/api/filter-catalog', () => HttpResponse.json(CATALOG)),
+      noSavedViews,
+      http.post('/api/projects/p1/issues/query', async ({ request }) => {
+        sent.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json({ items: [ITEM], page: 1, pageSize: 50, totalCount: 1 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderList('/projects/p1/issues?cols=jiraKey,statusCategory,status');
+
+    await screen.findByRole('columnheader', { name: /category/i });
+    // Table order, not URL order; no arrows — the default sort (updatedAt) is not shown here.
+    expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Key', 'Status', 'Category']);
+    expect(screen.getByRole('cell', { name: 'To Do' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /sort by category/i }));
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ sortBy: 'statusCategory' }));
   });
 });
 

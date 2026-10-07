@@ -1,5 +1,11 @@
-import type { FilterCondition, FilterGroup, FilterLogic, FilterOperator } from '../../api/issues';
+import type {
+  ConditionValue, FilterCondition, FilterGroup, FilterLogic, FilterOperator, ListValue,
+} from '../../api/issues';
 import { OPERATOR_LABELS } from './filterCatalogHelpers';
+import {
+  DEFAULT_PERIOD, DEFAULT_RELATIVE, MAX_RELATIVE_AMOUNT, isRelativeAmount, isScalar, isSmartValue, readPeriod, readRelativeAmount,
+  readSmart,
+} from './valueShapes';
 
 /**
  * The editor's working copy of a filter: the wire FilterGroup plus a client-only `id` on every
@@ -51,16 +57,39 @@ export const isEmptyTree = (g: EditorGroup): boolean => g.conditions.length === 
 
 export const takesNoValue = (op: FilterOperator): boolean => op === 'IsNull' || op === 'IsNotNull';
 export const takesList = (op: FilterOperator): boolean => op === 'In' || op === 'NotIn';
+/** "between": `values: [from, to]`, either bound null (open). */
+export const takesRange = (op: FilterOperator): boolean => op === 'Between';
+/** "in the last" / "more than … ago": `value: { amount, unit }`. */
+export const takesAmount = (op: FilterOperator): boolean => op === 'InLast' || op === 'NotInLast';
+/** "in period": `value: { period, timeZone }`. */
+export const takesPeriod = (op: FilterOperator): boolean => op === 'InPeriod';
+
+const isBound = (v: ListValue | undefined): boolean => v !== undefined && v !== null && v !== '';
+/** An empty bound is an open one: the server reads null as "no limit on this side". */
+const asBound = (v: ListValue | undefined): ListValue => (isBound(v) ? (v as ListValue) : null);
+
+/** Object values are copied, never shared: two rows — or the editor and the wire — must not alias one object. */
+function copyValue<T>(v: T): T {
+  return (typeof v === 'object' && v !== null ? { ...v } : v) as T;
+}
 
 // ---- sending ----
 
 /**
  * A condition the user has started but not finished is unfinished, not invalid: it is left out
  * of the request rather than sent to earn a 400 mid-edit. A null `value` is (Empty) and complete.
+ * Between needs at least one bound; in the last / more than … ago a whole amount from 1 to 3650;
+ * in period a period.
  */
 export function isCompleteCondition(c: FilterCondition): boolean {
   if (takesNoValue(c.op)) return true;
   if (takesList(c.op)) return (c.values?.length ?? 0) > 0;
+  if (takesRange(c.op)) return (c.values ?? []).some(isBound);
+  if (takesAmount(c.op)) {
+    const rel = readRelativeAmount(c.value);
+    return rel !== undefined && Number.isInteger(rel.amount) && rel.amount >= 1 && rel.amount <= MAX_RELATIVE_AMOUNT;
+  }
+  if (takesPeriod(c.op)) return readPeriod(c.value) !== undefined;
   return c.value !== undefined && c.value !== '';
 }
 
@@ -70,8 +99,12 @@ export function toWireCondition(c: FilterCondition): FilterCondition {
     return { field: c.field, op: c.op === 'Eq' ? 'IsNull' : 'IsNotNull' };
   }
   if (takesNoValue(c.op)) return { field: c.field, op: c.op };
-  if (takesList(c.op)) return { field: c.field, op: c.op, values: [...(c.values ?? [])] };
-  return { field: c.field, op: c.op, value: c.value };
+  if (takesList(c.op)) return { field: c.field, op: c.op, values: (c.values ?? []).map(copyValue) };
+  if (takesRange(c.op)) {
+    const [from, to] = c.values ?? [];
+    return { field: c.field, op: c.op, values: [asBound(from), asBound(to)] };
+  }
+  return { field: c.field, op: c.op, value: copyValue(c.value) };
 }
 
 /**
@@ -144,7 +177,10 @@ export function countEnabled(g: EditorGroup): TreeCounts {
 // ---- editing ----
 
 export const cloneCondition = (c: EditorCondition): EditorCondition => ({
-  ...c, id: newId(), ...(c.values ? { values: [...c.values] } : {}),
+  ...c,
+  id: newId(),
+  ...(c.values ? { values: c.values.map(copyValue) } : {}),
+  ...(c.value !== undefined ? { value: copyValue(c.value) } : {}),
 });
 
 export const cloneGroup = (g: EditorGroup): EditorGroup => ({
@@ -169,6 +205,36 @@ export function withIdentityOf(row: EditorCondition, next: FilterCondition): Edi
 export function insertAfter<T extends { id: string }>(list: T[], id: string, item: T): T[] {
   const at = list.findIndex((x) => x.id === id);
   return at < 0 ? [...list, item] : [...list.slice(0, at + 1), item, ...list.slice(at + 1)];
+}
+
+/**
+ * A row for `op` with nothing chosen yet — except the relative-date operators, which start at a
+ * useful default so choosing one already filters: "in the last 14 days", "in period: this week"
+ * (in `timeZone`, the browser's, captured now and saved with the condition).
+ */
+export function freshCondition(field: string, op: FilterOperator, timeZone: string): FilterCondition {
+  if (takesList(op)) return { field, op, values: [] };
+  if (takesRange(op)) return { field, op, values: [null, null] };
+  if (takesAmount(op)) return { field, op, value: { ...DEFAULT_RELATIVE } };
+  if (takesPeriod(op)) return { field, op, value: { period: DEFAULT_PERIOD, timeZone } };
+  return { field, op };
+}
+
+/**
+ * The row after its operator changes, rebuilt with only the key the new operator takes. What
+ * still means the same thing carries over: the list between is any of / is none of, the amount
+ * between in the last / more than … ago, a typed value between the scalar operators, and a smart
+ * sprint value between is / is not. Everything else starts over (freshCondition).
+ */
+export function switchOperator(c: FilterCondition, nextOp: FilterOperator, timeZone: string): FilterCondition {
+  const { field, op } = c;
+  if (takesList(nextOp)) return { field, op: nextOp, values: takesList(op) ? [...(c.values ?? [])] : [] };
+  if (takesAmount(nextOp) && isRelativeAmount(c.value)) return { field, op: nextOp, value: { ...c.value } };
+  if (takesNoValue(nextOp) || takesRange(nextOp) || takesAmount(nextOp) || takesPeriod(nextOp)) {
+    return freshCondition(field, nextOp, timeZone);
+  }
+  const keep = isScalar(c.value) || (isSmartValue(c.value) && (nextOp === 'Eq' || nextOp === 'Neq'));
+  return { field, op: nextOp, value: keep ? c.value : '' };
 }
 
 // ---- the URL form ----
@@ -204,15 +270,45 @@ const notNull = <T>(x: T | null): x is T => x !== null;
 /** Fields with no empty operators at all — see the operators table in the design spec. */
 const NO_EMPTY_OPS: ReadonlySet<string> = new Set(['jiraKey']);
 
+/**
+ * A `value` in the shape its operator takes, as a fresh object in canonical key order; anything
+ * else is dropped, leaving the row unfinished — kept on screen, never sent.
+ */
+function readValue(op: FilterOperator, raw: unknown): ConditionValue | undefined {
+  if (takesAmount(op)) return readRelativeAmount(raw);
+  if (takesPeriod(op)) return readPeriod(raw);
+  if (typeof raw === 'string' || typeof raw === 'number' || raw === null) return raw;
+  // Only is / is not take an object as `value`: a smart sprint value.
+  return op === 'Eq' || op === 'Neq' ? readSmart(raw) : undefined;
+}
+
+/** `values` as its operator takes them: exactly [from, to] for Between; else names, numbers, (Empty) and smart values. */
+function readValues(op: FilterOperator, raw: unknown): ListValue[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  if (takesRange(op)) {
+    return raw.length === 2
+      ? raw.map((x): ListValue => (typeof x === 'string' || typeof x === 'number' ? x : null))
+      : undefined;
+  }
+  const out: ListValue[] = [];
+  for (const x of raw) {
+    if (typeof x === 'string' || typeof x === 'number' || x === null) out.push(x);
+    else {
+      const smart = readSmart(x);
+      if (smart) out.push(smart);
+    }
+  }
+  return out;
+}
+
 function readCondition(v: unknown): EditorCondition | null {
   if (!isRecord(v) || typeof v.field !== 'string' || typeof v.op !== 'string') return null;
   if (!isKnownOperator(v.op)) return null;
   const c: EditorCondition = { id: newId(), field: v.field, op: v.op as FilterOperator };
-  if (typeof v.value === 'string' || typeof v.value === 'number' || v.value === null) c.value = v.value;
-  if (Array.isArray(v.values)) {
-    c.values = v.values.filter((x): x is string | number | null =>
-      typeof x === 'string' || typeof x === 'number' || x === null);
-  }
+  const value = readValue(c.op, v.value);
+  if (value !== undefined) c.value = value;
+  const values = readValues(c.op, v.values);
+  if (values !== undefined) c.values = values;
   if (v.disabled === true) c.disabled = true;
 
   // A hand-edited (or hand-crafted) link can carry `value: null` on an operator that does not

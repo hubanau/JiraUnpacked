@@ -17,7 +17,7 @@ public sealed class FilterCatalogEndpointTests : IClassFixture<JiraUnpackedApiFa
 
     private static readonly string[] ExpectedFieldNames =
     {
-        "status", "issueType", "priority", "assignee", "sprint", "team",
+        "status", "statusCategory", "issueType", "priority", "assignee", "sprint", "team",
         "storyPoints", "createdAt", "updatedAt", "summary", "jiraKey", "parent",
     };
 
@@ -34,6 +34,7 @@ public sealed class FilterCatalogEndpointTests : IClassFixture<JiraUnpackedApiFa
         new Dictionary<string, string>
         {
             ["status"] = "DictName",
+            ["statusCategory"] = "StatusCategory",
             ["issueType"] = "DictName",
             ["priority"] = "DictName",
             ["assignee"] = "DictName",
@@ -58,10 +59,10 @@ public sealed class FilterCatalogEndpointTests : IClassFixture<JiraUnpackedApiFa
         var catalog = await response.Content.ReadFromJsonAsync<CatalogDto>();
         Assert.NotNull(catalog);
 
-        // All twelve fields, no more, no fewer, no duplicates: Count pins the
+        // All thirteen fields, no more, no fewer, no duplicates: Count pins the
         // cardinality and SetEquals pins the membership, together ruling out
         // both an extra/missing field and a duplicate masking a missing one.
-        Assert.Equal(12, catalog!.Fields.Count);
+        Assert.Equal(13, catalog!.Fields.Count);
         Assert.True(
             ExpectedFieldNames.ToHashSet().SetEquals(catalog.Fields.Select(f => f.Name)),
             $"Expected exactly {string.Join(", ", ExpectedFieldNames)}, got {string.Join(", ", catalog.Fields.Select(f => f.Name))}");
@@ -81,11 +82,20 @@ public sealed class FilterCatalogEndpointTests : IClassFixture<JiraUnpackedApiFa
         var status = catalog.Fields.Single(f => f.Name == "status");
         Assert.True(new HashSet<string> { "Eq", "Neq", "In", "NotIn", "IsNull", "IsNotNull" }.SetEquals(status.Operators));
 
+        var statusCategory = catalog.Fields.Single(f => f.Name == "statusCategory");
+        Assert.True(new HashSet<string> { "Eq", "Neq", "In", "NotIn", "IsNull", "IsNotNull" }.SetEquals(statusCategory.Operators));
+
         var jiraKey = catalog.Fields.Single(f => f.Name == "jiraKey");
         Assert.True(new HashSet<string> { "Eq", "In", "NotIn", "Contains", "StartsWith" }.SetEquals(jiraKey.Operators));
 
         var storyPoints = catalog.Fields.Single(f => f.Name == "storyPoints");
-        Assert.True(new HashSet<string> { "Eq", "Neq", "Lt", "Lte", "Gt", "Gte", "IsNull", "IsNotNull" }.SetEquals(storyPoints.Operators));
+        Assert.True(new HashSet<string> { "Eq", "Neq", "Lt", "Lte", "Gt", "Gte", "Between", "IsNull", "IsNotNull" }.SetEquals(storyPoints.Operators));
+
+        foreach (var date in new[] { "createdAt", "updatedAt" })
+        {
+            var field = catalog.Fields.Single(f => f.Name == date);
+            Assert.True(new HashSet<string> { "Lt", "Lte", "Gt", "Gte", "Between", "InLast", "NotInLast", "InPeriod" }.SetEquals(field.Operators));
+        }
 
         var summary = catalog.Fields.Single(f => f.Name == "summary");
         Assert.True(new HashSet<string> { "Contains", "NotContains", "StartsWith", "IsNull", "IsNotNull" }.SetEquals(summary.Operators));

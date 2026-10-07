@@ -115,3 +115,18 @@ describe('operatorLabel', () => {
         'contains', 'does not contain', 'starts with']);
   });
 });
+
+describe('richer values', () => {
+  it('names the range and relative operators in words', () => {
+    expect((['Between', 'InLast', 'NotInLast', 'InPeriod'] as const).map(operatorLabel))
+      .toEqual(['between', 'in the last', 'more than … ago', 'in period']);
+  });
+
+  it('gives status category the value picker, like a dictionary field', () => {
+    const catalog: FilterCatalog = {
+      fields: [{ name: 'statusCategory', type: 'StatusCategory', operators: ['Eq', 'In'] }],
+      maxConditions: 20, maxInValues: 100, maxGroups: 10, maxDepth: 3,
+    };
+    expect(isDictionaryField(catalog, 'statusCategory')).toBe(true);
+  });
+});

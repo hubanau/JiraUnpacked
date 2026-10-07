@@ -3,10 +3,12 @@ namespace JiraUnpacked.Domain.Abstractions;
 
 public sealed record PagedResult<T>(IReadOnlyList<T> Items, int Page, int PageSize, int TotalCount);
 
+/// <summary>StatusCategory is the status's category name as Jira sent it (e.g. "To Do"); null when there is no status or it has none.</summary>
 public sealed record IssueListItem(
     string JiraIssueId, string JiraKey, string? Summary,
     string? Status, string? IssueType, string? Priority, string? Assignee, string? Sprint, string? Team,
-    decimal? StoryPoints, string? ParentJiraIssueId, DateTime JiraCreatedAt, DateTime JiraUpdatedAt);
+    decimal? StoryPoints, string? ParentJiraIssueId, DateTime JiraCreatedAt, DateTime JiraUpdatedAt,
+    string? StatusCategory);
 
 public sealed record IssueRef(string JiraIssueId, string JiraKey, string? Summary);
 

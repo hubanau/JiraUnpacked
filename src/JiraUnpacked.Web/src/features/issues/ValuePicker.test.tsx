@@ -2,19 +2,28 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import type { ListValue, SmartSprintKey } from '../../api/issues';
 import { MultiValuePicker, SingleValueSelect } from './ValuePicker';
 
 const OPTIONS = [{ name: 'Backlog', count: 42 }, { name: 'In Progress', count: 5 }];
 
-function renderMulti(initial: (string | null)[] = [], max = 100) {
+const SMART = [
+  { key: 'active' as const, label: 'Active sprint', count: 1 },
+  { key: 'future' as const, label: 'Future sprints', count: 0 },
+  { key: 'open' as const, label: 'Open sprints (active + future)', count: 1 },
+  { key: 'closed' as const, label: 'Closed sprints', count: 4 },
+];
+
+function renderMulti(initial: ListValue[] = [], max = 100, smart?: typeof SMART) {
   let latest = initial;
   function Harness() {
-    const [selected, setSelected] = useState<(string | null)[]>(initial);
+    const [selected, setSelected] = useState<ListValue[]>(initial);
     return (
       <MultiValuePicker
         label="Values for condition 1"
         options={OPTIONS}
         emptyCount={7}
+        smart={smart}
         selected={selected}
         max={max}
         onChange={(next) => { latest = next; setSelected(next); }}
@@ -103,6 +112,18 @@ describe('MultiValuePicker', () => {
     expect(details.open).toBe(false);
     expect(summary).toHaveFocus();
   });
+
+  it('shows a smart value from a link as a chip named for what it means, and removes it', async () => {
+    const user = userEvent.setup();
+    const picker = renderMulti([{ smart: 'open' }, 'Backlog', { smart: 'open' }]);
+
+    expect(screen.getByText('Open sprints (active + future)')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^Remove Open sprints/ })).toHaveLength(1);
+
+    await user.click(screen.getByRole('button', { name: 'Remove Open sprints (active + future)' }));
+
+    expect(picker.latest()).toEqual(['Backlog']);
+  });
 });
 
 describe('SingleValueSelect', () => {
@@ -140,5 +161,77 @@ describe('SingleValueSelect', () => {
     renderSingle('Retired');
 
     expect(screen.getByRole('combobox')).toHaveDisplayValue('Retired (0)');
+  });
+});
+
+describe('Smart section', () => {
+  it('lists the smart values after (Empty) and before the names, and picks one', async () => {
+    const user = userEvent.setup();
+    const picker = renderMulti([], 100, SMART);
+    await user.click(screen.getByText('Choose values'));
+
+    expect(screen.getAllByRole('checkbox').map((b) => b.closest('label')?.textContent)).toEqual([
+      '(Empty) 7', 'Active sprint 1', 'Future sprints 0', 'Open sprints (active + future) 1', 'Closed sprints 4',
+      'Backlog 42', 'In Progress 5',
+    ]);
+    expect(within(screen.getByRole('group', { name: 'Smart' })).getAllByRole('checkbox')).toHaveLength(4);
+
+    await user.click(screen.getByRole('checkbox', { name: /^open sprints/i }));
+    await user.click(screen.getByRole('checkbox', { name: /^backlog/i }));
+
+    expect(picker.latest()).toEqual([{ smart: 'open' }, 'Backlog']);
+  });
+
+  it('searches the smart values too', async () => {
+    const user = userEvent.setup();
+    renderMulti([], 100, SMART);
+    await user.click(screen.getByText('Choose values'));
+
+    await user.type(screen.getByRole('searchbox'), 'clos');
+
+    expect(screen.getAllByRole('checkbox').map((b) => b.closest('label')?.textContent)).toEqual(['Closed sprints 4']);
+  });
+
+  it('skips a smart value this SPA cannot name, in both pickers', async () => {
+    // A newer server may offer a key this build has no label for: skipped, never shown raw.
+    const withUnknown = [...SMART, { key: 'nextQuarter' as unknown as SmartSprintKey, label: 'Next quarter', count: 6 }];
+
+    const user = userEvent.setup();
+    renderMulti([], 100, withUnknown);
+    await user.click(screen.getByText('Choose values'));
+    expect(within(screen.getByRole('group', { name: 'Smart' })).getAllByRole('checkbox')).toHaveLength(4);
+    expect(screen.queryByText(/next quarter|nextQuarter/i)).not.toBeInTheDocument();
+
+    render(
+      <SingleValueSelect aria-label="Value" value="" options={OPTIONS} emptyCount={7} smart={withUnknown}
+        onPick={vi.fn()} onPickEmpty={vi.fn()} onPickSmart={vi.fn()} />,
+    );
+    const single = within(screen.getByLabelText('Value')).getAllByRole('option').map((o) => o.textContent);
+    expect(single).toEqual([
+      '— choose —', '(Empty) (7)', 'Active sprint (1)', 'Future sprints (0)', 'Open sprints (active + future) (1)',
+      'Closed sprints (4)', 'Backlog (42)', 'In Progress (5)',
+    ]);
+  });
+
+  it('offers the smart values in the single select, and shows the chosen one', async () => {
+    const onPickSmart = vi.fn();
+    const { rerender } = render(
+      <SingleValueSelect aria-label="Value" value="" options={OPTIONS} emptyCount={7} smart={SMART}
+        onPick={vi.fn()} onPickEmpty={vi.fn()} onPickSmart={onPickSmart} />,
+    );
+
+    expect(within(screen.getByLabelText('Value')).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      '— choose —', '(Empty) (7)', 'Active sprint (1)', 'Future sprints (0)', 'Open sprints (active + future) (1)',
+      'Closed sprints (4)', 'Backlog (42)', 'In Progress (5)',
+    ]);
+
+    await userEvent.setup().selectOptions(screen.getByLabelText('Value'), 'Active sprint (1)');
+    expect(onPickSmart).toHaveBeenCalledWith('active');
+
+    rerender(
+      <SingleValueSelect aria-label="Value" value="" options={OPTIONS} emptyCount={7} smart={SMART} smartValue="closed"
+        onPick={vi.fn()} onPickEmpty={vi.fn()} onPickSmart={onPickSmart} />,
+    );
+    expect(screen.getByLabelText('Value')).toHaveDisplayValue('Closed sprints (4)');
   });
 });

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  blankGroup, cloneGroup, countEnabled, emptyRoot, insertAfter, isCompleteCondition,
-  parseFilterParam, pruneTree, toSavable, toUrlJson, toggleDisabled, withIdentityOf,
+  blankGroup, cloneCondition, cloneGroup, countEnabled, emptyRoot, freshCondition, insertAfter,
+  isCompleteCondition, parseFilterParam, pruneTree, switchOperator, toSavable, toUrlJson,
+  toWireCondition, toggleDisabled, withIdentityOf,
   type EditorCondition, type EditorGroup,
 } from './filterTree';
 import { OPERATOR_LABELS } from './filterCatalogHelpers';
@@ -306,5 +307,117 @@ describe('toSavable', () => {
     expect(toSavable(tree)).toEqual({
       logic: 'And', disabled: true, conditions: [{ field: 'summary', op: 'Contains', value: 'x' }],
     });
+  });
+});
+
+describe('object values', () => {
+  it('reads each object value from a link in canonical form, and drops shapes its operator cannot use', () => {
+    const tree = parseFilterParam(JSON.stringify({
+      logic: 'And',
+      conditions: [
+        { field: 'updatedAt', op: 'InPeriod', value: { timeZone: 'Europe/Warsaw', period: 'thisWeek', extra: 1 } },
+        { field: 'updatedAt', op: 'InLast', value: { unit: 'days', amount: 14 } },
+        { field: 'sprint', op: 'Eq', value: { smart: 'active' } },
+        { field: 'sprint', op: 'In', values: [{ smart: 'current' }, 'Sprint 7', { smart: 'open' }, null] },
+        { field: 'createdAt', op: 'Between', values: ['2026-09-01', null] },
+        { field: 'updatedAt', op: 'InLast', value: { amount: '14', unit: 'days' } },
+        { field: 'updatedAt', op: 'InPeriod', value: { period: 'fortnight' } },
+        { field: 'createdAt', op: 'Lt', value: { smart: 'active' } },
+        { field: 'createdAt', op: 'Between', values: ['2026-09-01'] },
+      ],
+    }), null);
+
+    const [period, last, smartEq, smartIn, between, badAmount, badPeriod, badLt, badBetween] = tree.conditions;
+    expect(period.value).toEqual({ period: 'thisWeek', timeZone: 'Europe/Warsaw' });
+    expect(Object.keys(period.value as object)).toEqual(['period', 'timeZone']);
+    expect(last.value).toEqual({ amount: 14, unit: 'days' });
+    expect(smartEq.value).toEqual({ smart: 'active' });
+    expect(smartIn.values).toEqual(['Sprint 7', { smart: 'open' }, null]);
+    expect(between.values).toEqual(['2026-09-01', null]);
+    for (const c of [badAmount, badPeriod, badLt, badBetween]) {
+      expect(isCompleteCondition(c)).toBe(false);   // kept on screen, never sent
+    }
+  });
+
+  it('decides completeness per operator', () => {
+    const c = (rest: Omit<EditorCondition, 'id'>) => cond('x', rest);
+    expect(isCompleteCondition(c({ field: 'createdAt', op: 'Between', values: [null, null] }))).toBe(false);
+    expect(isCompleteCondition(c({ field: 'createdAt', op: 'Between', values: ['', null] }))).toBe(false);
+    expect(isCompleteCondition(c({ field: 'createdAt', op: 'Between', values: [null, '2026-09-30'] }))).toBe(true);
+    expect(isCompleteCondition(c({ field: 'storyPoints', op: 'Between', values: [0, null] }))).toBe(true);
+    expect(isCompleteCondition(c({ field: 'updatedAt', op: 'InLast', value: { amount: 0, unit: 'days' } }))).toBe(false);
+    expect(isCompleteCondition(c({ field: 'updatedAt', op: 'InLast', value: { amount: 1.5, unit: 'days' } }))).toBe(false);
+    expect(isCompleteCondition(c({ field: 'updatedAt', op: 'NotInLast', value: { amount: 1, unit: 'hours' } }))).toBe(true);
+    // The server refuses more than 3650: past it the row is unfinished, never a 400.
+    expect(isCompleteCondition(c({ field: 'updatedAt', op: 'InLast', value: { amount: 3650, unit: 'days' } }))).toBe(true);
+    expect(isCompleteCondition(c({ field: 'updatedAt', op: 'InLast', value: { amount: 3651, unit: 'days' } }))).toBe(false);
+    expect(isCompleteCondition(c({ field: 'updatedAt', op: 'InPeriod', value: { period: 'today' } }))).toBe(true);
+    expect(isCompleteCondition(c({ field: 'updatedAt', op: 'InPeriod' }))).toBe(false);
+    expect(isCompleteCondition(c({ field: 'sprint', op: 'Eq', value: { smart: 'active' } }))).toBe(true);
+  });
+
+  it('sends an empty Between bound as an open one, and copies object values rather than sharing them', () => {
+    expect(toWireCondition({ field: 'createdAt', op: 'Between', values: ['2026-09-01', ''] }))
+      .toEqual({ field: 'createdAt', op: 'Between', values: ['2026-09-01', null] });
+
+    const value = { amount: 14, unit: 'days' as const };
+    const wire = toWireCondition({ field: 'updatedAt', op: 'InLast', value });
+    expect(wire).toEqual({ field: 'updatedAt', op: 'InLast', value: { amount: 14, unit: 'days' } });
+    expect(wire.value).not.toBe(value);
+  });
+
+  it('round-trips every object value through the URL form', () => {
+    const tree = group('r', {
+      conditions: [
+        cond('a', { field: 'updatedAt', op: 'InLast', value: { amount: 3, unit: 'weeks' } }),
+        cond('b', { field: 'updatedAt', op: 'InPeriod', value: { period: 'lastMonth', timeZone: 'Europe/Warsaw' } }),
+        cond('c', { field: 'storyPoints', op: 'Between', values: [1.5, null] }),
+        cond('d', { field: 'sprint', op: 'In', values: [{ smart: 'open' }, null, 'Sprint 7'] }),
+        cond('e', { field: 'sprint', op: 'Neq', value: { smart: 'active' } }),
+      ],
+    });
+
+    expect(pruneTree(parseFilterParam(toUrlJson(tree), null))).toEqual(pruneTree(tree));
+  });
+
+  it('copies object values when a condition is duplicated', () => {
+    const original = cond('a', { field: 'updatedAt', op: 'InPeriod', value: { period: 'today', timeZone: 'UTC' } });
+    const copy = cloneCondition(original);
+
+    expect(copy.value).toEqual(original.value);
+    expect(copy.value).not.toBe(original.value);
+  });
+});
+
+describe('freshCondition / switchOperator', () => {
+  const TZ = 'Europe/Warsaw';
+
+  it('starts the relative operators at a default that already filters, and the rest empty', () => {
+    expect(freshCondition('updatedAt', 'InLast', TZ)).toEqual({ field: 'updatedAt', op: 'InLast', value: { amount: 14, unit: 'days' } });
+    expect(freshCondition('updatedAt', 'InPeriod', TZ)).toEqual({ field: 'updatedAt', op: 'InPeriod', value: { period: 'thisWeek', timeZone: TZ } });
+    expect(freshCondition('createdAt', 'Between', TZ)).toEqual({ field: 'createdAt', op: 'Between', values: [null, null] });
+    expect(freshCondition('status', 'In', TZ)).toEqual({ field: 'status', op: 'In', values: [] });
+    expect(freshCondition('status', 'Eq', TZ)).toEqual({ field: 'status', op: 'Eq' });
+  });
+
+  it('keeps what still means the same thing, and starts over otherwise', () => {
+    expect(switchOperator({ field: 'updatedAt', op: 'InLast', value: { amount: 30, unit: 'weeks' } }, 'NotInLast', TZ))
+      .toEqual({ field: 'updatedAt', op: 'NotInLast', value: { amount: 30, unit: 'weeks' } });
+    expect(switchOperator({ field: 'updatedAt', op: 'Lt', value: '2026-01-01' }, 'InLast', TZ))
+      .toEqual({ field: 'updatedAt', op: 'InLast', value: { amount: 14, unit: 'days' } });
+    expect(switchOperator({ field: 'updatedAt', op: 'Lt', value: '2026-01-01' }, 'InPeriod', TZ))
+      .toEqual({ field: 'updatedAt', op: 'InPeriod', value: { period: 'thisWeek', timeZone: TZ } });
+    expect(switchOperator({ field: 'updatedAt', op: 'InPeriod', value: { period: 'today' } }, 'Lt', TZ))
+      .toEqual({ field: 'updatedAt', op: 'Lt', value: '' });
+    expect(switchOperator({ field: 'updatedAt', op: 'Lt', value: '2026-01-01' }, 'Gte', TZ))
+      .toEqual({ field: 'updatedAt', op: 'Gte', value: '2026-01-01' });
+    expect(switchOperator({ field: 'sprint', op: 'Eq', value: { smart: 'active' } }, 'Neq', TZ))
+      .toEqual({ field: 'sprint', op: 'Neq', value: { smart: 'active' } });
+    expect(switchOperator({ field: 'sprint', op: 'Eq', value: { smart: 'active' } }, 'In', TZ))
+      .toEqual({ field: 'sprint', op: 'In', values: [] });
+    expect(switchOperator({ field: 'status', op: 'In', values: ['Done'] }, 'NotIn', TZ))
+      .toEqual({ field: 'status', op: 'NotIn', values: ['Done'] });
+    expect(switchOperator({ field: 'status', op: 'Eq', value: 'Done' }, 'IsNull', TZ))
+      .toEqual({ field: 'status', op: 'IsNull' });
   });
 });

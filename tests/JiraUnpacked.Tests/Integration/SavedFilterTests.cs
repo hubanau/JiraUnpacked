@@ -661,4 +661,35 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
             Assert.True(r.StatusCode is HttpStatusCode.Created or HttpStatusCode.Conflict, $"got {(int)r.StatusCode}"));
         Assert.Single(await ListAsync(client, projectId), v => v.IsDefault);
     }
+
+    [Fact]
+    public async Task A_view_stores_object_values_and_may_show_and_sort_by_category()
+    {
+        // The catalog is the column vocabulary, so a new field is a valid column the moment it
+        // exists; and object values round-trip through the jsonb definition untouched.
+        var (client, projectId) = await SeedAsync();
+
+        var created = await CreateOkAsync(client, projectId, new
+        {
+            name = "Recent, by category",
+            filter = new
+            {
+                logic = "And",
+                conditions = new object[]
+                {
+                    new { field = "updatedAt", op = "InPeriod", value = new { period = "thisWeek", timeZone = "Europe/Warsaw" } },
+                    new { field = "sprint", op = "In", values = new object?[] { new { smart = "open" }, null } },
+                },
+            },
+            columns = new[] { "jiraKey", "statusCategory" },
+            sortBy = "statusCategory",
+        });
+
+        var stored = created.Filter!.Conditions!;
+        Assert.Equal("Europe/Warsaw", stored[0].Value!.Value.GetProperty("timeZone").GetString());
+        Assert.Equal("open", stored[1].Values![0].GetProperty("smart").GetString());
+        Assert.Equal(JsonValueKind.Null, stored[1].Values![1].ValueKind);
+        Assert.Equal(new[] { "jiraKey", "statusCategory" }, created.Columns);
+        Assert.Equal("statusCategory", created.SortBy);
+    }
 }
