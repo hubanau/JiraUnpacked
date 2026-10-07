@@ -27,6 +27,8 @@ export const ISSUE_COLUMNS: IssueColumn[] = [
   { id: 'jiraKey', header: 'Key', render: (i) => i.jiraKey },
   { id: 'summary', header: 'Summary', render: (i) => i.summary ?? EMPTY },
   { id: 'status', header: 'Status', render: (i) => i.status ?? EMPTY },
+  // Where the list shows WHY a row matched a "not done" filter. Mirrors ExportColumns' "Category".
+  { id: 'statusCategory', header: 'Category', render: (i) => i.statusCategory ?? EMPTY },
   { id: 'issueType', header: 'Type', render: (i) => i.issueType ?? EMPTY },
   { id: 'priority', header: 'Priority', render: (i) => i.priority ?? EMPTY },
   { id: 'assignee', header: 'Assignee', render: (i) => i.assignee ?? EMPTY },

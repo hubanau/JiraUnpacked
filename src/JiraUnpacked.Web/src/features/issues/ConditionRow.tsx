@@ -1,6 +1,8 @@
 import type { ChangeEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { FilterCatalog, FilterCondition, FilterOperator } from '../../api/issues';
+import type {
+  FilterCatalog, FilterCondition, FilterOperator, ListValue, PeriodKey, PeriodValue, RelativeAmount, RelativeUnit,
+} from '../../api/issues';
 import { getFilterValues } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
 import { Field, Select } from '../../ui';
@@ -8,8 +10,13 @@ import { ChipInput } from './ChipInput';
 import {
   fieldNames, isDictionaryField, operatorLabel, operatorsFor, resetOperatorIfDisallowed, typeFor,
 } from './filterCatalogHelpers';
-import { takesList, takesNoValue } from './filterTree';
+import {
+  freshCondition, switchOperator, takesAmount, takesList, takesNoValue, takesPeriod, takesRange,
+} from './filterTree';
 import { INPUT_CLASS } from './styles';
+import {
+  DEFAULT_RELATIVE, MAX_RELATIVE_AMOUNT, PERIODS, RELATIVE_UNITS, browserTimeZone, isRelativeAmount, isScalar, isSmartValue, readPeriod,
+} from './valueShapes';
 import { MultiValuePicker, SingleValueSelect } from './ValuePicker';
 
 interface ConditionRowProps {
@@ -41,21 +48,12 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
     const nextField = event.target.value;
     const nextOp = resetOperatorIfDisallowed(catalog, nextField, op);
     // A value valid for the old field rarely is for the new one, so it is dropped, not carried.
-    onChange(takesList(nextOp) ? { field: nextField, op: nextOp, values: [] } : { field: nextField, op: nextOp });
+    onChange(freshCondition(nextField, nextOp, browserTimeZone()));
   };
 
-  const handleOperatorChange = (event: ChangeEvent<HTMLSelectElement>) => {
-    const nextOp = event.target.value as FilterOperator;
-    if (takesNoValue(nextOp)) {
-      onChange({ field, op: nextOp });
-    } else if (takesList(nextOp)) {
-      // "is any of" <-> "is none of" keeps the list: flipping the sense is the common edit.
-      onChange({ field, op: nextOp, values: takesList(op) ? [...(condition.values ?? [])] : [] });
-    } else {
-      const keep = !takesList(op) && !takesNoValue(op) && condition.value !== null;
-      onChange({ field, op: nextOp, value: keep ? condition.value ?? '' : '' });
-    }
-  };
+  // What carries over between operators, and what each one starts with, lives in switchOperator.
+  const handleOperatorChange = (event: ChangeEvent<HTMLSelectElement>) =>
+    onChange(switchOperator(condition, event.target.value as FilterOperator, browserTimeZone()));
 
   // Only dictionary fields have a value list, and only operators that take a value need one.
   const wantsValueList = isDict && !takesNoValue(op);
@@ -77,6 +75,97 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
   const renderValueControl = () => {
     if (takesNoValue(op)) return null;
 
+    if (takesRange(op)) {
+      // Two bounds, either left blank for an open end. Dates for the date fields, numbers for points.
+      const [from = null, to = null] = condition.values ?? [];
+      const numeric = fieldType === 'Decimal';
+      const shown = (v: ListValue) => (isScalar(v) ? String(v) : '');
+      const setBound = (index: 0 | 1, raw: string) => {
+        const bound: ListValue = raw === '' ? null : numeric ? Number(raw) : raw;
+        onChange({ field, op, values: index === 0 ? [bound, to] : [from, bound] });
+      };
+      return (
+        <>
+          <Field label={`From for condition ${label}`} id={`condition-${label}-from`}>
+            <input
+              type={numeric ? 'number' : 'date'}
+              step={numeric ? 'any' : undefined}
+              className={INPUT_CLASS}
+              value={shown(from)}
+              onChange={(e) => setBound(0, e.target.value)}
+            />
+          </Field>
+          <Field label={`To for condition ${label}`} id={`condition-${label}-to`}>
+            <input
+              type={numeric ? 'number' : 'date'}
+              step={numeric ? 'any' : undefined}
+              className={INPUT_CLASS}
+              value={shown(to)}
+              onChange={(e) => setBound(1, e.target.value)}
+            />
+          </Field>
+        </>
+      );
+    }
+
+    if (takesAmount(op)) {
+      // An amount of 0 is "not entered yet": the input shows blank and the row is unfinished.
+      const rel: RelativeAmount = isRelativeAmount(condition.value)
+        ? condition.value
+        : { amount: 0, unit: DEFAULT_RELATIVE.unit };
+      const set = (next: RelativeAmount) => onChange({ field, op, value: next });
+      return (
+        <>
+          <Field label={`Amount for condition ${label}`} id={`condition-${label}-amount`}>
+            <input
+              type="number"
+              min={1}
+              max={MAX_RELATIVE_AMOUNT}
+              step={1}
+              className={INPUT_CLASS}
+              value={rel.amount >= 1 ? rel.amount : ''}
+              onChange={(e) => set({
+                amount: e.target.value === '' ? 0 : Math.trunc(Number(e.target.value)),
+                unit: rel.unit,
+              })}
+            />
+          </Field>
+          <Field label={`Unit for condition ${label}`} id={`condition-${label}-unit`}>
+            <Select value={rel.unit} onChange={(e) => set({ amount: rel.amount, unit: e.target.value as RelativeUnit })}>
+              {RELATIVE_UNITS.map((u) => (
+                <option key={u} value={u}>{u}</option>
+              ))}
+            </Select>
+          </Field>
+          {/* "more than [14] [days] ago": the operator reads "more than … ago", the row ends the sentence. */}
+          {op === 'NotInLast' && <span className="pb-2 text-sm text-[var(--ju-text)]">ago</span>}
+        </>
+      );
+    }
+
+    if (takesPeriod(op)) {
+      const current = readPeriod(condition.value);
+      // The zone captured with the operator stays with the condition. One that never had a zone
+      // (a link from elsewhere) means UTC on the server, and keeps meaning it. A row with no
+      // period yet will capture the browser's zone when one is picked, so that is the one named.
+      const zone = current ? current.timeZone : browserTimeZone();
+      const pick = (period: PeriodKey) => {
+        const next: PeriodValue = { period };
+        if (zone) next.timeZone = zone;
+        onChange({ field, op, value: next });
+      };
+      return (
+        <Field label={`Period for condition ${label}`} id={`condition-${label}-period`} hint={zone ?? 'UTC'}>
+          <Select value={current?.period ?? ''} onChange={(e) => pick(e.target.value as PeriodKey)}>
+            {!current && <option value="">— choose —</option>}
+            {PERIODS.map((p) => (
+              <option key={p.key} value={p.key}>{p.label}</option>
+            ))}
+          </Select>
+        </Field>
+      );
+    }
+
     if (takesList(op)) {
       const values = condition.values ?? [];
       if (picked) {
@@ -85,6 +174,7 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
             label={`Values for condition ${label}`}
             options={picked.values}
             emptyCount={picked.emptyCount}
+            smart={picked.smart}
             selected={values}
             max={catalog.maxInValues}
             onChange={(next) => onChange({ field, op, values: next })}
@@ -92,18 +182,19 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
         );
       }
       const isKey = field === 'jiraKey';
-      // Typing cannot produce (Empty), but one that arrived in a link is kept, not silently lost.
-      const keepsEmpty = values.includes(null);
+      // Typing cannot produce (Empty) or a smart value, but one that arrived in a link is kept,
+      // not silently lost.
+      const kept = values.filter((v) => v === null || isSmartValue(v));
       return (
         <ChipInput
           key={field}
           id={valueId}
           label={valueLabel}
-          values={values.filter((v): v is string | number => v !== null).map(String)}
-          max={catalog.maxInValues - (keepsEmpty ? 1 : 0)}
+          values={values.filter(isScalar).map(String)}
+          max={catalog.maxInValues - kept.length}
           splitOn={isKey ? JIRA_KEY_SEPARATORS : undefined}
           normalize={isKey ? toUpper : undefined}
-          onChange={(next) => onChange({ field, op, values: keepsEmpty ? [null, ...next] : next })}
+          onChange={(next) => onChange({ field, op, values: [...kept, ...next] })}
         />
       );
     }
@@ -115,7 +206,10 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
             value={textValue}
             options={picked.values}
             emptyCount={picked.emptyCount}
+            smart={picked.smart}
+            smartValue={isSmartValue(condition.value) ? condition.value.smart : undefined}
             onPick={(name) => onChange({ field, op, value: name })}
+            onPickSmart={(key) => onChange({ field, op, value: { smart: key } })}
             // "is (Empty)" is "is empty": the operator changes, so a null value never reaches the wire.
             onPickEmpty={() => onChange({ field, op: op === 'Neq' ? 'IsNotNull' : 'IsNull' })}
           />
@@ -129,7 +223,7 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label }:
           <input
             type="number"
             className={INPUT_CLASS}
-            value={condition.value ?? ''}
+            value={isScalar(condition.value) ? condition.value : ''}
             onChange={(e) => onChange({ field, op, value: e.target.value === '' ? '' : Number(e.target.value) })}
           />
         </Field>

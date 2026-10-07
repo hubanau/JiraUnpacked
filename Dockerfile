@@ -64,6 +64,12 @@ RUN dotnet tool install --global dotnet-ef --version 8.* && \
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-alpine AS runtime
 WORKDIR /app
 
+# IANA time-zone data. The Alpine runtime image ships none, so without it every "in period"
+# filter saved in a zone other than UTC would be refused as an unknown time zone — in
+# production only, since developer machines and CI runners carry zone data of their own.
+# Installed as root, before USER app.
+RUN apk add --no-cache tzdata
+
 # Non-root. The .NET 8 images already ship an unprivileged `app` user, so this
 # uses it rather than creating one — recreating it fails, since the group is
 # already in use. The app needs no write access to its own directory: it serves

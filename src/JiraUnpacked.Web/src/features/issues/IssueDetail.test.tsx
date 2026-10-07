@@ -25,7 +25,7 @@ function renderDetail() {
 
 const detail = (over: Partial<IssueDetail> = {}): IssueDetail => ({
   issue: { jiraIssueId: 'i1', jiraKey: 'ACME-1', summary: 'Login is broken', status: 'Done',
-    issueType: 'Bug', priority: null, assignee: 'Sam', sprint: null, team: null,
+    statusCategory: 'Done', issueType: 'Bug', priority: null, assignee: 'Sam', sprint: null, team: null,
     storyPoints: 3, parentJiraIssueId: 'i0',
     jiraCreatedAt: '2026-01-01T00:00:00Z', jiraUpdatedAt: '2026-02-01T00:00:00Z' },
   parent: { jiraIssueId: 'i0', jiraKey: 'ACME-0', summary: 'Epic' },

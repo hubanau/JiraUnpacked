@@ -58,9 +58,11 @@ public sealed class IssuesController : ControllerBase
         var result = await _filterValues.GetAsync(projectId, field ?? "", ct);
         if (result.Error is not null)
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: result.Error);
-        return result.Values is null
-            ? NotFound()
-            : Ok(new { field, values = result.Values, emptyCount = result.EmptyCount });
+        if (result.Values is null) return NotFound();
+        // `smart` only where it exists (sprint): its absence tells a client there is no Smart section.
+        return result.Smart is null
+            ? Ok(new { field, values = result.Values, emptyCount = result.EmptyCount })
+            : Ok(new { field, values = result.Values, emptyCount = result.EmptyCount, smart = result.Smart });
     }
 
     /// <summary>Matches the SPA's own filter encoding, including its string enum names.</summary>

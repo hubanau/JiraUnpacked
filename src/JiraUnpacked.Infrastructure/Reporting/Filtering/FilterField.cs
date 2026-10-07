@@ -4,7 +4,7 @@ using JiraUnpacked.Domain.Entities;
 
 namespace JiraUnpacked.Infrastructure.Reporting.Filtering;
 
-internal enum FieldType { DictName, Decimal, DateTime, Text, ParentRef }
+internal enum FieldType { DictName, Decimal, DateTime, Text, ParentRef, StatusCategory }
 
 /// <summary>A filterable field: its type, its allowed operators, and (for the builder) the member selector.</summary>
 internal sealed record FilterField(
@@ -23,6 +23,12 @@ internal static class FilterFields
         new Dictionary<string, FilterField>(StringComparer.OrdinalIgnoreCase)
         {
             ["status"]     = Dict("status",     (Issue i) => i.StatusId),
+            // Filters through the status (StatusId), but by the status's CATEGORY — its own type,
+            // because its (Empty) also covers a status that has no category.
+            ["statusCategory"] = new("statusCategory", FieldType.StatusCategory,
+                                 Ops(FilterOperator.Eq, FilterOperator.Neq, FilterOperator.In, FilterOperator.NotIn,
+                                     FilterOperator.IsNull, FilterOperator.IsNotNull),
+                                 (Expression<Func<Issue, Guid?>>)(i => i.StatusId)),
             ["issueType"]  = Dict("issueType",  (Issue i) => i.IssueTypeId),
             ["priority"]   = Dict("priority",   (Issue i) => i.PriorityId),
             ["assignee"]   = Dict("assignee",   (Issue i) => i.AssigneeId),
@@ -30,7 +36,8 @@ internal static class FilterFields
             ["team"]       = Dict("team",       (Issue i) => i.TeamId),
             ["storyPoints"]= new("storyPoints", FieldType.Decimal,
                                  Ops(FilterOperator.Eq, FilterOperator.Neq, FilterOperator.Lt, FilterOperator.Lte,
-                                     FilterOperator.Gt, FilterOperator.Gte, FilterOperator.IsNull, FilterOperator.IsNotNull),
+                                     FilterOperator.Gt, FilterOperator.Gte, FilterOperator.Between,
+                                     FilterOperator.IsNull, FilterOperator.IsNotNull),
                                  (Expression<Func<Issue, decimal?>>)(i => i.StoryPoints)),
             ["createdAt"]  = Date("createdAt",  (Issue i) => i.JiraCreatedAt),
             ["updatedAt"]  = Date("updatedAt",  (Issue i) => i.JiraUpdatedAt),
@@ -54,5 +61,6 @@ internal static class FilterFields
 
     private static FilterField Date(string name, Expression<Func<Issue, DateTime>> sel) =>
         new(name, FieldType.DateTime,
-            Ops(FilterOperator.Lt, FilterOperator.Lte, FilterOperator.Gt, FilterOperator.Gte), sel);
+            Ops(FilterOperator.Lt, FilterOperator.Lte, FilterOperator.Gt, FilterOperator.Gte,
+                FilterOperator.Between, FilterOperator.InLast, FilterOperator.NotInLast, FilterOperator.InPeriod), sel);
 }

@@ -2,6 +2,7 @@ using System.Text.Json;
 using JiraUnpacked.Domain.Abstractions;
 using JiraUnpacked.Domain.Entities;
 using JiraUnpacked.Infrastructure.Reporting.Filtering;
+using JiraUnpacked.Tests.Security;
 
 namespace JiraUnpacked.Tests.Reporting;
 
@@ -24,7 +25,8 @@ public sealed class IssueFilterGroupTests
         return Task.FromResult(ids);
     }
 
-    private static readonly IIssueFilterTranslator Sut = new IssueFilterTranslator();
+    // None of these conditions is relative, so the time is irrelevant — but there is always a clock.
+    private static readonly IIssueFilterTranslator Sut = new IssueFilterTranslator(new FakeClock(DateTime.UtcNow));
 
     private static FilterCondition Status(string name) =>
         new("status", FilterOperator.Eq, J(name), null);

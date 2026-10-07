@@ -21,6 +21,7 @@ public static class ExportColumns
         new Column("jiraKey", "Key", i => i.JiraKey),
         new Column("summary", "Summary", i => i.Summary),
         new Column("status", "Status", i => i.Status),
+        new Column("statusCategory", "Category", i => i.StatusCategory),
         new Column("issueType", "Type", i => i.IssueType),
         new Column("priority", "Priority", i => i.Priority),
         new Column("assignee", "Assignee", i => i.Assignee),
