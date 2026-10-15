@@ -18,6 +18,8 @@ export const takesHistory = (op: FilterOperator): op is HistoryOperator =>
 /** The server's limits (IssueFilterTranslator.History). */
 export const MAX_HISTORY_FIELD_LENGTH = 100;
 export const MAX_HISTORY_VALUE_LENGTH = 255;
+/** Entries in one history list (values, from, to, by): IssueFilterTranslator.MaxHistoryValues. */
+export const MAX_HISTORY_VALUES = 50;
 export const MAX_CHANGE_COUNT = 10000;
 
 /** In the order the compare select offers them. */
@@ -178,11 +180,13 @@ export function readHistoryValue(op: FilterOperator, raw: unknown): HistoryValue
 }
 
 const fits = (list: readonly (string | null)[] | undefined): boolean =>
-  (list ?? []).every((x) => x === null || x.length <= MAX_HISTORY_VALUE_LENGTH);
+  (list ?? []).length <= MAX_HISTORY_VALUES
+  && (list ?? []).every((x) => x === null || x.length <= MAX_HISTORY_VALUE_LENGTH);
 
 /**
  * Finished enough to send: a field name (non-blank, ≤ 100); "was" at least one value; "number of
- * changes" a compare and a whole count 0–10000; any window finished; no value over 255 characters.
+ * changes" a compare and a whole count 0–10000; any window finished; no list over 50 entries and
+ * no value over 255 characters.
  */
 export function isCompleteHistoryValue(op: FilterOperator, v: HistoryValue | undefined): boolean {
   if (!v || v.historyField.trim() === '' || v.historyField.length > MAX_HISTORY_FIELD_LENGTH) return false;

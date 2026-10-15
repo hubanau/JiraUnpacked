@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
@@ -424,6 +424,99 @@ describe('ConditionRow — history', () => {
     });
     await user.selectOptions(screen.getByLabelText('Operator for condition 1'), 'Was');
     expect(row.last()).toEqual({ field: 'history', op: 'Was', value: { historyField: 'Sprint', values: [] } });
+  });
+
+  it('choosing another history field clears the old field’s values, keeping the window', async () => {
+    mockHistory();
+    const user = userEvent.setup();
+    const during = { kind: 'inLast', amount: 7, unit: 'days' } as const;
+    const row = renderRow({
+      field: 'history', op: 'Changed',
+      value: { historyField: 'status', from: ['To Do'], to: ['Done'], by: ['Alice'], during },
+    });
+
+    await waitFor(() => expect(screen.getByLabelText('History field for condition 1').tagName).toBe('SELECT'));
+    await user.selectOptions(screen.getByLabelText('History field for condition 1'), 'Sprint');
+    // "status was Done" must not quietly become "Sprint was Done".
+    expect(row.last()).toEqual({ field: 'history', op: 'Changed', value: { historyField: 'Sprint', during } });
+  });
+
+  it('choosing another history field for "was" empties its values', async () => {
+    mockHistory();
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'history', op: 'Was', value: { historyField: 'Sprint', values: ['PLAT 101'] } });
+
+    await waitFor(() => expect(screen.getByLabelText('History field for condition 1').tagName).toBe('SELECT'));
+    await user.selectOptions(screen.getByLabelText('History field for condition 1'), 'status');
+    expect(row.last()).toEqual({ field: 'history', op: 'Was', value: { historyField: 'status', values: [] } });
+  });
+
+  it('a typed history field clears the values when the input is left with another name, not on every keystroke', async () => {
+    server.use(
+      http.get('/api/projects/p1/history-fields', () => new HttpResponse(null, { status: 500 })),
+      http.get('/api/projects/p1/history-values', () => new HttpResponse(null, { status: 500 })),
+    );
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'history', op: 'Was', value: { historyField: 'status', values: ['Blocked'] } });
+    await screen.findByText(/type the name as Jira reports it/i);
+    const input = screen.getByLabelText('History field for condition 1');
+
+    // Left with the same name — even after editing it on the way — the values stay.
+    await user.click(input);
+    await user.type(input, '{Backspace}s');
+    await user.tab();
+    expect(row.last()).toEqual({ field: 'history', op: 'Was', value: { historyField: 'status', values: ['Blocked'] } });
+
+    // Typing another name keeps them while typing…
+    await user.clear(input);
+    await user.type(input, 'priority');
+    expect(row.last()).toEqual({ field: 'history', op: 'Was', value: { historyField: 'priority', values: ['Blocked'] } });
+    // …and leaving the input clears them.
+    await user.tab();
+    expect(row.last()).toEqual({ field: 'history', op: 'Was', value: { historyField: 'priority', values: [] } });
+  });
+
+  it('does not take the typed values input away from someone typing when the list arrives', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    server.use(
+      http.get('/api/projects/p1/history-fields', () => HttpResponse.json({ fields: [{ name: 'Sprint', count: 9 }] })),
+      http.get('/api/projects/p1/history-values', async () => {
+        await gate;
+        return HttpResponse.json({ values: [{ name: 'PLAT 101', count: 5 }], emptyCount: 0 });
+      }),
+    );
+    const user = userEvent.setup();
+    const row = renderRow({ field: 'history', op: 'Was', value: { historyField: 'Sprint', values: [] } });
+
+    const input = screen.getByLabelText('Values for condition 1');
+    await user.type(input, 'PLAT 1');
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    // Still the same, focused input, with what was typed — the list waits.
+    expect(screen.getByLabelText('Values for condition 1')).toBe(input);
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue('PLAT 1');
+    await user.type(input, '01{Enter}');
+    expect(row.last()).toEqual({ field: 'history', op: 'Was', value: { historyField: 'Sprint', values: ['PLAT 101'] } });
+
+    // Leaving it lets the list take over, keeping the chosen value.
+    await user.click(document.body);
+    const values = await screen.findByRole('group', { name: 'Values for condition 1' });
+    expect(within(values).getByRole('checkbox', { name: /^PLAT 101/ })).toBeChecked();
+  });
+
+  it('takes at most 50 values in a history list', async () => {
+    mockHistory();
+    const fifty = Array.from({ length: 50 }, (_, i) => `PLAT ${200 + i}`);
+    renderRow({ field: 'history', op: 'Was', value: { historyField: 'Sprint', values: fifty } });
+
+    const values = await screen.findByRole('group', { name: 'Values for condition 1' });
+    expect(within(values).getByText('You can add at most 50 values.')).toBeInTheDocument();
+    expect(within(values).getByRole('checkbox', { name: /^PLAT 101/ })).toBeDisabled();
   });
 
   it('disables "History of a field…" at the cap, saying so', () => {

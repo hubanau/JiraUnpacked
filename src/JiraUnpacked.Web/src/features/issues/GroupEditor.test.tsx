@@ -209,4 +209,20 @@ describe('GroupEditor', () => {
     expect(within(screen.getByLabelText('Field for condition 6')).getByRole('option', { name: /History of a field/ }))
       .toBeDisabled();
   });
+
+  it('a link already over the history cap still lets plain conditions be added', () => {
+    server.use(
+      http.get('/api/projects/p1/history-fields', () => HttpResponse.json({ fields: [] })),
+      http.get('/api/projects/p1/history-values', () => HttpResponse.json({ values: [], emptyCount: 0 })),
+    );
+    const history = (id: string): EditorCondition =>
+      ({ id, field: 'history', op: 'Changed', value: { historyField: 'Sprint' } });
+    renderEditor(root({ conditions: [...['a', 'b', 'c', 'd', 'e', 'f'].map(history), summary('g')] }));
+
+    // Six history conditions, one over the cap: none more of those, but a summary row still fits.
+    expect(screen.getByRole('button', { name: 'Add condition' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Add group' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Duplicate condition 7' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Duplicate condition 1' })).toHaveAttribute('title', 'Limit: 5 history conditions');
+  });
 });

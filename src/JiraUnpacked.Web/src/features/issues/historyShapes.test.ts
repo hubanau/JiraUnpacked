@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FilterOperator, HistoryValue } from '../../api/issues';
-import { freshHistoryValue, isCompleteHistoryValue, readHistoryValue, readWindow } from './historyShapes';
+import { MAX_HISTORY_VALUES, freshHistoryValue, isCompleteHistoryValue, readHistoryValue, readWindow } from './historyShapes';
 
 describe('readHistoryValue', () => {
   it('reads each operator’s keys in canonical order, dropping explicit nulls and empty optional lists', () => {
@@ -65,6 +65,17 @@ describe('isCompleteHistoryValue', () => {
     expect(done('Changed', { historyField: 'Sprint', during: { kind: 'between', from: '2026-09-30', to: '2026-09-01' } })).toBe(false);
     expect(done('Changed', { historyField: 'Sprint', during: { kind: 'between', from: null, to: '2026-09-30' } })).toBe(true);
     expect(isCompleteHistoryValue('Changed', undefined)).toBe(false);
+  });
+
+  it('is unfinished while any list is longer than the server takes (50)', () => {
+    const names = (n: number) => Array.from({ length: n }, (_, i) => `v${i}`);
+    expect(MAX_HISTORY_VALUES).toBe(50);
+    expect(isCompleteHistoryValue('Was', { historyField: 'Sprint', values: names(50) })).toBe(true);
+    expect(isCompleteHistoryValue('Was', { historyField: 'Sprint', values: names(51) })).toBe(false);
+    for (const key of ['from', 'to', 'by'] as const) {
+      expect(isCompleteHistoryValue('Changed', { historyField: 'status', [key]: names(50) })).toBe(true);
+      expect(isCompleteHistoryValue('Changed', { historyField: 'status', [key]: names(51) })).toBe(false);
+    }
   });
 
   it('starts each operator where the spec says', () => {

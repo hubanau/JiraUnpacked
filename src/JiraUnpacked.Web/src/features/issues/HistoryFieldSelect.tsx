@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getHistoryFields } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
@@ -12,7 +12,12 @@ interface HistoryFieldSelectProps {
   label: string;
   /** The field's name as Jira reports it; '' = none chosen yet. */
   value: string;
-  onChange: (next: string) => void;
+  /**
+   * Every edit. `replaced` is true when the row now names a different field: chosen from the
+   * list, or typed and the input left with a name other than the one it was entered with — not
+   * on every keystroke.
+   */
+  onChange: (next: string, replaced: boolean) => void;
 }
 
 /**
@@ -30,6 +35,8 @@ export function HistoryFieldSelect({ projectId, label, value, onChange }: Histor
   // The list arriving must not pull the input out from under someone typing: the swap to the
   // select waits until the input is left.
   const [typing, setTyping] = useState(false);
+  // The name when the input was entered: leaving it with another one replaces the field.
+  const atFocus = useRef(value);
   const id = `condition-${label}-history-field`;
   const name = `History field for condition ${label}`;
 
@@ -44,10 +51,16 @@ export function HistoryFieldSelect({ projectId, label, value, onChange }: Histor
           type="text"
           className={INPUT_CLASS}
           maxLength={MAX_HISTORY_FIELD_LENGTH}
-          onFocus={() => setTyping(true)}
-          onBlur={() => setTyping(false)}
+          onFocus={() => {
+            atFocus.current = value;
+            setTyping(true);
+          }}
+          onBlur={() => {
+            setTyping(false);
+            if (value !== atFocus.current) onChange(value, true);
+          }}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => onChange(e.target.value, false)}
         />
       </Field>
     );
@@ -58,7 +71,7 @@ export function HistoryFieldSelect({ projectId, label, value, onChange }: Histor
   const stale = value !== '' && !options.some((o) => o.name === value);
   return (
     <Field label={name} id={id}>
-      <Select value={value} onChange={(e) => onChange(e.target.value)}>
+      <Select value={value} onChange={(e) => onChange(e.target.value, e.target.value !== value)}>
         <option value="">— choose —</option>
         {stale && <option value={value}>{`${value} (0)`}</option>}
         {options.map((o) => (

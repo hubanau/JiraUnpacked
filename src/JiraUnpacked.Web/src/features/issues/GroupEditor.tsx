@@ -56,7 +56,9 @@ export function GroupEditor({
   const limitHint = (extra: TreeCounts): string | undefined => {
     if (counts.conditions + extra.conditions > catalog.maxConditions) return `Limit: ${catalog.maxConditions} conditions`;
     if (counts.groups + extra.groups > catalog.maxGroups) return `Limit: ${catalog.maxGroups} groups`;
-    if (counts.history + extra.history > catalog.maxHistoryConditions) {
+    // Only an addition that brings history conditions meets their cap: a link already over it
+    // must not block adding a plain condition.
+    if (extra.history > 0 && counts.history + extra.history > catalog.maxHistoryConditions) {
       return `Limit: ${catalog.maxHistoryConditions} history conditions`;
     }
     return undefined;

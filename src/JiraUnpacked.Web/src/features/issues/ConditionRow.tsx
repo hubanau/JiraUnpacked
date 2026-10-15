@@ -86,7 +86,6 @@ export function ConditionRow({ projectId, condition, catalog, onChange, label, h
           label={label}
           op={op}
           value={readHistoryValue(op, condition.value)}
-          maxInValues={catalog.maxInValues}
           onChange={(next) => onChange({ field, op, value: next })}
         />
       );

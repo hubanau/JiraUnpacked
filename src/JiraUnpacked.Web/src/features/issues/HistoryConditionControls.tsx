@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { FilterOperator, HistoryCompare, HistoryValue, HistoryValueKind, ListValue } from '../../api/issues';
 import { getHistoryValues } from '../../api/issues';
@@ -6,7 +7,9 @@ import { Field, Select } from '../../ui';
 import { ChipInput } from './ChipInput';
 import { DuringControl } from './DuringControl';
 import { HistoryFieldSelect } from './HistoryFieldSelect';
-import { HISTORY_COMPARES, MAX_CHANGE_COUNT, canonicalHistoryValue, freshHistoryValue } from './historyShapes';
+import {
+  HISTORY_COMPARES, MAX_CHANGE_COUNT, MAX_HISTORY_VALUES, canonicalHistoryValue, freshHistoryValue,
+} from './historyShapes';
 import { INPUT_CLASS } from './styles';
 import { MultiValuePicker } from './ValuePicker';
 
@@ -24,7 +27,6 @@ interface HistoryListProps {
   selected: Name[];
   /** (Empty) on offer: for values yes, for authors no. */
   allowEmpty: boolean;
-  max: number;
   onChange: (next: Name[]) => void;
 }
 
@@ -32,14 +34,18 @@ interface HistoryListProps {
  * A multi-value list fed by history-values. Typed chips while it loads, if it fails, or before a
  * field is chosen — the list is an affordance, not a gate.
  */
-function HistoryList({ projectId, historyField, kind, name, id, selected, allowEmpty, max, onChange }: HistoryListProps) {
+function HistoryList({ projectId, historyField, kind, name, id, selected, allowEmpty, onChange }: HistoryListProps) {
   const list = useQuery({
     queryKey: queryKeys.historyValues(projectId, historyField, kind),
     queryFn: () => getHistoryValues(projectId, historyField, kind),
     enabled: historyField.trim() !== '',
     staleTime: 5 * 60 * 1000,
   });
-  if (list.data) {
+  // As in HistoryFieldSelect: the list arriving must not pull the typed chips out from under
+  // someone typing (and lose the draft); the swap waits until focus leaves the chip input.
+  const [typing, setTyping] = useState(false);
+  const max = MAX_HISTORY_VALUES;
+  if (list.data && !typing) {
     return (
       <MultiValuePicker
         label={name}
@@ -55,14 +61,23 @@ function HistoryList({ projectId, historyField, kind, name, id, selected, allowE
   // Typing cannot produce (Empty), but one that arrived in a link is kept, not silently lost.
   const kept = selected.filter((v) => v === null);
   return (
-    <ChipInput
-      key={historyField}
-      id={id}
-      label={name}
-      values={selected.filter((v): v is string => v !== null)}
-      max={max - kept.length}
-      onChange={(next) => onChange([...kept, ...next])}
-    />
+    <div
+      className="contents"
+      onFocus={() => setTyping(true)}
+      onBlur={(e) => {
+        // Moving between the input, "Add value" and the chips is still typing.
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setTyping(false);
+      }}
+    >
+      <ChipInput
+        key={historyField}
+        id={id}
+        label={name}
+        values={selected.filter((v): v is string => v !== null)}
+        max={max - kept.length}
+        onChange={(next) => onChange([...kept, ...next])}
+      />
+    </div>
   );
 }
 
@@ -73,7 +88,6 @@ interface HistoryConditionControlsProps {
   op: FilterOperator;
   /** Undefined = nothing readable yet: the controls start from the operator's fresh value. */
   value: HistoryValue | undefined;
-  maxInValues: number;
   onChange: (next: HistoryValue) => void;
 }
 
@@ -83,7 +97,7 @@ interface HistoryConditionControlsProps {
  * the operator's canonical shape, so a link or a saved view never differs from what the editor
  * itself would write.
  */
-export function HistoryConditionControls({ projectId, label, op, value, maxInValues, onChange }: HistoryConditionControlsProps) {
+export function HistoryConditionControls({ projectId, label, op, value, onChange }: HistoryConditionControlsProps) {
   const v = value ?? freshHistoryValue(op, '');
   const set = (patch: Partial<HistoryValue>) => onChange(canonicalHistoryValue(op, { ...v, ...patch }));
   const setList = (key: 'values' | 'from' | 'to' | 'by', next: Name[]) => {
@@ -92,6 +106,10 @@ export function HistoryConditionControls({ projectId, label, op, value, maxInVal
     else patch[key] = next;
     set(patch);
   };
+  // Another field's history holds other values: "status was Blocked" must never quietly become
+  // "priority was Blocked". The lists go; the window, compare and count stay.
+  const setField = (historyField: string, replaced: boolean) =>
+    set(replaced ? { historyField, values: [], from: undefined, to: undefined, by: undefined } : { historyField });
   const list = (key: 'values' | 'from' | 'to' | 'by', kind: HistoryValueKind, name: string, allowEmpty: boolean) => (
     <HistoryList
       projectId={projectId}
@@ -101,7 +119,6 @@ export function HistoryConditionControls({ projectId, label, op, value, maxInVal
       id={`condition-${label}-${key}`}
       selected={v[key] ?? []}
       allowEmpty={allowEmpty}
-      max={maxInValues}
       onChange={(next) => setList(key, next)}
     />
   );
@@ -109,7 +126,7 @@ export function HistoryConditionControls({ projectId, label, op, value, maxInVal
 
   return (
     <div className="flex basis-full flex-wrap items-end gap-2">
-      <HistoryFieldSelect projectId={projectId} label={label} value={v.historyField} onChange={(historyField) => set({ historyField })} />
+      <HistoryFieldSelect projectId={projectId} label={label} value={v.historyField} onChange={setField} />
 
       {op === 'Was' && list('values', 'value', `Values for condition ${label}`, true)}
 
