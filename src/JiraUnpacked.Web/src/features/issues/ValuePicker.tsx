@@ -84,6 +84,8 @@ interface MultiValuePickerProps {
   max: number;
   /** Sprint only: the smart values, offered after (Empty) and before the names. */
   smart?: SmartValueOption[];
+  /** Offer (Empty)? Yes by default; history authors say no — the server refuses (Empty) in `by`. */
+  allowEmpty?: boolean;
 }
 
 type Choice = string | null | SmartValue;
@@ -100,7 +102,9 @@ const labelOf = (v: Choice) => (v === null ? EMPTY_LABEL : typeof v === 'string'
  * A native <details> for the popover, like ColumnChooser: it opens, closes and takes focus with
  * no JavaScript and no outside-click handling to get wrong.
  */
-export function MultiValuePicker({ label, options, emptyCount, smart, selected, onChange, max }: MultiValuePickerProps) {
+export function MultiValuePicker({
+  label, options, emptyCount, smart, selected, onChange, max, allowEmpty = true,
+}: MultiValuePickerProps) {
   const [query, setQuery] = useState('');
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
@@ -131,7 +135,7 @@ export function MultiValuePicker({ label, options, emptyCount, smart, selected, 
 
   const needle = query.trim().toLowerCase();
   const matches = options.filter((o) => o.name.toLowerCase().includes(needle));
-  const showEmpty = needle === '' || EMPTY_LABEL.toLowerCase().includes(needle);
+  const showEmpty = allowEmpty && (needle === '' || EMPTY_LABEL.toLowerCase().includes(needle));
   const smartMatches = knownSmart(smart).filter((s) => SMART_SPRINT_LABELS[s.key].toLowerCase().includes(needle));
 
   const choice = (v: Choice, text: string, count: number) => (

@@ -3,9 +3,10 @@ import { apiDownload, apiFetch, type Download } from './client';
 export type FilterOperator =
   | 'Eq' | 'Neq' | 'In' | 'NotIn' | 'Lt' | 'Lte' | 'Gt' | 'Gte'
   | 'Contains' | 'NotContains' | 'StartsWith' | 'IsNull' | 'IsNotNull'
-  | 'Between' | 'InLast' | 'NotInLast' | 'InPeriod';
+  | 'Between' | 'InLast' | 'NotInLast' | 'InPeriod'
+  | 'Was' | 'Changed' | 'ChangeCount';
 
-export type FieldType = 'DictName' | 'Decimal' | 'DateTime' | 'Text' | 'ParentRef' | 'StatusCategory';
+export type FieldType = 'DictName' | 'Decimal' | 'DateTime' | 'Text' | 'ParentRef' | 'StatusCategory' | 'History';
 
 /** "in the last" / "more than … ago" take `value: { amount, unit }`. Months are calendar months. */
 export type RelativeUnit = 'hours' | 'days' | 'weeks' | 'months';
@@ -32,11 +33,36 @@ export interface SmartValue {
   smart: SmartSprintKey;
 }
 
+/** "number of changes" compares the count with one of these. */
+export type HistoryCompare = 'Eq' | 'Neq' | 'Gt' | 'Gte' | 'Lt' | 'Lte';
+
+/** A history condition's `during`: the same three shapes the date operators take. */
+export type HistoryWindow =
+  | { kind: 'inLast'; amount: number; unit: RelativeUnit }
+  | { kind: 'inPeriod'; period: PeriodKey; timeZone?: string }
+  | { kind: 'between'; from: string | null; to: string | null };
+
+/**
+ * The `history` field's value. "was": `values`; "changed": optional `from`, `to`, `by` and
+ * `during`; "number of changes": `compare`, `count` and an optional `during`. null in a list is
+ * (Empty). `historyField` is the name Jira reports ("status", "Sprint"), matched exactly.
+ */
+export interface HistoryValue {
+  historyField: string;
+  values?: (string | null)[];
+  from?: (string | null)[];
+  to?: (string | null)[];
+  by?: string[];
+  compare?: HistoryCompare;
+  count?: number;
+  during?: HistoryWindow;
+}
+
 /** An element of `values`: a name or number, null for (Empty), or a smart sprint value. Between: [from, to], null = open. */
 export type ListValue = string | number | null | SmartValue;
 
 /** `value`: a name, number or date — null for (Empty) in the editor only — or one of the object shapes above. */
-export type ConditionValue = string | number | null | SmartValue | RelativeAmount | PeriodValue;
+export type ConditionValue = string | number | null | SmartValue | RelativeAmount | PeriodValue | HistoryValue;
 
 export interface FilterFieldInfo {
   name: string;
@@ -59,6 +85,8 @@ export interface FilterCatalog {
   /** Guards on the boolean-group shape; the tree editor sizes itself from these. */
   maxGroups: number;
   maxDepth: number;
+  /** Enabled history conditions a filter may hold — each is a subquery over the changelog. */
+  maxHistoryConditions: number;
 }
 
 /** How a FilterGroup joins its parts — its conditions and its nested groups alike. */
@@ -193,6 +221,30 @@ export interface FilterValues {
 export const getFilterValues = (projectId: string, field: string) =>
   apiFetch<FilterValues>(
     `/api/projects/${projectId}/filter-values?field=${encodeURIComponent(field)}`);
+
+export interface HistoryFieldOption {
+  name: string;
+  /** Changelog rows this project has for the field. */
+  count: number;
+}
+
+/** The changelog fields this project has history for, most-changed first (at most 200). */
+export const getHistoryFields = (projectId: string) =>
+  apiFetch<{ fields: HistoryFieldOption[] }>(`/api/projects/${projectId}/history-fields`);
+
+/** `value`: the From/To values, Jira's ", "-joined lists split into elements. `author`: who made the changes. */
+export type HistoryValueKind = 'value' | 'author';
+
+export interface HistoryValueList {
+  values: FilterValueOption[];
+  /** Changelog sides (value) or rows (author) with nothing in them: the count behind (Empty). */
+  emptyCount: number;
+}
+
+/** One history field's values or authors in this project, by name (at most 1000). An unknown field lists nothing. */
+export const getHistoryValues = (projectId: string, field: string, kind: HistoryValueKind) =>
+  apiFetch<HistoryValueList>(
+    `/api/projects/${projectId}/history-values?field=${encodeURIComponent(field)}&kind=${kind}`);
 
 export interface ExportView {
   /** The pruned tree the list was queried with; undefined = no filter. */

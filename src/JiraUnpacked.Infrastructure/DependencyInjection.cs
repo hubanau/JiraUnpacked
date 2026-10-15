@@ -53,8 +53,11 @@ public static class DependencyInjection
         services.AddSingleton<ITenantScope>(sp => sp.GetRequiredService<AmbientCurrentTenant>());
 
         services.AddScoped<TenantConnectionInterceptor>();
+        // jit=off: short OLTP queries, where JIT compile time dominated (see PostgresSessionOptions).
+        // Computed once here, not in the options lambda that runs for every context.
+        var appSessionConnectionString = PostgresSessionOptions.WithoutJit(appConnectionString);
         services.AddDbContext<AppDbContext>((sp, options) =>
-            options.UseNpgsql(appConnectionString)
+            options.UseNpgsql(appSessionConnectionString)
                    .AddInterceptors(sp.GetRequiredService<TenantConnectionInterceptor>()));
 
         services.AddSingleton<IClock, SystemClock>();
@@ -104,6 +107,7 @@ public static class DependencyInjection
         services.AddScoped<IDerivationService, DerivationService>();
         services.AddScoped<IIssueQueryService, IssueQueryService>();
         services.AddScoped<IFilterValueService, FilterValueService>();
+        services.AddScoped<IHistoryValueService, HistoryValueService>();
         services.AddScoped<JiraUnpacked.Infrastructure.Reporting.Filtering.IIssueFilterTranslator,
                            JiraUnpacked.Infrastructure.Reporting.Filtering.IssueFilterTranslator>();
         services.AddScoped<JiraUnpacked.Infrastructure.Reporting.Filtering.IIssueFilterCompiler,

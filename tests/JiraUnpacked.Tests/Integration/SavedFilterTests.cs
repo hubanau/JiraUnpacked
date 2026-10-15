@@ -515,6 +515,9 @@ public sealed class SavedFilterTests : IClassFixture<JiraUnpackedApiFactory>, IA
         // Exact case: the SPA matches ids exactly, so "STATUS" would be stored and never shown.
         Assert.Equal("'STATUS' is not a known column.",
             await RejectedAsync(client, projectId, new { name = "u", columns = new[] { "STATUS" } }));
+        // history is a filter field, never a column: it has no single value to show.
+        Assert.Equal("'history' is not a known column.",
+            await RejectedAsync(client, projectId, new { name = "h", columns = new[] { "history" } }));
         // A JSON null inside the list is a bad column — a 400, not a 500 from a null dictionary key.
         Assert.Equal("'' is not a known column.",
             await RejectedAsync(client, projectId, new { name = "n", columns = new[] { "jiraKey", null } }));

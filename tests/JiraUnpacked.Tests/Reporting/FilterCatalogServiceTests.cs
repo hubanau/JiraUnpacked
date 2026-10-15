@@ -21,6 +21,14 @@ public sealed class FilterCatalogServiceTests
         Assert.Equal(new[] { "Contains", "NotContains", "StartsWith", "IsNull", "IsNotNull" }, OpsOf("summary"));
         Assert.Equal(new[] { "Eq", "In", "NotIn", "Contains", "StartsWith" }, OpsOf("jiraKey"));
         Assert.Equal(new[] { "Eq", "IsNull", "IsNotNull" }, OpsOf("parent"));
+        Assert.Equal(new[] { "Was", "Changed", "ChangeCount" }, OpsOf("history"));
+    }
+
+    [Fact]
+    public void The_history_cap_is_served()
+    {
+        Assert.Equal(5, new FilterCatalogService().Get().MaxHistoryConditions);
+        Assert.Equal("History", new FilterCatalogService().Get().Fields.Single(f => f.Name == "history").Type);
     }
 
     [Fact]

@@ -1,7 +1,7 @@
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../test/setup';
-import { getIssueDetail, queryIssues } from './issues';
+import { getHistoryValues, getIssueDetail, queryIssues } from './issues';
 import { queryKeys } from './queryKeys';
 
 const emptyPage = { items: [], page: 1, pageSize: 50, totalCount: 0 };
@@ -58,6 +58,22 @@ describe('getIssueDetail', () => {
     await getIssueDetail('p1', 'a/b');
 
     expect(seenUrl).toContain('a%2Fb');
+  });
+});
+
+describe('getHistoryValues', () => {
+  it('encodes a field name with an ampersand, a space and a hash', async () => {
+    let seen: URL | undefined;
+    server.use(http.get('/api/projects/p1/history-values', ({ request }) => {
+      seen = new URL(request.url);
+      return HttpResponse.json({ values: [], emptyCount: 0 });
+    }));
+
+    await getHistoryValues('p1', 'R&D #1 stage', 'value');
+
+    expect(seen?.hash).toBe('');
+    expect(seen?.searchParams.get('field')).toBe('R&D #1 stage');
+    expect(seen?.searchParams.get('kind')).toBe('value');
   });
 });
 
