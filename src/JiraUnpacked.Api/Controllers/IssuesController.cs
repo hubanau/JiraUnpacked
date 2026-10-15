@@ -15,11 +15,13 @@ public sealed class IssuesController : ControllerBase
 {
     private readonly IIssueQueryService _issues;
     private readonly IFilterValueService _filterValues;
+    private readonly IHistoryValueService _history;
 
-    public IssuesController(IIssueQueryService issues, IFilterValueService filterValues)
+    public IssuesController(IIssueQueryService issues, IFilterValueService filterValues, IHistoryValueService history)
     {
         _issues = issues;
         _filterValues = filterValues;
+        _history = history;
     }
 
     [HttpGet("api/projects/{projectId:guid}/issues")]
@@ -63,6 +65,30 @@ public sealed class IssuesController : ControllerBase
         return result.Smart is null
             ? Ok(new { field, values = result.Values, emptyCount = result.EmptyCount })
             : Ok(new { field, values = result.Values, emptyCount = result.EmptyCount, smart = result.Smart });
+    }
+
+    /// <summary>The changelog fields this project has history for, most-changed first — the history row's field list.</summary>
+    [HttpGet("api/projects/{projectId:guid}/history-fields")]
+    public async Task<IActionResult> HistoryFields(Guid projectId, CancellationToken ct = default)
+    {
+        var result = await _history.GetFieldsAsync(projectId, ct);
+        return result.Fields is null ? NotFound() : Ok(new { fields = result.Fields });
+    }
+
+    /// <summary>
+    /// One history field's values (kind=value, the default: From and To, Jira's lists split into
+    /// elements) or authors (kind=author), by name. An unknown field is an empty list, not a 400:
+    /// fields are data here, not a closed catalog.
+    /// </summary>
+    [HttpGet("api/projects/{projectId:guid}/history-values")]
+    public async Task<IActionResult> HistoryValues(
+        Guid projectId, [FromQuery] string? field, [FromQuery] string? kind, CancellationToken ct = default)
+    {
+        var result = await _history.GetValuesAsync(projectId, field, kind ?? "value", ct);
+        if (result.Error is not null)
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: result.Error);
+        if (result.Values is null) return NotFound();
+        return Ok(new { values = result.Values, emptyCount = result.EmptyCount });
     }
 
     /// <summary>Matches the SPA's own filter encoding, including its string enum names.</summary>

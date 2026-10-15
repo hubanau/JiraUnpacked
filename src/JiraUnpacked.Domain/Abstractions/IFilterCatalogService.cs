@@ -9,7 +9,7 @@ public sealed record FilterFieldInfo(string Name, string Type, IReadOnlyList<str
 /// </summary>
 public sealed record FilterCatalogView(
     IReadOnlyList<FilterFieldInfo> Fields,
-    int MaxConditions, int MaxInValues, int MaxGroups, int MaxDepth);
+    int MaxConditions, int MaxInValues, int MaxGroups, int MaxDepth, int MaxHistoryConditions);
 
 /// <summary>
 /// The closed filter-field allow-list, exposed so clients need not mirror it.

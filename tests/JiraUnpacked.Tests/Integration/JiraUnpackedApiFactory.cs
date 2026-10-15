@@ -52,11 +52,15 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Sync:SchedulerEnabled", "false");
 
         // ConnectionStrings:Default backs IPrivilegedDbContextFactory (constructed straight from
-        // IConfiguration, not from the AppDbContext registration overridden below). Without this,
+        // IConfiguration, not from the AppDbContext registration). Without this,
         // any DI-resolved privileged context — e.g. SyncRunRetentionJob's cross-tenant read —
         // would connect to the unmigrated "jiraunpacked" dev database instead of the test one.
         builder.UseSetting("ConnectionStrings:Default", TestConnectionString);
         builder.UseSetting("ConnectionStrings:Reader", TestReaderConnectionString);
+        // The runtime AppDbContext is the production registration (AddInfrastructure), pointed at
+        // the test database — so what it adds to a session (the tenant interceptor, jit=off) is
+        // what the tests run with.
+        builder.UseSetting("ConnectionStrings:App", TestAppConnectionString);
 
         // Integration tests stand in for Jira with WireMock/fake servers on http://localhost, which
         // the production base-URL policy (https + *.atlassian.net only) rightly refuses. Relax it
@@ -66,21 +70,8 @@ public sealed class JiraUnpackedApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Jira:AllowedHostSuffixes:1", "localhost");
         builder.UseSetting("Jira:AllowedHostSuffixes:2", "127.0.0.1");
 
-        // Override the DbContext registration to point at the test database.
         builder.ConfigureTestServices(services =>
         {
-            var descriptor = services.SingleOrDefault(
-                d => d.ServiceType == typeof(DbContextOptions<AppDbContext>));
-            if (descriptor is not null)
-            {
-                services.Remove(descriptor);
-            }
-
-            services.AddScoped<TenantConnectionInterceptor>();
-            services.AddDbContext<AppDbContext>((sp, options) =>
-                options.UseNpgsql(TestAppConnectionString)
-                       .AddInterceptors(sp.GetRequiredService<TenantConnectionInterceptor>()));
-
             // Replace the "auth" and "sync" limiters with unlimited policies so integration
             // tests are never throttled by repeated requests from 127.0.0.1 or a shared test
             // user. Remove all previously registered IConfigureOptions<RateLimiterOptions> and

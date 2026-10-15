@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { HistoryValue } from '../../api/issues';
 import {
   blankGroup, cloneCondition, cloneGroup, countEnabled, emptyRoot, freshCondition, insertAfter,
   isCompleteCondition, parseFilterParam, pruneTree, switchOperator, toSavable, toUrlJson,
@@ -110,7 +111,7 @@ describe('countEnabled', () => {
       ],
     });
 
-    expect(countEnabled(tree)).toEqual({ conditions: 2, groups: 2 });
+    expect(countEnabled(tree)).toEqual({ conditions: 2, groups: 2, history: 0 });
   });
 });
 
@@ -419,5 +420,76 @@ describe('freshCondition / switchOperator', () => {
       .toEqual({ field: 'status', op: 'NotIn', values: ['Done'] });
     expect(switchOperator({ field: 'status', op: 'Eq', value: 'Done' }, 'IsNull', TZ))
       .toEqual({ field: 'status', op: 'IsNull' });
+  });
+});
+
+describe('history conditions', () => {
+  it('starts each history operator fresh, and keeps the field (and the window) when switching between them', () => {
+    expect(freshCondition('history', 'Was', 'UTC')).toEqual({ field: 'history', op: 'Was', value: { historyField: '', values: [] } });
+    expect(freshCondition('history', 'Changed', 'UTC')).toEqual({ field: 'history', op: 'Changed', value: { historyField: '' } });
+    expect(freshCondition('history', 'ChangeCount', 'UTC'))
+      .toEqual({ field: 'history', op: 'ChangeCount', value: { historyField: '', compare: 'Gte', count: 2 } });
+
+    const counted = {
+      field: 'history', op: 'ChangeCount' as const,
+      value: { historyField: 'Sprint', compare: 'Gt' as const, count: 4, during: { kind: 'inLast' as const, amount: 7, unit: 'days' as const } },
+    };
+    expect(switchOperator(counted, 'Changed', 'UTC'))
+      .toEqual({ field: 'history', op: 'Changed', value: { historyField: 'Sprint', during: { kind: 'inLast', amount: 7, unit: 'days' } } });
+    expect(switchOperator(counted, 'Was', 'UTC')).toEqual({ field: 'history', op: 'Was', value: { historyField: 'Sprint', values: [] } });
+  });
+
+  it('sends only finished history conditions, in canonical form', () => {
+    const tree = group('r', {
+      conditions: [
+        cond('a', { field: 'history', op: 'Was', value: { historyField: 'Sprint', values: [] } }),            // no value yet
+        cond('b', { field: 'history', op: 'Changed', value: { historyField: '' } }),                         // no field yet
+        cond('c', { field: 'history', op: 'Changed', value: { to: ['Done'], from: [], historyField: 'status' } }),
+        cond('d', { field: 'history', op: 'ChangeCount', value: { historyField: 'Sprint', compare: 'Gte' } }), // no count
+      ],
+    });
+
+    const sent = pruneTree(tree);
+    expect(sent).toEqual({ logic: 'And', conditions: [{ field: 'history', op: 'Changed', value: { historyField: 'status', to: ['Done'] } }] });
+    expect(Object.keys(sent!.conditions![0].value as object)).toEqual(['historyField', 'to']);
+  });
+
+  it('round-trips history values through the URL form, and a malformed one stays unfinished', () => {
+    const tree = group('r', {
+      conditions: [
+        cond('a', { field: 'history', op: 'Was', value: { historyField: 'Sprint', values: ['PLAT 101', null] } }),
+        cond('b', {
+          field: 'history', op: 'Changed',
+          value: { historyField: 'status', from: ['To Do'], by: ['Alice'], during: { kind: 'between', from: '2026-09-01', to: null } },
+        }),
+        cond('c', {
+          field: 'history', op: 'ChangeCount',
+          value: { historyField: 'Sprint', compare: 'Eq', count: 0, during: { kind: 'inPeriod', period: 'lastMonth', timeZone: 'Europe/Warsaw' } },
+        }),
+      ],
+    });
+    expect(pruneTree(parseFilterParam(toUrlJson(tree), null))).toEqual(pruneTree(tree));
+
+    const bad = parseFilterParam(JSON.stringify({
+      logic: 'And',
+      conditions: [{ field: 'history', op: 'Changed', value: { historyField: 'status', during: { kind: 'fortnight' } } }],
+    }), null);
+    expect(bad.conditions[0].value).toBeUndefined();
+    expect(isCompleteCondition(bad.conditions[0])).toBe(false);   // kept on screen, never broadened to "any time"
+  });
+
+  it('copies history values deeply when a condition is duplicated', () => {
+    const original = cond('a', { field: 'history', op: 'Was', value: { historyField: 'Sprint', values: ['PLAT 101'] } });
+    const copy = cloneCondition(original);
+    (copy.value as HistoryValue).values!.push('PLAT 102');
+    expect((original.value as HistoryValue).values).toEqual(['PLAT 101']);
+  });
+
+  it('counts enabled history conditions on their own, over the whole tree', () => {
+    const h = (id: string, disabled = false): EditorCondition => ({
+      id, field: 'history', op: 'Changed', value: { historyField: 'Sprint' }, ...(disabled ? { disabled: true } : {}),
+    });
+    expect(countEnabled(group('r', { conditions: [h('a'), h('b', true)], groups: [group('g', { conditions: [h('c')] })] })))
+      .toEqual({ conditions: 2, groups: 2, history: 2 });
   });
 });

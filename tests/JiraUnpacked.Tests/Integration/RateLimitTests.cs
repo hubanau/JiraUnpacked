@@ -7,9 +7,10 @@ using JiraUnpacked.Domain.Enums;
 using JiraUnpacked.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using System.Net.Http.Headers;
 
 namespace JiraUnpacked.Tests.Integration;
@@ -24,16 +25,11 @@ public sealed class RateLimitedApiFactory : WebApplicationFactory<Program>
     {
         builder.UseEnvironment("Development");
         builder.UseSetting("Sync:SchedulerEnabled", "false");
+        // All three, as JiraUnpackedApiFactory sets them: the production registration then points
+        // the runtime AppDbContext (App) and the background reader (Reader) at the test database.
         builder.UseSetting("ConnectionStrings:Default", JiraUnpackedApiFactory.TestConnectionString);
-        builder.ConfigureTestServices(services =>
-        {
-            var descriptor = services.SingleOrDefault(d => d.ServiceType == typeof(DbContextOptions<AppDbContext>));
-            if (descriptor is not null) services.Remove(descriptor);
-            services.AddScoped<JiraUnpacked.Infrastructure.Tenancy.TenantConnectionInterceptor>();
-            services.AddDbContext<AppDbContext>((sp, o) =>
-                o.UseNpgsql(JiraUnpackedApiFactory.TestAppConnectionString)
-                 .AddInterceptors(sp.GetRequiredService<JiraUnpacked.Infrastructure.Tenancy.TenantConnectionInterceptor>()));
-        });
+        builder.UseSetting("ConnectionStrings:App", JiraUnpackedApiFactory.TestAppConnectionString);
+        builder.UseSetting("ConnectionStrings:Reader", JiraUnpackedApiFactory.TestReaderConnectionString);
     }
 }
 
@@ -109,5 +105,21 @@ public sealed class RateLimitTests : IClassFixture<RateLimitedApiFactory>, IAsyn
         var bStatus = (await clientB.PostAsJsonAsync($"/api/projects/{projectIdB}/sync", new { })).StatusCode;
 
         Assert.NotEqual(HttpStatusCode.TooManyRequests, bStatus);
+    }
+
+    [Fact]
+    public void Every_connection_string_names_the_test_database()
+    {
+        // Not one of them may fall back to appsettings.Development.json's "jiraunpacked": the
+        // startup TokenEnvelopeUpgrader alone would open a reader connection to the dev data.
+        var config = _factory.Services.GetRequiredService<IConfiguration>();
+        foreach (var name in new[] { "Default", "App", "Reader" })
+            Assert.Equal(JiraUnpackedApiFactory.TestDatabase,
+                new NpgsqlConnectionStringBuilder(config.GetConnectionString(name)).Database);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal(JiraUnpackedApiFactory.TestDatabase,
+            new NpgsqlConnectionStringBuilder(db.Database.GetConnectionString()).Database);
     }
 }

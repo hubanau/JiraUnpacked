@@ -20,9 +20,9 @@ public sealed class FilterCatalogService : IFilterCatalogService
 {
     /// <summary>
     /// The order the editor offers operators in: equality, lists, comparisons, ranges and
-    /// relative dates, text matching, then the two that take no value. Explicit because
-    /// FilterOperator is append-only, which makes its declaration order a history rather than a
-    /// reading order. Every member must appear here — FilterCatalogServiceTests checks.
+    /// relative dates, text matching, the two that take no value, then the history operators.
+    /// Explicit because FilterOperator is append-only, which makes its declaration order a
+    /// history rather than a reading order. Every member must appear here — FilterCatalogServiceTests checks.
     /// </summary>
     internal static readonly FilterOperator[] DisplayOrder =
     {
@@ -31,6 +31,7 @@ public sealed class FilterCatalogService : IFilterCatalogService
         FilterOperator.Between, FilterOperator.InLast, FilterOperator.NotInLast, FilterOperator.InPeriod,
         FilterOperator.Contains, FilterOperator.NotContains, FilterOperator.StartsWith,
         FilterOperator.IsNull, FilterOperator.IsNotNull,
+        FilterOperator.Was, FilterOperator.Changed, FilterOperator.ChangeCount,
     };
 
     public FilterCatalogView Get() => new(
@@ -44,5 +45,6 @@ public sealed class FilterCatalogService : IFilterCatalogService
         IssueFilterTranslator.MaxConditions,
         IssueFilterTranslator.MaxInValues,
         IssueFilterTranslator.MaxGroups,
-        IssueFilterTranslator.MaxDepth);
+        IssueFilterTranslator.MaxDepth,
+        IssueFilterTranslator.MaxHistoryConditions);
 }

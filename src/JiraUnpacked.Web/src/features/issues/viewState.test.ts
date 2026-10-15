@@ -145,6 +145,40 @@ describe('isModified', () => {
 
     expect(isModified(stored, built)).toBe(false);
   });
+
+  it('does not call a view with history conditions modified when the server returns them in its own key order', () => {
+    const stored = view({
+      filter: {
+        logic: 'And',
+        conditions: [
+          {
+            field: 'history', op: 'ChangeCount',
+            value: { during: { unit: 'days', amount: 30, kind: 'inLast' }, count: 3, compare: 'Gte', historyField: 'Sprint' },
+            values: null, disabled: null,
+          },
+          { field: 'history', op: 'Changed', value: { to: ['Done'], historyField: 'status', from: null, during: null }, values: null, disabled: null },
+        ],
+        groups: null,
+        disabled: null,
+      } as unknown as SavedView['filter'],
+    });
+    const built: ListSnapshot = {
+      tree: {
+        id: 'r', logic: 'And', groups: [],
+        conditions: [
+          { id: 'a', field: 'history', op: 'ChangeCount', value: { historyField: 'Sprint', compare: 'Gte', count: 3, during: { kind: 'inLast', amount: 30, unit: 'days' } } },
+          { id: 'b', field: 'history', op: 'Changed', value: { historyField: 'status', to: ['Done'] } },
+        ],
+      },
+      sortBy: 'updatedAt',
+      sortDescending: true,
+      columns: DEFAULT_COLUMNS,
+    };
+
+    expect(isModified(stored, built)).toBe(false);
+    // Opened and saved again, the view writes the same canonical filter it was built from.
+    expect(saveRequest('x', opened(stored)).filter).toEqual(saveRequest('x', built).filter);
+  });
 });
 
 describe('saveRequest', () => {

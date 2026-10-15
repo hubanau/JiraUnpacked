@@ -38,5 +38,8 @@ export const queryKeys = {
   filterCatalog: () => ['filter-catalog'] as const,
   filterValues: (projectId: string, field: string) =>
     ['filter-values', projectId, field] as const,
+  historyFields: (projectId: string) => ['history-fields', projectId] as const,
+  historyValues: (projectId: string, field: string, kind: string) =>
+    ['history-values', projectId, field, kind] as const,
   adminUsers: (page: number) => ['admin', 'users', page] as const,
 } as const;

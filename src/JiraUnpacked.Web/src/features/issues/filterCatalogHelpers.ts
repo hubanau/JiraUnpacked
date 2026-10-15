@@ -58,6 +58,9 @@ export const OPERATOR_LABELS: Record<FilterOperator, string> = {
   InLast: 'in the last',
   NotInLast: 'more than … ago',
   InPeriod: 'in period',
+  Was: 'was',
+  Changed: 'changed',
+  ChangeCount: 'number of changes',
 };
 
 export const operatorLabel = (op: FilterOperator): string => OPERATOR_LABELS[op] ?? op;

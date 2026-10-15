@@ -6,7 +6,7 @@ namespace JiraUnpacked.Domain.Abstractions;
 /// Serialised and stored BY NAME. New members are appended, never inserted: the ordinal is a
 /// history, not a meaning (the catalog's display order lives in FilterCatalogService).
 /// </summary>
-public enum FilterOperator { Eq, Neq, In, Lt, Lte, Gt, Gte, Contains, StartsWith, IsNull, NotIn, IsNotNull, NotContains, Between, InLast, NotInLast, InPeriod }
+public enum FilterOperator { Eq, Neq, In, Lt, Lte, Gt, Gte, Contains, StartsWith, IsNull, NotIn, IsNotNull, NotContains, Between, InLast, NotInLast, InPeriod, Was, Changed, ChangeCount }
 
 /// <summary>How a group joins its parts. Applies to the group's conditions AND its nested groups alike.</summary>
 public enum FilterLogic { And, Or }
@@ -15,8 +15,10 @@ public enum FilterLogic { And, Or }
 /// One filter condition. Value for single-value ops; Values for In/NotIn, where a JSON null
 /// element stands for (Empty), and for Between as [from, to] with null = an open bound. Both null
 /// for IsNull/IsNotNull. Value is an object for InLast/NotInLast ({"amount", "unit"}) and InPeriod
-/// ({"period", "timeZone"}). Disabled = kept in the definition but skipped entirely: not
-/// validated, not counted, not applied.
+/// ({"period", "timeZone"}).
+/// Value is an object for the history operators (Was, Changed, ChangeCount) on the 'history' field:
+/// {"historyField": "Sprint", …} — see IssueFilterTranslator.History.
+/// Disabled = kept in the definition but skipped entirely: not validated, not counted, not applied.
 /// </summary>
 public sealed record FilterCondition(
     string Field, FilterOperator Op, JsonElement? Value, List<JsonElement>? Values, bool? Disabled = null);

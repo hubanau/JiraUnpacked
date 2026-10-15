@@ -3,6 +3,9 @@ import type {
 } from '../../api/issues';
 import { OPERATOR_LABELS } from './filterCatalogHelpers';
 import {
+  HISTORY_FIELD, freshHistoryValue, isCompleteHistoryValue, readHistoryValue, takesHistory,
+} from './historyShapes';
+import {
   DEFAULT_PERIOD, DEFAULT_RELATIVE, MAX_RELATIVE_AMOUNT, isRelativeAmount, isScalar, isSmartValue, readPeriod, readRelativeAmount,
   readSmart,
 } from './valueShapes';
@@ -28,6 +31,8 @@ export interface EditorGroup {
 export interface TreeCounts {
   conditions: number;
   groups: number;
+  /** Enabled conditions on the history pseudo-field: capped on their own (catalog.maxHistoryConditions). */
+  history: number;
 }
 
 /**
@@ -68,9 +73,13 @@ const isBound = (v: ListValue | undefined): boolean => v !== undefined && v !== 
 /** An empty bound is an open one: the server reads null as "no limit on this side". */
 const asBound = (v: ListValue | undefined): ListValue => (isBound(v) ? (v as ListValue) : null);
 
-/** Object values are copied, never shared: two rows — or the editor and the wire — must not alias one object. */
+/**
+ * Object values are copied, never shared: two rows — or the editor and the wire — must not alias
+ * one object, nor the arrays inside a history value. Values are plain JSON, so a JSON round trip
+ * is a faithful deep copy.
+ */
 function copyValue<T>(v: T): T {
-  return (typeof v === 'object' && v !== null ? { ...v } : v) as T;
+  return (typeof v === 'object' && v !== null ? JSON.parse(JSON.stringify(v)) : v) as T;
 }
 
 // ---- sending ----
@@ -82,6 +91,7 @@ function copyValue<T>(v: T): T {
  * in period a period.
  */
 export function isCompleteCondition(c: FilterCondition): boolean {
+  if (takesHistory(c.op)) return isCompleteHistoryValue(c.op, readHistoryValue(c.op, c.value));
   if (takesNoValue(c.op)) return true;
   if (takesList(c.op)) return (c.values?.length ?? 0) > 0;
   if (takesRange(c.op)) return (c.values ?? []).some(isBound);
@@ -103,6 +113,11 @@ export function toWireCondition(c: FilterCondition): FilterCondition {
   if (takesRange(c.op)) {
     const [from, to] = c.values ?? [];
     return { field: c.field, op: c.op, values: [asBound(from), asBound(to)] };
+  }
+  if (takesHistory(c.op)) {
+    // Canonical and freshly built: the key order a saved view compares on, no arrays shared.
+    const value = readHistoryValue(c.op, c.value);
+    return value ? { field: c.field, op: c.op, value } : { field: c.field, op: c.op };
   }
   return { field: c.field, op: c.op, value: copyValue(c.value) };
 }
@@ -163,15 +178,18 @@ export function toSavable(root: EditorGroup): FilterGroup | undefined {
  * root included as a group, and a disabled node — with everything under it — not at all.
  */
 export function countEnabled(g: EditorGroup): TreeCounts {
-  if (g.disabled) return { conditions: 0, groups: 0 };
-  let conditions = g.conditions.filter((c) => !c.disabled).length;
+  if (g.disabled) return { conditions: 0, groups: 0, history: 0 };
+  const on = g.conditions.filter((c) => !c.disabled);
+  let conditions = on.length;
+  let history = on.filter((c) => c.field === HISTORY_FIELD).length;
   let groups = 1;
   for (const child of g.groups) {
     const sub = countEnabled(child);
     conditions += sub.conditions;
     groups += sub.groups;
+    history += sub.history;
   }
-  return { conditions, groups };
+  return { conditions, groups, history };
 }
 
 // ---- editing ----
@@ -213,6 +231,7 @@ export function insertAfter<T extends { id: string }>(list: T[], id: string, ite
  * (in `timeZone`, the browser's, captured now and saved with the condition).
  */
 export function freshCondition(field: string, op: FilterOperator, timeZone: string): FilterCondition {
+  if (takesHistory(op)) return { field, op, value: freshHistoryValue(op, '') };
   if (takesList(op)) return { field, op, values: [] };
   if (takesRange(op)) return { field, op, values: [null, null] };
   if (takesAmount(op)) return { field, op, value: { ...DEFAULT_RELATIVE } };
@@ -228,6 +247,14 @@ export function freshCondition(field: string, op: FilterOperator, timeZone: stri
  */
 export function switchOperator(c: FilterCondition, nextOp: FilterOperator, timeZone: string): FilterCondition {
   const { field, op } = c;
+  if (takesHistory(nextOp)) {
+    // The field carries over between history operators; a window means the same under
+    // "changed" and "number of changes".
+    const prev = takesHistory(op) ? readHistoryValue(op, c.value) : undefined;
+    const next = freshHistoryValue(nextOp, prev?.historyField ?? '');
+    if (prev?.during && nextOp !== 'Was') next.during = { ...prev.during };
+    return { field, op: nextOp, value: next };
+  }
   if (takesList(nextOp)) return { field, op: nextOp, values: takesList(op) ? [...(c.values ?? [])] : [] };
   if (takesAmount(nextOp) && isRelativeAmount(c.value)) return { field, op: nextOp, value: { ...c.value } };
   if (takesNoValue(nextOp) || takesRange(nextOp) || takesAmount(nextOp) || takesPeriod(nextOp)) {
@@ -275,6 +302,7 @@ const NO_EMPTY_OPS: ReadonlySet<string> = new Set(['jiraKey']);
  * else is dropped, leaving the row unfinished — kept on screen, never sent.
  */
 function readValue(op: FilterOperator, raw: unknown): ConditionValue | undefined {
+  if (takesHistory(op)) return readHistoryValue(op, raw);
   if (takesAmount(op)) return readRelativeAmount(raw);
   if (takesPeriod(op)) return readPeriod(raw);
   if (typeof raw === 'string' || typeof raw === 'number' || raw === null) return raw;
@@ -284,7 +312,8 @@ function readValue(op: FilterOperator, raw: unknown): ConditionValue | undefined
 
 /** `values` as its operator takes them: exactly [from, to] for Between; else names, numbers, (Empty) and smart values. */
 function readValues(op: FilterOperator, raw: unknown): ListValue[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
+  // A history condition keeps its lists inside `value`; a stray `values` is not part of it.
+  if (takesHistory(op) || !Array.isArray(raw)) return undefined;
   if (takesRange(op)) {
     return raw.length === 2
       ? raw.map((x): ListValue => (typeof x === 'string' || typeof x === 'number' ? x : null))

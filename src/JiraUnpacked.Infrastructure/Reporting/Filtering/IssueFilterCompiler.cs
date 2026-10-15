@@ -48,9 +48,11 @@ public sealed class IssueFilterCompiler : IIssueFilterCompiler
         if (conditions.Count == 0 && group is null)
             return new CompiledFilter(MatchAll, null);
 
+        // The history conditions query the changelog through the SAME injected context, so the
+        // tenant filter that scopes every dictionary lookup also scopes their subqueries.
         var build = group is not null
-            ? await _translator.BuildAsync(group, ResolveDictAsync, ct)
-            : await _translator.BuildAsync(conditions, ResolveDictAsync, ct);
+            ? await _translator.BuildAsync(group, ResolveDictAsync, ct, _db.IssueChangeHistory)
+            : await _translator.BuildAsync(conditions, ResolveDictAsync, ct, _db.IssueChangeHistory);
 
         return build.Error is not null
             ? new CompiledFilter(null, build.Error)

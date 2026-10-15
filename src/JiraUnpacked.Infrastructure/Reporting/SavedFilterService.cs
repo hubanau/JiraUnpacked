@@ -271,7 +271,9 @@ public sealed class SavedFilterService : ISavedFilterService
         foreach (var column in columns)
         {
             // A JSON null inside the list arrives as a null string: a bad column, not a 500.
-            if (column is null || !FilterFields.All.TryGetValue(column, out var field) || field.Name != column)
+            // 'history' is a filter field but never a column: it has no single value to show.
+            if (column is null || !FilterFields.All.TryGetValue(column, out var field) || field.Name != column
+                || field.Type == FieldType.History)
                 return $"'{column}' is not a known column.";
             if (!seen.Add(column))
                 return $"'{column}' is listed more than once.";
