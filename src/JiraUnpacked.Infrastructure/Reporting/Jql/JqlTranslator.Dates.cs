@@ -1,0 +1,139 @@
+using System.Globalization;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using JiraUnpacked.Domain.Abstractions;
+using JiraUnpacked.Infrastructure.Reporting.Filtering;
+
+namespace JiraUnpacked.Infrastructure.Reporting.Jql;
+
+/// <summary>
+/// Dates: comparisons, Between, relative amounts and calendar periods. The readers here are shared
+/// with history windows (.History), so a window reads exactly as a date condition does.
+/// </summary>
+public sealed partial class JqlTranslator
+{
+    private const string MonthsWarning = "JQL has no month unit for relative dates, so months are approximated as 30 days.";
+
+    private const string PeriodWarning =
+        "Jira evaluates calendar periods (startOfWeek() and the like) in the Jira user's own time zone, and starts weeks on their locale's first day; this list uses the condition's time zone and Monday.";
+
+    private static readonly Regex DateOnlyShape = new(@"^\d{4}-\d{2}-\d{2}\z", RegexOptions.CultureInvariant);
+
+    /// <summary>JQL's start/end functions for every calendar period but the quarters, which JQL has none for.</summary>
+    private static readonly IReadOnlyDictionary<string, (string Unit, int Offset)> PeriodFunctions =
+        new Dictionary<string, (string, int)>
+        {
+            ["today"] = ("Day", 0), ["yesterday"] = ("Day", -1),
+            ["thisWeek"] = ("Week", 0), ["lastWeek"] = ("Week", -1),
+            ["thisMonth"] = ("Month", 0), ["lastMonth"] = ("Month", -1),
+            ["thisYear"] = ("Year", 0), ["lastYear"] = ("Year", -1),
+        };
+
+    /// <summary>A calendar period's JQL bounds: functions where JQL has them (end inclusive), fixed dates for quarters (end exclusive).</summary>
+    private sealed record PeriodBounds(string Start, string End, bool EndInclusive);
+
+    /// <summary>created / updated.</summary>
+    private Clause DateField(string field, FilterCondition c, Run run)
+    {
+        switch (c.Op)
+        {
+            case FilterOperator.Between:
+            {
+                var (from, to, toExclusive) = ReadRange(Bound(c.Values, 0), Bound(c.Values, 1));
+                var parts = new List<string>();
+                if (from is { } lo) parts.Add($"{field} >= {JqlText.Date(lo)}");
+                if (to is { } hi) parts.Add($"{field} {(toExclusive ? "<" : "<=")} {JqlText.Date(hi)}");
+                // Both ends open matches every issue: a clause no issue fails says exactly that.
+                return Clause.Of(parts.Count == 0 ? $"{field} is not EMPTY" : JqlText.Join(parts, "AND"));
+            }
+            case FilterOperator.InLast or FilterOperator.NotInLast:
+                return Relative(c.Value, run) is { } offset
+                    ? Clause.Of($"{field} {(c.Op == FilterOperator.InLast ? ">=" : "<")} {offset}")
+                    : Clause.Out("it has no amount");
+            case FilterOperator.InPeriod:
+                return Period(c.Value, run) is { } p
+                    ? Clause.Of($"({field} >= {p.Start} AND {field} {(p.EndInclusive ? "<=" : "<")} {p.End})")
+                    : Clause.Out("it has no period");
+        }
+        if (c.Value is not { } v || !TryReadDate(v, out var at, out _)) return Clause.Out("it has no date");
+        var symbol = c.Op switch
+        {
+            FilterOperator.Lt => "<",
+            FilterOperator.Lte => "<=",
+            FilterOperator.Gt => ">",
+            FilterOperator.Gte => ">=",
+            _ => null,
+        };
+        return symbol is null ? Clause.Out($"JQL has no '{c.Op}' for {field}") : Clause.Of($"{field} {symbol} {JqlText.Date(at)}");
+    }
+
+    private static JsonElement? Bound(List<JsonElement>? values, int at) =>
+        values is { } vs && vs.Count > at && vs[at].ValueKind != JsonValueKind.Null ? vs[at] : null;
+
+    /// <summary>As the filter reads a range: UTC; a date-only `to` runs through that day (exclusive at the next midnight).</summary>
+    private static (DateTime? From, DateTime? To, bool ToExclusive) ReadRange(JsonElement? fromEl, JsonElement? toEl)
+    {
+        DateTime? from = fromEl is { } f && TryReadDate(f, out var a, out _) ? a : null;
+        if (toEl is not { } t || !TryReadDate(t, out var b, out var dateOnly)) return (from, null, false);
+        // Through 9999-12-31 excludes nothing and has no next midnight: an open end, as the filter reads it.
+        if (dateOnly && b.Date == DateTime.MaxValue.Date) return (from, null, false);
+        return dateOnly ? (from, b.AddDays(1), true) : (from, b, false);
+    }
+
+    /// <summary>An ISO-8601 date or timestamp, read as UTC like every date in the filter.</summary>
+    private static bool TryReadDate(JsonElement v, out DateTime value, out bool dateOnly)
+    {
+        value = default;
+        dateOnly = false;
+        if (v.ValueKind != JsonValueKind.String) return false;
+        var s = v.GetString()!;
+        dateOnly = DateOnlyShape.IsMatch(s);
+        return DateTime.TryParse(s, CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out value);
+    }
+
+    /// <summary>{"amount", "unit"} → a JQL relative offset ("-14d"); months as 30-day blocks, with a warning.</summary>
+    private static string? Relative(JsonElement? value, Run run)
+    {
+        if (value is not { ValueKind: JsonValueKind.Object } v
+            || !v.TryGetProperty("amount", out var a) || a.ValueKind != JsonValueKind.Number || !a.TryGetInt32(out var n)
+            || !v.TryGetProperty("unit", out var u) || u.ValueKind != JsonValueKind.String)
+            return null;
+        switch (u.GetString())
+        {
+            case "hours":
+                return $"-{n}h";
+            case "days":
+                return $"-{n}d";
+            case "weeks":
+                return $"-{n}w";
+            case "months":
+                run.Warn(MonthsWarning);
+                return $"-{n * 30}d";
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>{"period", "timeZone"?} → JQL bounds. Quarters are computed now, in the condition's zone, exactly as the filter computes them.</summary>
+    private PeriodBounds? Period(JsonElement? value, Run run)
+    {
+        if (value is not { ValueKind: JsonValueKind.Object } v
+            || !v.TryGetProperty("period", out var pe) || pe.ValueKind != JsonValueKind.String)
+            return null;
+        var period = pe.GetString()!;
+        if (PeriodFunctions.TryGetValue(period, out var fn))
+        {
+            run.Warn(PeriodWarning);
+            var arg = fn.Offset == 0 ? "" : fn.Offset.ToString(CultureInfo.InvariantCulture);
+            return new PeriodBounds($"startOf{fn.Unit}({arg})", $"endOf{fn.Unit}({arg})", EndInclusive: true);
+        }
+        if (!RelativeDates.Periods.Contains(period)) return null;
+
+        var zoneId = v.TryGetProperty("timeZone", out var tz) && tz.ValueKind == JsonValueKind.String ? tz.GetString() : null;
+        if (!RelativeDates.TryResolveZone(zoneId, out var zone)) return null;
+        var (start, end) = RelativeDates.Period(_clock.UtcNow, period, zone);
+        run.Warn($"JQL has no quarter functions, so {(period == "thisQuarter" ? "this" : "last")} quarter is written as fixed dates from {JqlText.Date(start)} to {JqlText.Date(end)}: the JQL will not move with the calendar.");
+        return new PeriodBounds(JqlText.Date(start), JqlText.Date(end), EndInclusive: false);
+    }
+}

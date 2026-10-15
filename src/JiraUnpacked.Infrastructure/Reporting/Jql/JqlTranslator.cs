@@ -109,6 +109,8 @@ public sealed partial class JqlTranslator
         "sprint" => Sprint(c, run),
         "team" => Team(c, run),
         "storyPoints" => StoryPoints(c, run),
+        "createdAt" => DateField("created", c, run),
+        "updatedAt" => DateField("updated", c, run),
         "summary" => Summary(c, run),
         "jiraKey" => Key(c),
         "parent" => Parent(c),
