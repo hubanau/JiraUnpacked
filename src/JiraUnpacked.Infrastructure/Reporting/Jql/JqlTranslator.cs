@@ -97,7 +97,9 @@ public sealed partial class JqlTranslator
         ? $"Left out {what}, so the JQL is wider than this filter: it can match issues this list does not show."
         : $"Left out {what}, so the JQL is narrower than this filter: it can miss issues this list shows.";
 
-    private Clause TranslateCondition(FilterCondition c, Run run) => c.Field switch
+    /// <summary>Switches on the field's canonical name: the compiler accepts any casing, so the translator must too.</summary>
+    private Clause TranslateCondition(FilterCondition c, Run run) =>
+        (FilterFields.All.TryGetValue(c.Field, out var known) ? known.Name : c.Field) switch
     {
         "status" => Names("status", c),
         "issueType" => Names("issuetype", c),

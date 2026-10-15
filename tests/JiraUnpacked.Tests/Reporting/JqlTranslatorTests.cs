@@ -86,6 +86,72 @@ public sealed class JqlTranslatorTests
         Assert.StartsWith("project = \"A\\\"B\" ", Sut().Translate("A\"B", null, null, true, JqlLookup.Empty).Jql);
     }
 
+    [Theory]
+    [InlineData("a\nb", "\"a\\nb\"")]
+    [InlineData("a\tb", "\"a\\tb\"")]
+    [InlineData("a\rb", "\"a\\rb\"")]
+    [InlineData("a\u0001b", "\"a\\u0001b\"")]
+    [InlineData("a\u007Fb", "\"a\\u007fb\"")]
+    [InlineData("a\u0085b", "\"a\\u0085b\"")]
+    [InlineData("café 中", "\"café 中\"")]
+    public void Control_characters_are_escaped_so_a_value_stays_on_one_line(string value, string literal)
+    {
+        Assert.Equal($"status = {literal}", Where(C("status", FilterOperator.Eq, value)));
+        Assert.DoesNotContain('\n', Translate(All(C("status", FilterOperator.Eq, value))).Jql);
+    }
+
+    [Fact]
+    public void Field_names_are_matched_the_way_the_compiler_matches_them()
+    {
+        Assert.Equal("status = \"Done\"", Where(C("Status", FilterOperator.Eq, "Done")));
+        Assert.Equal("issuetype = \"Bug\"", Where(C("ISSUETYPE", FilterOperator.Eq, "Bug")));
+        Assert.Equal("key = \"ACME-1\"", Where(C("JiraKey", FilterOperator.Eq, "ACME-1")));
+        Assert.Equal("parent is EMPTY", Where(C("PARENT", FilterOperator.IsNull)));
+        // Still the key rule, not "no field": the casing must not change which part is left out.
+        var t = Translate(All(C("status", FilterOperator.Eq, "Done"), C("JIRAKEY", FilterOperator.Contains, "PLAT")));
+        Assert.Contains("JQL cannot match part of an issue key", Assert.Single(t.Warnings));
+    }
+
+    [Fact]
+    public void A_json_null_value_on_a_name_field_reads_as_empty()
+    {
+        var empty = J(null);
+        Assert.Equal("status is EMPTY", Where(new FilterCondition("status", FilterOperator.Eq, empty, null)));
+        // "is not (Empty)" is "has a value" — what the list's Neq of the empty value means.
+        Assert.Equal("status is not EMPTY", Where(new FilterCondition("status", FilterOperator.Neq, empty, null)));
+    }
+
+    [Fact]
+    public void Summary_text_has_the_searchs_reserved_characters_escaped()
+    {
+        // a:b (c++)  ->  a\:b \(c\+\+\)  ->  quoted, each backslash doubled.
+        Assert.Equal("summary ~ \"a\\\\:b \\\\(c\\\\+\\\\+\\\\)\"", Where(C("summary", FilterOperator.Contains, "a:b (c++)")));
+        // The trailing * of "starts with" is the wildcard, so it stays bare; one in the text does not.
+        Assert.Equal("summary ~ \"C\\\\+\\\\+ \\\\*x*\"", Where(C("summary", FilterOperator.StartsWith, "C++ *x")));
+        Assert.Equal("NOT summary ~ \"x\\\\/y\"", Where(C("summary", FilterOperator.NotContains, "x/y")));
+    }
+
+    [Theory]
+    [InlineData(FilterOperator.Contains, "")]
+    [InlineData(FilterOperator.Contains, "   ")]
+    [InlineData(FilterOperator.StartsWith, "")]
+    [InlineData(FilterOperator.NotContains, " \t")]
+    public void Summary_search_with_no_text_is_left_out_not_a_bare_wildcard(FilterOperator op, string text)
+    {
+        var t = Translate(All(C("status", FilterOperator.Eq, "Done"), C("summary", op, text)));
+        Assert.Equal("status = \"Done\"", Where(t));
+        var warning = Assert.Single(t.Warnings);
+        Assert.Contains("(it has no text to search for)", warning);
+        Assert.Contains("wider than this filter", warning);
+    }
+
+    [Fact]
+    public void A_custom_field_id_takes_ascii_digits_only()
+    {
+        var odd = JqlLookup.Empty with { TeamField = "customfield_١٢" };   // Arabic-Indic digits
+        Assert.Single(Translate(null, odd, "team").Warnings);
+    }
+
     [Fact]
     public void Groups_join_with_and_or_and_nest_in_parentheses()
     {
@@ -163,6 +229,34 @@ public sealed class JqlTranslatorTests
         // Inside an Any, the same emptied group was an alternative: narrower.
         var u = Translate(Any(C("status", FilterOperator.Eq, "Done")).With(All(C("jiraKey", FilterOperator.Contains, "PLAT"))));
         Assert.Contains("narrower than this filter", Assert.Single(u.Warnings));
+    }
+
+    [Fact]
+    public void An_any_group_inside_an_all_group_that_loses_a_part_but_keeps_one_is_narrower()
+    {
+        var t = Translate(All(C("status", FilterOperator.Eq, "Done"))
+            .With(Any(C("priority", FilterOperator.Eq, "High"), C("jiraKey", FilterOperator.Contains, "PLAT"))));
+        Assert.Equal("(status = \"Done\" AND priority = \"High\")", Where(t));
+        Assert.Contains("narrower than this filter", Assert.Single(t.Warnings));
+    }
+
+    [Fact]
+    public void Left_out_parts_of_an_emptied_group_inside_an_emptied_group_are_judged_two_levels_up()
+    {
+        var inner = Any(C("jiraKey", FilterOperator.StartsWith, "Q"));
+        var middle = All(C("jiraKey", FilterOperator.Contains, "P")).With(inner);
+
+        // Under an All root that keeps its own condition both parts were requirements: wider.
+        var wide = Translate(All(C("status", FilterOperator.Eq, "Done")).With(middle));
+        Assert.Equal("status = \"Done\"", Where(wide));
+        Assert.Equal(2, wide.Warnings.Count);
+        Assert.All(wide.Warnings, w => Assert.Contains("wider than this filter", w));
+
+        // Under an Any root they were alternatives: narrower.
+        var narrow = Translate(Any(C("status", FilterOperator.Eq, "Done")).With(middle));
+        Assert.Equal("status = \"Done\"", Where(narrow));
+        Assert.Equal(2, narrow.Warnings.Count);
+        Assert.All(narrow.Warnings, w => Assert.Contains("narrower than this filter", w));
     }
 
     [Fact]

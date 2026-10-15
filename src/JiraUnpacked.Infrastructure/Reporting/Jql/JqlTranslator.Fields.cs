@@ -82,13 +82,32 @@ public sealed partial class JqlTranslator
     private const string TextSearchWarning =
         "JQL text search is word-based, not substring: summary ~ matches whole words, so it can find more or fewer issues than \"contains\" does here.";
 
+    private const string SearchReserved = "+-&|!(){}[]^~*?:\\/";
+
+    /// <summary>
+    /// Text for a <c>~</c> search: the characters Jira's text search (Lucene) reserves get a backslash,
+    /// so "a:b" or "c++" search for those words instead of being parsed as syntax. Quote then doubles
+    /// the backslash, which is how Jira expects it inside a JQL string.
+    /// </summary>
+    private static string EscapeSearch(string text)
+    {
+        var sb = new System.Text.StringBuilder(text.Length);
+        foreach (var ch in text)
+        {
+            if (SearchReserved.Contains(ch)) sb.Append('\\');
+            sb.Append(ch);
+        }
+        return sb.ToString();
+    }
+
     /// <summary>summary: ~ for contains and starts with (a trailing *), NOT … ~ for does not contain.</summary>
     private static Clause Summary(FilterCondition c, Run run)
     {
         if (c.Op == FilterOperator.IsNull) return Clause.Of("summary is EMPTY");
         if (c.Op == FilterOperator.IsNotNull) return Clause.Of("summary is not EMPTY");
-        if (c.Value is not { ValueKind: JsonValueKind.String } v) return Clause.Out("it has no text to search for");
-        var text = v.GetString()!;
+        if (c.Value is not { ValueKind: JsonValueKind.String } v || string.IsNullOrWhiteSpace(v.GetString()))
+            return Clause.Out("it has no text to search for");
+        var text = EscapeSearch(v.GetString()!);
         var clause = c.Op switch
         {
             FilterOperator.Contains => Clause.Of($"summary ~ {JqlText.Quote(text)}"),

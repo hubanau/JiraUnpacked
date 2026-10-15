@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace JiraUnpacked.Infrastructure.Reporting.Jql;
@@ -9,10 +10,33 @@ namespace JiraUnpacked.Infrastructure.Reporting.Jql;
 /// </summary>
 internal static class JqlText
 {
-    private static readonly Regex CustomFieldId = new(@"^customfield_(\d+)\z", RegexOptions.CultureInvariant);
+    private static readonly Regex CustomFieldId = new(@"^customfield_([0-9]+)\z", RegexOptions.CultureInvariant);
 
-    /// <summary>"x", with \ and " escaped — the two characters a JQL string literal reserves.</summary>
-    internal static string Quote(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    /// <summary>
+    /// "x" as a JQL string literal: <c>\</c> and <c>"</c> escaped, newline, carriage return and tab
+    /// written <c>\n</c> <c>\r</c> <c>\t</c>, and any other control character <c>\uXXXX</c> — a raw
+    /// one would break the line or be rejected by Jira.
+    /// </summary>
+    internal static string Quote(string s)
+    {
+        var sb = new StringBuilder(s.Length + 2).Append('"');
+        foreach (var ch in s)
+        {
+            switch (ch)
+            {
+                case '\\': sb.Append("\\\\"); break;
+                case '"': sb.Append("\\\""); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (char.IsControl(ch)) sb.Append("\\u").Append(((int)ch).ToString("x4", CultureInfo.InvariantCulture));
+                    else sb.Append(ch);
+                    break;
+            }
+        }
+        return sb.Append('"').ToString();
+    }
 
     /// <summary>A Jira id: bare when it is all digits (sprint and issue ids, as Jira's own examples write them), quoted otherwise.</summary>
     internal static string Id(string id) => id.Length > 0 && id.All(char.IsAsciiDigit) ? id : Quote(id);
