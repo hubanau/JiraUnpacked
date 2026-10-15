@@ -79,7 +79,9 @@ public sealed class HistoryValueService : IHistoryValueService
     /// The stored values a filter could name: none longer than a filter value may be (255), so a
     /// description's text is never offered. Bounded in SQL, before grouping — grouping free text
     /// is what made a description picker slow. A list longer than that drops out whole; its
-    /// elements are almost always in shorter lists of the same field too.
+    /// elements are almost always in shorter lists of the same field too — but not always, so an
+    /// element's count can be lower than the rows that hold it (a long Sprint or labels list is
+    /// left out of its elements' counts), and an element seen only in long lists is not offered.
     /// </summary>
     private static IQueryable<string?> Pickable(IQueryable<string?> side) =>
         side.Where(v => v == null || v.Length <= IssueFilterTranslator.MaxHistoryValueLength);

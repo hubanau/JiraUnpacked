@@ -20,6 +20,13 @@ public sealed partial class IssueFilterTranslator
     internal const int MaxHistoryFieldLength = 100;
     internal const int MaxHistoryValueLength = 255;
 
+    /// <summary>
+    /// Entries in one history value list (values, from, to, by) — half of <see cref="MaxInValues"/>.
+    /// Each name is four predicates per column, and the spec §2 gate measured a 100-value Sprint
+    /// Was at 2.1–3.8 s on the largest project (50 values: under 1.7 s).
+    /// </summary>
+    public const int MaxHistoryValues = 50;
+
     internal const int MaxChangeCount = 10_000;
 
     private static readonly string[] Compares = { "Eq", "Neq", "Gt", "Gte", "Lt", "Lte" };
@@ -127,7 +134,7 @@ public sealed partial class IssueFilterTranslator
     private static async Task<(Expression<Func<Issue, bool>>?, string?)> BuildWasAsync(
         HistoryScope s, DictNameResolver resolveDict, CancellationToken ct)
     {
-        if (ReadHistoryValues(s.Value, "values", allowEmpty: true, out var values) is { } error) return (null, error);
+        if (ReadHistoryValues(s, "values", allowEmpty: true, out var values) is { } error) return (null, error);
         if (values is null) return (null, "'Was' needs 'values': at least one value, or null for (Empty).");
 
         var inHistory = AnyRow(s, Expression.AndAlso(s.Rows, Expression.OrElse(
@@ -168,9 +175,9 @@ public sealed partial class IssueFilterTranslator
     /// <summary>Changed: some row for the field satisfies every part given — from, to, by, during. No parts: changed at all.</summary>
     private (Expression<Func<Issue, bool>>?, string?) BuildChanged(HistoryScope s)
     {
-        if (ReadHistoryValues(s.Value, "from", allowEmpty: true, out var from) is { } e1) return (null, e1);
-        if (ReadHistoryValues(s.Value, "to", allowEmpty: true, out var to) is { } e2) return (null, e2);
-        if (ReadHistoryValues(s.Value, "by", allowEmpty: false, out var by) is { } e3) return (null, e3);
+        if (ReadHistoryValues(s, "from", allowEmpty: true, out var from) is { } e1) return (null, e1);
+        if (ReadHistoryValues(s, "to", allowEmpty: true, out var to) is { } e2) return (null, e2);
+        if (ReadHistoryValues(s, "by", allowEmpty: false, out var by) is { } e3) return (null, e3);
         if (ReadDuring(s.Value, out var window) is { } e4) return (null, e4);
 
         var test = s.Rows;
@@ -237,12 +244,29 @@ public sealed partial class IssueFilterTranslator
             : null;
     }
 
+    /// <summary>The keys each window kind takes. Anything else is refused, as at the top level.</summary>
+    private static readonly IReadOnlyDictionary<string, string[]> WindowKeys = new Dictionary<string, string[]>
+    {
+        ["inLast"] = new[] { "kind", "amount", "unit" },
+        ["inPeriod"] = new[] { "kind", "period", "timeZone" },
+        ["between"] = new[] { "kind", "from", "to" },
+    };
+
     /// <summary>The three window kinds, read by the same rules as InLast, InPeriod and date Between.</summary>
     private string? ReadWindow(JsonElement v, out Window? window)
     {
         window = null;
         if (v.ValueKind != JsonValueKind.Object || !v.TryGetProperty("kind", out var k) || k.ValueKind != JsonValueKind.String)
             return WindowShape;
+        if (WindowKeys.TryGetValue(k.GetString()!, out var keys))
+        {
+            foreach (var prop in v.EnumerateObject())
+            {
+                // An explicit null is the same as leaving the key out.
+                if (!keys.Contains(prop.Name) && prop.Value.ValueKind != JsonValueKind.Null)
+                    return $"'during' {k.GetString()} does not take '{prop.Name}'. It takes: {string.Join(", ", keys)}.";
+            }
+        }
         switch (k.GetString())
         {
             case "inLast":
@@ -287,17 +311,20 @@ public sealed partial class IssueFilterTranslator
     /// <summary>
     /// An optional list under <paramref name="key"/>: absent or null → no list, no error. Strings of
     /// at most 255 characters; null or "" is (Empty) where allowed (Jira stores "no value" as
-    /// either). At most 100 entries, and never empty — leaving the key out is how a caller says "any".
+    /// either). At most <see cref="MaxHistoryValues"/> entries, and never empty — leaving the key out
+    /// is how a caller says "any". The field's values (not its authors) must not hold the field's
+    /// separator where that is a space: a label with one could never match an element.
     /// </summary>
-    private static string? ReadHistoryValues(JsonElement v, string key, bool allowEmpty, out HistoryValues? list)
+    private static string? ReadHistoryValues(HistoryScope scope, string key, bool allowEmpty, out HistoryValues? list)
     {
         list = null;
+        var v = scope.Value;
         if (!v.TryGetProperty(key, out var arr) || arr.ValueKind == JsonValueKind.Null) return null;
         var what = allowEmpty ? "strings, or null for (Empty)" : "author names";
         if (arr.ValueKind != JsonValueKind.Array) return $"'{key}' must be a list of {what}.";
         var count = arr.GetArrayLength();
         if (count == 0) return $"'{key}' needs at least one value; leave it out to accept any.";
-        if (count > MaxInValues) return $"'{key}' accepts at most {MaxInValues} values.";
+        if (count > MaxHistoryValues) return $"'{key}' accepts at most {MaxHistoryValues} values.";
 
         var names = new List<string>();
         var wantsEmpty = false;
@@ -314,6 +341,9 @@ public sealed partial class IssueFilterTranslator
             }
             if (s.Length > MaxHistoryValueLength)
                 return $"Values in '{key}' may be at most {MaxHistoryValueLength} characters.";
+            // Authors are names, spaces and all; only the field's own values are list elements.
+            if (key != "by" && scope.Separator == " " && s.Contains(' '))
+                return $"A label cannot contain spaces: '{s}' in '{key}'.";
             if (!names.Contains(s)) names.Add(s);
         }
         list = new HistoryValues(names, wantsEmpty);

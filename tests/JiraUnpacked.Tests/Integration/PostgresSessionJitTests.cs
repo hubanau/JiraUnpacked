@@ -6,7 +6,8 @@ namespace JiraUnpacked.Tests.Integration;
 
 /// <summary>
 /// The app's sessions run with JIT off — the runtime (RLS) context and the background readers'
-/// privileged one alike, both as the host registers them. See PostgresSessionOptions for why.
+/// privileged one alike, both as the host registers them, and both on the test database. See
+/// PostgresSessionOptions for why.
 /// </summary>
 public sealed class PostgresSessionJitTests : IClassFixture<JiraUnpackedApiFactory>, IAsyncLifetime
 {
@@ -15,12 +16,15 @@ public sealed class PostgresSessionJitTests : IClassFixture<JiraUnpackedApiFacto
     public Task InitializeAsync() => _factory.EnsureDatabaseAsync();
     public Task DisposeAsync() => Task.CompletedTask;
 
+    /// <summary>The session's jit setting — after checking the session is on the test database, not the dev one.</summary>
     private static async Task<string?> ShowJitAsync(AppDbContext db)
     {
         await db.Database.OpenConnectionAsync();
         try
         {
             await using var cmd = db.Database.GetDbConnection().CreateCommand();
+            cmd.CommandText = "SELECT current_database()";
+            Assert.Equal(JiraUnpackedApiFactory.TestDatabase, (string?)await cmd.ExecuteScalarAsync());
             cmd.CommandText = "SHOW jit";
             return (string?)await cmd.ExecuteScalarAsync();
         }

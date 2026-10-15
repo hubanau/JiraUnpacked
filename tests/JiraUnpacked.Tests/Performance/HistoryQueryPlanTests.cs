@@ -26,6 +26,8 @@ namespace JiraUnpacked.Tests.Performance;
 /// Options set jit explicitly — `-c jit=on` measures the with-JIT baseline.
 /// The history pickers' reads (history-fields, history-values), field churn, filter-values and
 /// the unfiltered list are timed the same way and recorded, but not gated.
+/// It connects as whatever role JU_PERF_DB names — in practice the reader role, which has
+/// BYPASSRLS — so tenancy comes from the EF query filter alone, not from the App role under RLS.
 /// </summary>
 public sealed class HistoryQueryPlanTests
 {
@@ -131,14 +133,16 @@ public sealed class HistoryQueryPlanTests
             author = (string?)await Scalar(@"SELECT ""Author"" FROM ""IssueChangeHistory"" WHERE ""JiraProjectId"" = @p
                 AND ""Field"" = 'Sprint' AND ""Author"" IS NOT NULL GROUP BY 1 ORDER BY count(*) DESC LIMIT 1", project) ?? "nobody";
 
-            // 50 sprint names, the most-used elements of the Sprint lists: the widest Was a picker builds.
+            // As many sprint names as a history list takes, the most-used elements of the Sprint
+            // lists: the widest Was a picker builds.
             var names = new List<string>();
             await using (var cmd = new NpgsqlCommand(@"SELECT e FROM ""IssueChangeHistory"" h,
                     unnest(string_to_array(h.""ToValue"", ', ')) AS e
                 WHERE h.""JiraProjectId"" = @p AND h.""Field"" = 'Sprint' AND e <> ''
-                GROUP BY e ORDER BY count(*) DESC, e LIMIT 50", conn))
+                GROUP BY e ORDER BY count(*) DESC, e LIMIT @n", conn))
             {
                 cmd.Parameters.AddWithValue("p", project);
+                cmd.Parameters.AddWithValue("n", IssueFilterTranslator.MaxHistoryValues);
                 await using var r = await cmd.ExecuteReaderAsync();
                 while (await r.ReadAsync()) names.Add(r.GetString(0));
             }
@@ -191,24 +195,25 @@ public sealed class HistoryQueryPlanTests
         }
 
         // ---- recorded, not gated: the history pickers, and the reads the session settings also
-        // reach (so a change to them shows up as a before/after here) ----
+        // reach (so a change to them shows up as a before/after here). A read that comes back
+        // with an error records -1 entries rather than throwing before the gate's verdict. ----
         IIssueFilterCompiler Compiler(AppDbContext db) =>
             new IssueFilterCompiler(db, new IssueFilterTranslator(new FakeClock(DateTime.UtcNow)));
         var recorded = new (string Name, Func<AppDbContext, Task<int>> Run)[]
         {
-            ("picker history-fields", async db => (await new HistoryValueService(db).GetFieldsAsync(project)).Fields!.Count),
-            ("picker history-values status", async db => (await new HistoryValueService(db).GetValuesAsync(project, "status", "value")).Values!.Count),
-            ("picker history-values Sprint", async db => (await new HistoryValueService(db).GetValuesAsync(project, "Sprint", "value")).Values!.Count),
-            ("picker history-values description", async db => (await new HistoryValueService(db).GetValuesAsync(project, "description", "value")).Values!.Count),
-            ("picker history-values Sprint authors", async db => (await new HistoryValueService(db).GetValuesAsync(project, "Sprint", "author")).Values!.Count),
+            ("picker history-fields", async db => (await new HistoryValueService(db).GetFieldsAsync(project)).Fields?.Count ?? -1),
+            ("picker history-values status", async db => (await new HistoryValueService(db).GetValuesAsync(project, "status", "value")).Values?.Count ?? -1),
+            ("picker history-values Sprint", async db => (await new HistoryValueService(db).GetValuesAsync(project, "Sprint", "value")).Values?.Count ?? -1),
+            ("picker history-values description", async db => (await new HistoryValueService(db).GetValuesAsync(project, "description", "value")).Values?.Count ?? -1),
+            ("picker history-values Sprint authors", async db => (await new HistoryValueService(db).GetValuesAsync(project, "Sprint", "author")).Values?.Count ?? -1),
             ("field churn Sprint", async db => (await new FieldChurnQueryService(db, Compiler(db))
-                .GetFieldChurnAsync(project, "Sprint", 2, null, 1, 50)).Report!.Items.TotalCount),
+                .GetFieldChurnAsync(project, "Sprint", 2, null, 1, 50)).Report?.Items.TotalCount ?? -1),
             ("field churn status", async db => (await new FieldChurnQueryService(db, Compiler(db))
-                .GetFieldChurnAsync(project, "status", 2, null, 1, 50)).Report!.Items.TotalCount),
-            ("filter-values status", async db => (await new FilterValueService(db).GetAsync(project, "status")).Values!.Count),
-            ("filter-values sprint", async db => (await new FilterValueService(db).GetAsync(project, "sprint")).Values!.Count),
+                .GetFieldChurnAsync(project, "status", 2, null, 1, 50)).Report?.Items.TotalCount ?? -1),
+            ("filter-values status", async db => (await new FilterValueService(db).GetAsync(project, "status")).Values?.Count ?? -1),
+            ("filter-values sprint", async db => (await new FilterValueService(db).GetAsync(project, "sprint")).Values?.Count ?? -1),
             ("issue list, no filter", async db => (await new IssueQueryService(db, Compiler(db))
-                .QueryAsync(project, new IssueFilterRequest(null, null, 1, 50))).Result!.TotalCount),
+                .QueryAsync(project, new IssueFilterRequest(null, null, 1, 50))).Result?.TotalCount ?? -1),
         };
         var slow = new List<string>();
         foreach (var (name, run) in recorded)

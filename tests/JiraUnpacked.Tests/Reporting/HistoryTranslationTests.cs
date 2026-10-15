@@ -279,9 +279,9 @@ public sealed class HistoryTranslationTests
         Assert.Contains("'Was' needs 'values'", await Error(Was(new { historyField = "status" })));
         Assert.Contains("at least one value", await Error(Was(new { historyField = "status", values = Array.Empty<string>() })));
         Assert.Contains("at least one value", await Error(Changed(new { historyField = "status", from = Array.Empty<string>() })));
-        Assert.Contains("at most 100 values", await Error(Was(new
+        Assert.Contains("at most 50 values", await Error(Was(new
         {
-            historyField = "status", values = Enumerable.Range(0, 101).Select(i => $"v{i}").ToArray(),
+            historyField = "status", values = Enumerable.Range(0, 51).Select(i => $"v{i}").ToArray(),
         })));
         Assert.Contains("at most 255 characters", await Error(Was(new { historyField = "status", values = new[] { new string('x', 256) } })));
         Assert.Contains("(Empty) is not one", await Error(Changed(new { historyField = "status", by = new string?[] { null } })));
@@ -455,6 +455,69 @@ public sealed class HistoryTranslationTests
         Assert.True(changed(I("1")));
         Assert.True(changed(I("2")));
         Assert.False(changed(I("3")));
+    }
+
+    [Fact]
+    public async Task Every_history_value_list_takes_at_most_50_values()
+    {
+        // Each name is four predicates per column; the 2 s gate measured 100 of them over budget.
+        var fifty = Enumerable.Range(0, 50).Select(i => $"v{i}").ToArray();
+        var fiftyOne = Enumerable.Range(0, 51).Select(i => $"v{i}").ToArray();
+
+        await Pred(History(FilterOperator.Was, new { historyField = "status", values = fifty }), Array.Empty<IssueChangeHistory>());
+        await Pred(History(FilterOperator.Changed, new { historyField = "status", from = fifty, to = fifty, by = fifty }),
+            Array.Empty<IssueChangeHistory>());
+
+        Assert.Equal("'values' accepts at most 50 values.",
+            await Error(History(FilterOperator.Was, new { historyField = "status", values = fiftyOne })));
+        foreach (var key in new[] { "from", "to", "by" })
+        {
+            var value = new Dictionary<string, object> { ["historyField"] = "status", [key] = fiftyOne };
+            Assert.Equal($"'{key}' accepts at most 50 values.", await Error(History(FilterOperator.Changed, value)));
+        }
+    }
+
+    [Theory]
+    [InlineData("inLast", "period")]
+    [InlineData("inLast", "from")]
+    [InlineData("inPeriod", "amount")]
+    [InlineData("inPeriod", "to")]
+    [InlineData("between", "unit")]
+    [InlineData("between", "timeZone")]
+    [InlineData("between", "extra")]
+    public async Task A_during_takes_only_its_own_kinds_keys(string kind, string stray)
+    {
+        var during = kind switch
+        {
+            "inLast" => new Dictionary<string, object?> { ["kind"] = kind, ["amount"] = 30, ["unit"] = "days" },
+            "inPeriod" => new Dictionary<string, object?> { ["kind"] = kind, ["period"] = "lastMonth", ["timeZone"] = "Europe/Warsaw" },
+            _ => new Dictionary<string, object?> { ["kind"] = kind, ["from"] = "2026-09-01", ["to"] = "2026-09-30" },
+        };
+        // Without the stray key the window is fine.
+        await Pred(History(FilterOperator.Changed, new { historyField = "Sprint", during }), Array.Empty<IssueChangeHistory>());
+
+        during[stray] = stray == "amount" ? 3 : "x";
+        Assert.StartsWith($"'during' {kind} does not take '{stray}'.",
+            await Error(History(FilterOperator.ChangeCount, new { historyField = "Sprint", compare = "Gte", count = 1, during })));
+        Assert.StartsWith($"'during' {kind} does not take '{stray}'.",
+            await Error(History(FilterOperator.Changed, new { historyField = "Sprint", during })));
+    }
+
+    [Fact]
+    public async Task A_label_value_with_a_space_is_refused_in_values_from_and_to_but_not_by()
+    {
+        Assert.Equal("A label cannot contain spaces: 'data ops' in 'values'.",
+            await Error(History(FilterOperator.Was, new { historyField = "labels", values = new[] { "data ops" } })));
+        Assert.Equal("A label cannot contain spaces: 'data ops' in 'from'.",
+            await Error(History(FilterOperator.Changed, new { historyField = "labels", from = new[] { "data ops" } })));
+        Assert.Equal("A label cannot contain spaces: 'data ops' in 'to'.",
+            await Error(History(FilterOperator.Changed, new { historyField = "labels", to = new[] { "x", "data ops" } })));
+
+        // Authors are names, spaces and all; and other fields' values may hold spaces.
+        await Pred(History(FilterOperator.Changed, new { historyField = "labels", by = new[] { "Alice Smith" } }),
+            Array.Empty<IssueChangeHistory>());
+        await Pred(History(FilterOperator.Was, new { historyField = "Labels", values = new[] { "data ops" } }),
+            Array.Empty<IssueChangeHistory>());
     }
 
     // ---- labels are space-separated; every other field is ", "-separated ----

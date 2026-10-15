@@ -136,10 +136,11 @@ public sealed class HistoryConditionTests : IClassFixture<JiraUnpackedApiFactory
         Task<string> Title(object c) => RicherFilterTestData.RejectionAsync(client, ctx.ProjectId, c);
 
         Assert.Contains("(Empty) is not one", await Title(History("Changed", new { historyField = "status", by = new string?[] { null } })));
-        Assert.Contains("at most 100 values", await Title(History("Was", new
+        Assert.Contains("at most 50 values", await Title(History("Was", new
         {
-            historyField = "status", values = Enumerable.Range(0, 101).Select(i => $"v{i}").ToArray(),
+            historyField = "status", values = Enumerable.Range(0, 51).Select(i => $"v{i}").ToArray(),
         })));
+        Assert.Contains("A label cannot contain spaces", await Title(History("Was", new { historyField = "labels", values = new[] { "data ops" } })));
         Assert.Contains("'Was' needs 'values'", await Title(History("Was", new { historyField = "status" })));
     }
 
@@ -219,6 +220,10 @@ public sealed class HistoryConditionTests : IClassFixture<JiraUnpackedApiFactory
         {
             historyField = "Sprint", during = new { kind = "between", from = "2026-09-30", to = "2026-09-01" },
         })));
+        Assert.Contains("'during' inLast does not take 'period'", await Title(History("Changed", new
+        {
+            historyField = "Sprint", during = new { kind = "inLast", amount = 30, unit = "days", period = "today" },
+        })));
     }
 
     [Fact]
@@ -258,5 +263,29 @@ public sealed class HistoryConditionTests : IClassFixture<JiraUnpackedApiFactory
         Assert.Empty(await Keys(History("Was", new { historyField = "labels", values = new[] { "ans" } })));
         Assert.Equal(new[] { "B-3" }, await Keys(History("Was", new { historyField = "Sprint", values = new[] { "PLAT 101" } })));
         Assert.Empty(await Keys(History("Was", new { historyField = "Sprint", values = new[] { "101" } })));
+    }
+
+    [Fact]
+    public async Task An_underscore_in_a_label_is_literal_on_the_space_separated_path_in_sql()
+    {
+        var (client, ctx) = await TenantAsync();
+        var stored = new Dictionary<string, string>
+        {
+            ["U-1"] = "x data_ops y",     // the real label, in the middle
+            ["U-2"] = "data_ops y",       // first
+            ["U-3"] = "x data_ops",       // last
+            ["U-4"] = "x dataXops y",     // what an unescaped LIKE would also match
+            ["U-5"] = "dataXops y",
+            ["U-6"] = "x dataXops",
+            ["U-7"] = "dataXops",
+        };
+        foreach (var (key, value) in stored)
+        {
+            await RicherFilterTestData.SeedIssueAsync(ctx, key);
+            await HistoryTestData.SeedChangeAsync(ctx, key, "labels", null, value);
+        }
+
+        Assert.Equal(new[] { "U-1", "U-2", "U-3" }, await RicherFilterTestData.KeysAsync(client, ctx.ProjectId,
+            History("Was", new { historyField = "labels", values = new[] { "data_ops" } })));
     }
 }

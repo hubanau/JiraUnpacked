@@ -39,7 +39,9 @@ A new pseudo-field **`history`** (field type `History`) with three new operators
   works for multi-sprint entries. The separator is `", "` for every field **except `labels`, which Jira
   writes space-separated** (`"DataOps ansible tested"`; labels cannot contain spaces) — one helper,
   `ListSeparatorFor(field)`, decides it for matching and for value-list splitting alike. `null` in a list means (Empty): a null or empty stored value.
-  Strings are matched exactly (no case folding), lists ≤ 100 entries, each ≤ 255 chars.
+  Strings are matched exactly (no case folding), lists ≤ 50 entries (`MaxHistoryValues`; the §2 gate
+  measured 100 at 2.1–3.8 s), each ≤ 255 chars. A `labels` value holding a space is refused (400).
+  A window takes only its own kind's keys; any other is a 400.
 - `by`: author display names, exact match; `null` not allowed.
 - `compare` ∈ `Eq, Neq, Gt, Gte, Lt, Lte`; `count` integer 0…10000.
 - **Window** (`during`), one of:
