@@ -45,7 +45,11 @@ internal static class JqlText
 
     internal static string Number(decimal d) => d.ToString(CultureInfo.InvariantCulture);
 
-    /// <summary>A UTC instant as a JQL date: "yyyy-MM-dd" at midnight, "yyyy-MM-dd HH:mm" otherwise.</summary>
+    /// <summary>
+    /// A UTC instant as a JQL date: "yyyy-MM-dd" at midnight, "yyyy-MM-dd HH:mm" otherwise. Jira
+    /// compares dates at minute granularity, so seconds are truncated: a bound at 10:30:59 is written
+    /// 10:30 and matches up to 59 seconds earlier than the list does.
+    /// </summary>
     internal static string Date(DateTime utc) => Quote(utc.TimeOfDay == TimeSpan.Zero
         ? utc.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
         : utc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture));

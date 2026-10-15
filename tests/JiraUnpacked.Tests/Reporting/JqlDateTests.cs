@@ -77,4 +77,38 @@ public sealed class JqlDateTests
         Assert.Equal("(created >= \"2026-09-30 22:00\" AND created < \"2026-12-31 23:00\")",
             Where(C("createdAt", FilterOperator.InPeriod, new { period = "thisQuarter", timeZone = "Europe/Warsaw" })));
     }
+
+    [Fact]
+    public void Seconds_are_truncated_because_jira_compares_at_minute_granularity()
+    {
+        Assert.Equal("created >= \"2026-09-01 10:30\"", Where(C("createdAt", FilterOperator.Gte, "2026-09-01T10:30:59Z")));
+        Assert.Equal("created < \"2026-09-01 00:00\"", Where(C("createdAt", FilterOperator.Lt, "2026-09-01T00:00:30Z")));
+    }
+
+    [Fact]
+    public void Ranges_are_read_by_the_filters_own_reader()
+    {
+        // Same inputs the filter accepts or refuses: a reversed or non-date range is left out, never read as open.
+        var reversed = Translate(All(L("createdAt", FilterOperator.Between, "2026-10-01", "2026-09-01")));
+        Assert.Equal("project = \"ACME\" ORDER BY updated DESC, key ASC", reversed.Jql);
+        Assert.Contains("its dates are not valid", Assert.Single(reversed.Warnings));
+        Assert.Equal("project = \"ACME\" ORDER BY updated DESC, key ASC",
+            Translate(All(L("createdAt", FilterOperator.Between, "garbage", null))).Jql);
+        // "from 10:00 on the 30th to the 30th" is not reversed: judged against the effective end.
+        Assert.Equal("(created >= \"2026-09-30 10:00\" AND created < \"2026-10-01\")",
+            Where(L("createdAt", FilterOperator.Between, "2026-09-30T10:00:00Z", "2026-09-30")));
+    }
+
+    [Fact]
+    public void A_time_zone_that_is_not_known_is_named_as_the_reason()
+    {
+        var t = Translate(All(C("createdAt", FilterOperator.InPeriod, new { period = "thisWeek", timeZone = "Mars/Olympus" })));
+        Assert.Equal("project = \"ACME\" ORDER BY updated DESC, key ASC", t.Jql);
+        var warning = Assert.Single(t.Warnings);
+        Assert.Contains("its time zone is not known", warning);
+        Assert.DoesNotContain("no period", warning);
+        // A missing period keeps its own reason.
+        Assert.Contains("it has no period",
+            Assert.Single(Translate(All(C("createdAt", FilterOperator.InPeriod, new { timeZone = "UTC" }))).Warnings));
+    }
 }
