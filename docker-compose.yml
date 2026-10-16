@@ -20,6 +20,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    # depends_on only orders `docker compose up`; after a Docker daemon restart the policy is
+    # all that brings a container back. Without it the database stays down and the api (which
+    # does restart) crash-loops on "Name does not resolve" until someone starts it by hand.
+    restart: unless-stopped
 
   # Applies migrations, then exits. The api service waits for it to complete SUCCESSFULLY, so
   # a failed migration stops the stack instead of starting an app against a half-built schema.
