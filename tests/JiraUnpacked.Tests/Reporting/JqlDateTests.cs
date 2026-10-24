@@ -23,7 +23,44 @@ public sealed class JqlDateTests
         Assert.Equal("created >= \"2026-09-01 08:00\"", Where(L("createdAt", FilterOperator.Between, "2026-09-01T08:00:00Z", null)));
         Assert.Equal("created <= \"2026-09-30 18:00\"", Where(L("createdAt", FilterOperator.Between, null, "2026-09-30T18:00:00Z")));
         // Through the last day a date can hold excludes nothing: every issue, as the list reads it.
-        Assert.Equal("created is not EMPTY", Where(L("createdAt", FilterOperator.Between, null, "9999-12-31")));
+        var open = Translate(All(L("createdAt", FilterOperator.Between, null, "9999-12-31")));
+        Assert.Equal("created is not EMPTY", Where(open));
+        Assert.Empty(open.Warnings);   // no date is written, so nothing can shift
+    }
+
+    private const string ZoneWarning =
+        "Dates are written in UTC; Jira reads them in your Jira profile's time zone, so day boundaries can shift by that offset.";
+
+    [Fact]
+    public void Every_written_date_says_once_that_jira_reads_it_in_the_users_time_zone()
+    {
+        // Comparisons and Between, several of them: one warning.
+        var t = Translate(All(
+            C("createdAt", FilterOperator.Gte, "2026-09-01"),
+            C("updatedAt", FilterOperator.Lt, "2026-09-01T10:30:00Z"),
+            L("createdAt", FilterOperator.Between, "2026-09-01", "2026-09-30")));
+        Assert.Equal(new[] { ZoneWarning }, t.Warnings);
+
+        // A one-sided Between writes a date too.
+        Assert.Equal(new[] { ZoneWarning },
+            Translate(All(L("updatedAt", FilterOperator.Between, null, "2026-09-30T18:00:00Z"))).Warnings);
+
+        // History windows with dates: DURING, AFTER and BEFORE.
+        foreach (var during in new object[]
+                 {
+                     new { kind = "between", from = "2026-09-01", to = "2026-09-30" },
+                     new { kind = "between", from = "2026-09-01", to = (string?)null },
+                     new { kind = "between", from = (string?)null, to = "2026-09-30" },
+                 })
+        {
+            var h = Translate(All(C("history", FilterOperator.Changed, new { historyField = "status", during })));
+            Assert.Equal(new[] { ZoneWarning }, h.Warnings);
+        }
+
+        // Relative offsets and Jira's own period functions write no date: no such warning.
+        Assert.DoesNotContain(ZoneWarning, Translate(All(
+            C("createdAt", FilterOperator.InLast, new { amount = 14, unit = "days" }),
+            C("createdAt", FilterOperator.InPeriod, new { period = "thisWeek" }))).Warnings);
     }
 
     [Fact]
@@ -71,6 +108,7 @@ public sealed class JqlDateTests
         Assert.Equal(new[]
         {
             "JQL has no quarter functions, so last quarter is written as fixed dates from \"2026-07-01\" to \"2026-10-01\": the JQL will not move with the calendar.",
+            ZoneWarning,
         }, t.Warnings);
 
         // Warsaw is UTC+2 on 1 Oct and UTC+1 on 1 Jan.

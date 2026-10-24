@@ -74,9 +74,46 @@ public sealed class JqlLookupFieldTests
     [Fact]
     public void Sprint_conditions_warn_once_that_jira_matches_every_sprint_an_issue_was_in()
     {
-        var t = Translate(All(C("sprint", FilterOperator.Eq, "Sprint 7"), C("sprint", FilterOperator.Neq, "Sprint 8")), Lookup);
+        var t = Translate(All(C("sprint", FilterOperator.Eq, "Sprint 7"), L("sprint", FilterOperator.In, "Sprint 8", Smart("closed"))), Lookup);
         Assert.Contains("every sprint it has been in", Assert.Single(t.Warnings));
         Assert.Empty(Translate(All(C("sprint", FilterOperator.IsNull)), Lookup).Warnings);
+        // Nothing sprint-specific written ("is not" a sprint no issue has = has a sprint): exact, no warning.
+        var none = Translate(All(C("sprint", FilterOperator.Neq, "Sprint 99")), Lookup);
+        Assert.Equal("sprint is not EMPTY", Where(none));
+        Assert.DoesNotContain(none.Warnings, w => w.Contains("every sprint it has been in"));
+    }
+
+    [Fact]
+    public void The_sprint_warning_says_which_way_the_jql_differs()
+    {
+        string Only(FilterCondition c) =>
+            Assert.Single(Translate(All(c), Lookup).Warnings, w => w.Contains("every sprint it has been in"));
+
+        // Is / is any of: Jira matches any sprint an issue was ever in — more.
+        Assert.Contains("can match more issues", Only(C("sprint", FilterOperator.Eq, "Sprint 7")));
+        Assert.Contains("can match more issues", Only(L("sprint", FilterOperator.In, "Sprint 7", Smart("closed"))));
+        // Is not / is none of: Jira leaves an issue out if ANY of its sprints matches — fewer.
+        Assert.Contains("can match fewer issues", Only(C("sprint", FilterOperator.Neq, "Sprint 8")));
+        Assert.Contains("can match fewer issues", Only(L("sprint", FilterOperator.NotIn, "Sprint 8", Smart("closed"))));
+        Assert.Contains("can match fewer issues", Only(C("sprint", FilterOperator.Neq, Smart("future"))));
+        // "Is not active" is written with a positive part (OR sprint in futureSprints()): different.
+        Assert.Contains("can match different issues", Only(C("sprint", FilterOperator.Neq, Smart("active"))));
+        Assert.Contains("can match different issues", Only(L("sprint", FilterOperator.NotIn, "Sprint 8", Smart("active"))));
+    }
+
+    [Fact]
+    public void Every_smart_sprint_value_has_a_jql_translation()
+    {
+        // A new smart key with no JQL would be dropped silently — "is not" it would even become "has a sprint".
+        foreach (var smart in JiraUnpacked.Infrastructure.Reporting.Filtering.SmartSprints.All)
+        {
+            foreach (var op in new[] { FilterOperator.Eq, FilterOperator.Neq })
+            {
+                var t = Translate(All(C("sprint", op, Smart(smart.Key))), Lookup);
+                Assert.Contains("Sprints()", Where(t));
+                Assert.DoesNotContain(t.Warnings, w => w.StartsWith("Left out", StringComparison.Ordinal));
+            }
+        }
     }
 
     [Fact]

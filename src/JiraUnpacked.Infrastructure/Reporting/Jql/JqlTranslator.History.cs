@@ -143,12 +143,16 @@ public sealed partial class JqlTranslator
             return options;
         }
 
+        // The size first: lists are written as their product, so check the cap before building it.
+        var needed = lists.Aggregate(1L, (n, list) =>
+            list is null ? n : n * (list.Literals.Count + (list.WantsEmpty ? 1 : 0)));
+        if (needed > MaxChangedClauses)
+            return Clause.Out($"it needs {needed} CHANGED clauses — JQL takes one value per FROM, TO and BY — and at most {MaxChangedClauses} are written");
+
         var combos = Options(fromList, "FROM")
             .SelectMany(f => Options(toList, "TO"), (f, t) => (f, t))
             .SelectMany(ft => Options(byList, "BY"), (ft, b) => new[] { ft.f, ft.t, b })
             .ToList();
-        if (combos.Count > MaxChangedClauses)
-            return Clause.Out($"it needs {combos.Count} CHANGED clauses — JQL takes one value per FROM, TO and BY — and at most {MaxChangedClauses} are written");
 
         // Last, so a clause left out for any reason above never leaves a window's warning behind.
         string? window = null;
@@ -156,7 +160,7 @@ public sealed partial class JqlTranslator
         {
             var (jql, why) = Window(d, run);
             if (jql is null) return Clause.Out(why!);
-            window = jql;
+            if (jql.Length > 0) window = jql;
         }
 
         foreach (var list in lists)
@@ -174,9 +178,13 @@ public sealed partial class JqlTranslator
         return Clause.Of(JqlText.Join(clauses, "OR"));
     }
 
+    /// <summary>A window with no bound at all: readable, and nothing to add to CHANGED.</summary>
+    private const string NoWindow = "";
+
     /// <summary>
     /// A `during` as a CHANGED predicate — AFTER a relative offset, DURING a period, or the between
-    /// bounds — read by the same helpers as the date conditions; or why it cannot be written.
+    /// bounds — read by the same helpers as the date conditions; <see cref="NoWindow"/> when it has
+    /// no bound; or why it cannot be written.
     /// </summary>
     private (string? Jql, string? Why) Window(JsonElement d, Run run)
     {
@@ -199,10 +207,12 @@ public sealed partial class JqlTranslator
                 if ((fromEl is null && toEl is null) || ReadRange(fromEl, toEl) is not { } range)
                     return (null, "its window dates are not valid");
                 var (lo, hi, _) = range;
-                if (lo is { } start && hi is { } end) return ($"DURING ({JqlText.Date(start)}, {JqlText.Date(end)})", null);
-                if (lo is { } since) return ($"AFTER {JqlText.Date(since)}", null);
-                if (hi is { } until) return ($"BEFORE {JqlText.Date(until)}", null);
-                return (null, unreadable);
+                if (lo is { } start && hi is { } end) return ($"DURING ({DateLiteral(start, run)}, {DateLiteral(end, run)})", null);
+                if (lo is { } since) return ($"AFTER {DateLiteral(since, run)}", null);
+                if (hi is { } until) return ($"BEFORE {DateLiteral(until, run)}", null);
+                // Only "through 9999-12-31" with no start reads as no bound at all — the filter's
+                // WindowTest adds no test then, so any change counts: no window predicate.
+                return (NoWindow, null);
             default:
                 return (null, unreadable);
         }

@@ -100,19 +100,27 @@ public sealed partial class JqlTranslator
         return sb.ToString();
     }
 
+    /// <summary>
+    /// The text a <c>~</c> search is given: a <c>"</c> becomes a space (in a search it would start a
+    /// phrase), and it is lower-cased so AND, OR and NOT are words, not search operators — Jira's
+    /// text search ignores case anyway.
+    /// </summary>
+    private static string SearchText(string text) => text.Replace('"', ' ').ToLowerInvariant();
+
     /// <summary>summary: ~ for contains and starts with (a trailing *), NOT … ~ for does not contain.</summary>
     private static Clause Summary(FilterCondition c, Run run)
     {
         if (c.Op == FilterOperator.IsNull) return Clause.Of("summary is EMPTY");
         if (c.Op == FilterOperator.IsNotNull) return Clause.Of("summary is not EMPTY");
-        if (c.Value is not { ValueKind: JsonValueKind.String } v || string.IsNullOrWhiteSpace(v.GetString()))
-            return Clause.Out("it has no text to search for");
-        var text = EscapeSearch(v.GetString()!);
+        var raw = c.Value is { ValueKind: JsonValueKind.String } v ? SearchText(v.GetString()!) : null;
+        if (string.IsNullOrWhiteSpace(raw)) return Clause.Out("it has no text to search for");
+        var text = EscapeSearch(raw);
         var clause = c.Op switch
         {
             FilterOperator.Contains => Clause.Of($"summary ~ {JqlText.Quote(text)}"),
             FilterOperator.NotContains => Clause.Of($"NOT summary ~ {JqlText.Quote(text)}"),
-            FilterOperator.StartsWith => Clause.Of($"summary ~ {JqlText.Quote(text + "*")}"),
+            // Trimmed first, so the wildcard is on the last word, not on a trailing space.
+            FilterOperator.StartsWith => Clause.Of($"summary ~ {JqlText.Quote(EscapeSearch(raw.Trim()) + "*")}"),
             _ => Clause.Out($"JQL has no '{c.Op}' for summary"),
         };
         if (clause.Jql is not null) run.Warn(TextSearchWarning);

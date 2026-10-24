@@ -6,8 +6,16 @@ namespace JiraUnpacked.Infrastructure.Reporting.Jql;
 /// <summary>assignee, sprint, team and story points: the fields JQL names by id or by custom field.</summary>
 public sealed partial class JqlTranslator
 {
-    private const string SprintWarning =
-        "Jira matches an issue to every sprint it has been in; this list matches only its latest sprint, so sprint conditions can match more issues in Jira.";
+    private const string SprintWarningBase =
+        "Jira matches an issue to every sprint it has been in; this list matches only its latest sprint, so ";
+
+    private const string SprintWarningMore = SprintWarningBase + "\"is\" sprint conditions can match more issues in Jira.";
+
+    private const string SprintWarningFewer = SprintWarningBase +
+        "\"is not\" sprint conditions can match fewer issues in Jira, which leaves an issue out if any of its sprints matches.";
+
+    private const string SprintWarningDifferent = SprintWarningBase +
+        "\"is not\" conditions on the active sprint can match different issues in Jira.";
 
     /// <summary>
     /// names → literal ids through <paramref name="ids"/>, every id a name has. A name with no id
@@ -50,15 +58,18 @@ public sealed partial class JqlTranslator
             "no Jira account in this project's data has that name");
     }
 
-    /// <summary>The JQL for each smart sprint value, and for "not" it (empty excluded, as the list's rule says).</summary>
-    private static readonly IReadOnlyDictionary<string, (string Is, string IsNot)> SmartSprintJql =
-        new Dictionary<string, (string, string)>
+    /// <summary>
+    /// The JQL for each smart sprint value, and for "not" it (empty excluded, as the list's rule
+    /// says). <c>IsNotMixed</c>: the "not" form has a positive part, so it is not simply narrower.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, (string Is, string IsNot, bool IsNotMixed)> SmartSprintJql =
+        new Dictionary<string, (string, string, bool)>
         {
             ["active"] = ("(sprint in openSprints() AND sprint not in futureSprints())",
-                          "(sprint not in openSprints() OR sprint in futureSprints())"),
-            ["future"] = ("sprint in futureSprints()", "sprint not in futureSprints()"),
-            ["open"] = ("sprint in openSprints()", "sprint not in openSprints()"),
-            ["closed"] = ("sprint in closedSprints()", "sprint not in closedSprints()"),
+                          "(sprint not in openSprints() OR sprint in futureSprints())", true),
+            ["future"] = ("sprint in futureSprints()", "sprint not in futureSprints()", false),
+            ["open"] = ("sprint in openSprints()", "sprint not in openSprints()", false),
+            ["closed"] = ("sprint in closedSprints()", "sprint not in closedSprints()", false),
         };
 
     /// <summary>sprint: names by Jira sprint id, smart values by Jira's sprint functions.</summary>
@@ -67,12 +78,17 @@ public sealed partial class JqlTranslator
         var pick = ReadPick(c);
         var ids = Resolve(pick.Names, run.Lookup.SprintIds, JqlText.Id, "sprint", run);
         var negative = c.Op is FilterOperator.Neq or FilterOperator.NotIn;
-        var smart = pick.Smart.Where(SmartSprintJql.ContainsKey)
-            .Select(k => negative ? SmartSprintJql[k].IsNot : SmartSprintJql[k].Is)
-            .ToList();
+        var keys = pick.Smart.Where(SmartSprintJql.ContainsKey).ToList();
+        var smart = keys.Select(k => negative ? SmartSprintJql[k].IsNot : SmartSprintJql[k].Is).ToList();
         var clause = Dictionary("sprint", c.Op, ids, pick.WantsEmpty, smart, "no sprint in this project has that name");
-        if (clause.Jql is not null && c.Op is not (FilterOperator.IsNull or FilterOperator.IsNotNull))
-            run.Warn(SprintWarning);
+        // Only what names sprints differs: "is EMPTY" / "is not EMPTY" read the same in both.
+        if (clause.Jql is not null && (ids.Count > 0 || smart.Count > 0)
+            && c.Op is FilterOperator.Eq or FilterOperator.In or FilterOperator.Neq or FilterOperator.NotIn)
+        {
+            run.Warn(!negative ? SprintWarningMore
+                : keys.Any(k => SmartSprintJql[k].IsNotMixed) ? SprintWarningDifferent
+                : SprintWarningFewer);
+        }
         return clause;
     }
 

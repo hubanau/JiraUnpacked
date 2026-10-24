@@ -16,6 +16,19 @@ public sealed partial class JqlTranslator
     private const string PeriodWarning =
         "Jira evaluates calendar periods (startOfWeek() and the like) in the Jira user's own time zone, and starts weeks on their locale's first day; this list uses the condition's time zone and Monday.";
 
+    private const string DateZoneWarning =
+        "Dates are written in UTC; Jira reads them in your Jira profile's time zone, so day boundaries can shift by that offset.";
+
+    /// <summary>
+    /// A fixed date written into the JQL, with the one warning every such date needs: Jira reads a
+    /// date literal in the Jira user's profile time zone, not in UTC as it is written.
+    /// </summary>
+    private static string DateLiteral(DateTime utc, Run run)
+    {
+        run.Warn(DateZoneWarning);
+        return JqlText.Date(utc);
+    }
+
     /// <summary>JQL's start/end functions for every calendar period but the quarters, which JQL has none for.</summary>
     private static readonly IReadOnlyDictionary<string, (string Unit, int Offset)> PeriodFunctions =
         new Dictionary<string, (string, int)>
@@ -40,8 +53,8 @@ public sealed partial class JqlTranslator
                     return Clause.Out("its dates are not valid");
                 var (from, to, toExclusive) = range;
                 var parts = new List<string>();
-                if (from is { } lo) parts.Add($"{field} >= {JqlText.Date(lo)}");
-                if (to is { } hi) parts.Add($"{field} {(toExclusive ? "<" : "<=")} {JqlText.Date(hi)}");
+                if (from is { } lo) parts.Add($"{field} >= {DateLiteral(lo, run)}");
+                if (to is { } hi) parts.Add($"{field} {(toExclusive ? "<" : "<=")} {DateLiteral(hi, run)}");
                 // Both ends open matches every issue: a clause no issue fails says exactly that.
                 return Clause.Of(parts.Count == 0 ? $"{field} is not EMPTY" : JqlText.Join(parts, "AND"));
             }
@@ -63,7 +76,7 @@ public sealed partial class JqlTranslator
             FilterOperator.Gte => ">=",
             _ => null,
         };
-        return symbol is null ? Clause.Out($"JQL has no '{c.Op}' for {field}") : Clause.Of($"{field} {symbol} {JqlText.Date(at)}");
+        return symbol is null ? Clause.Out($"JQL has no '{c.Op}' for {field}") : Clause.Of($"{field} {symbol} {DateLiteral(at, run)}");
     }
 
     private static JsonElement? Bound(List<JsonElement>? values, int at) =>
@@ -140,6 +153,6 @@ public sealed partial class JqlTranslator
         }
         var (start, end) = RelativeDates.Period(_clock.UtcNow, period, zone);
         run.Warn($"JQL has no quarter functions, so {(period == "thisQuarter" ? "this" : "last")} quarter is written as fixed dates from {JqlText.Date(start)} to {JqlText.Date(end)}: the JQL will not move with the calendar.");
-        return new PeriodBounds(JqlText.Date(start), JqlText.Date(end), EndInclusive: false);
+        return new PeriodBounds(DateLiteral(start, run), DateLiteral(end, run), EndInclusive: false);
     }
 }

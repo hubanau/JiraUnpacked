@@ -127,8 +127,28 @@ public sealed class JqlTranslatorTests
         // a:b (c++)  ->  a\:b \(c\+\+\)  ->  quoted, each backslash doubled.
         Assert.Equal("summary ~ \"a\\\\:b \\\\(c\\\\+\\\\+\\\\)\"", Where(C("summary", FilterOperator.Contains, "a:b (c++)")));
         // The trailing * of "starts with" is the wildcard, so it stays bare; one in the text does not.
-        Assert.Equal("summary ~ \"C\\\\+\\\\+ \\\\*x*\"", Where(C("summary", FilterOperator.StartsWith, "C++ *x")));
+        Assert.Equal("summary ~ \"c\\\\+\\\\+ \\\\*x*\"", Where(C("summary", FilterOperator.StartsWith, "C++ *x")));
         Assert.Equal("NOT summary ~ \"x\\\\/y\"", Where(C("summary", FilterOperator.NotContains, "x/y")));
+    }
+
+    [Fact]
+    public void Summary_quotes_become_spaces_since_jira_would_read_them_as_a_phrase()
+    {
+        Assert.Equal("summary ~ \"say  hi \"", Where(C("summary", FilterOperator.Contains, "say \"hi\"")));
+    }
+
+    [Fact]
+    public void Summary_text_is_lower_cased_so_and_or_not_are_words_not_operators()
+    {
+        Assert.Equal("summary ~ \"login and crash\"", Where(C("summary", FilterOperator.Contains, "Login AND Crash")));
+        Assert.Equal("NOT summary ~ \"not or\"", Where(C("summary", FilterOperator.NotContains, "NOT OR")));
+    }
+
+    [Fact]
+    public void Starts_with_is_trimmed_before_the_wildcard()
+    {
+        Assert.Equal("summary ~ \"crash*\"", Where(C("summary", FilterOperator.StartsWith, "  Crash  ")));
+        Assert.Equal("summary ~ \"say*\"", Where(C("summary", FilterOperator.StartsWith, "say \"")));
     }
 
     [Theory]
@@ -136,6 +156,7 @@ public sealed class JqlTranslatorTests
     [InlineData(FilterOperator.Contains, "   ")]
     [InlineData(FilterOperator.StartsWith, "")]
     [InlineData(FilterOperator.NotContains, " \t")]
+    [InlineData(FilterOperator.StartsWith, "\"\"")]
     public void Summary_search_with_no_text_is_left_out_not_a_bare_wildcard(FilterOperator op, string text)
     {
         var t = Translate(All(C("status", FilterOperator.Eq, "Done"), C("summary", op, text)));
@@ -195,7 +216,7 @@ public sealed class JqlTranslatorTests
             C("summary", FilterOperator.Contains, "login"),
             C("summary", FilterOperator.NotContains, "flaky"),
             C("summary", FilterOperator.StartsWith, "Crash")));
-        Assert.Equal("(summary ~ \"login\" AND NOT summary ~ \"flaky\" AND summary ~ \"Crash*\")", Where(t));
+        Assert.Equal("(summary ~ \"login\" AND NOT summary ~ \"flaky\" AND summary ~ \"crash*\")", Where(t));
         Assert.Contains("word-based, not substring", Assert.Single(t.Warnings));
     }
 

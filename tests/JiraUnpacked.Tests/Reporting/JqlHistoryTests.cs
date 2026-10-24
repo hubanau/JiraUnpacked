@@ -70,6 +70,31 @@ public sealed class JqlHistoryTests
     }
 
     [Fact]
+    public void Changed_writes_exactly_twenty_combinations_and_leaves_out_twenty_one()
+    {
+        string[] Letters(int n) => Enumerable.Range(0, n).Select(i => ((char)('a' + i)).ToString()).ToArray();
+
+        var twenty = Translate(All(H(FilterOperator.Changed, new { historyField = "status", from = Letters(4), to = Letters(5) })));
+        Assert.Equal(20, Where(twenty).Split(" OR ").Length);
+        Assert.Empty(twenty.Warnings);
+
+        // With BY too: 2 x 2 x 5 = 20 is written, 2 x 2 x 6 = 24 is not.
+        var six = Letters(6);
+        var authors = JqlLookup.Empty with { AccountIds = Ids(six.Select(n => (n, new[] { $"acc-{n}" })).ToArray()) };
+        var withBy = Translate(All(H(FilterOperator.Changed,
+            new { historyField = "status", from = Letters(2), to = Letters(2), by = Letters(5) })), authors);
+        Assert.Equal(20, Where(withBy).Split(" OR ").Length);
+        var overBy = Translate(All(C("status", FilterOperator.Eq, "Done"), H(FilterOperator.Changed,
+            new { historyField = "status", from = Letters(2), to = Letters(2), by = six })), authors);
+        Assert.Contains("it needs 24 CHANGED clauses", Assert.Single(overBy.Warnings));
+
+        var over = Translate(All(C("status", FilterOperator.Eq, "Done"),
+            H(FilterOperator.Changed, new { historyField = "status", from = Letters(3), to = Letters(7) })));
+        Assert.Equal("status = \"Done\"", Where(over));
+        Assert.Contains("it needs 21 CHANGED clauses", Assert.Single(over.Warnings));
+    }
+
+    [Fact]
     public void An_author_with_no_account_leaves_changed_out()
     {
         var t = Translate(All(C("status", FilterOperator.Eq, "Done"),
@@ -88,6 +113,10 @@ public sealed class JqlHistoryTests
         Assert.Equal("status CHANGED DURING (\"2026-09-01\", \"2026-10-01\")", W(new { kind = "between", from = "2026-09-01", to = "2026-09-30" }));
         Assert.Equal("status CHANGED AFTER \"2026-09-01\"", W(new { kind = "between", from = "2026-09-01", to = (string?)null }));
         Assert.Equal("status CHANGED BEFORE \"2026-10-01\"", W(new { kind = "between", from = (string?)null, to = "2026-09-30" }));
+
+        // Through 9999-12-31 has no upper bound, as the filter reads it: no window at all, or just AFTER.
+        Assert.Equal("status CHANGED", W(new { kind = "between", from = (string?)null, to = "9999-12-31" }));
+        Assert.Equal("status CHANGED AFTER \"2026-09-01\"", W(new { kind = "between", from = "2026-09-01", to = "9999-12-31" }));
 
         var months = Translate(All(H(FilterOperator.Changed,
             new { historyField = "status", during = new { kind = "inLast", amount = 1, unit = "months" } })));
