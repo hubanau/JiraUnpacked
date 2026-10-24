@@ -16,7 +16,12 @@ import { JqlActions } from './JqlActions';
 import { ColumnChooser } from './ColumnChooser';
 import { ViewsMenu } from './ViewsMenu';
 import { useSavedViews } from './useSavedViews';
-import { ISSUE_COLUMNS, ALWAYS_ON } from './columns';
+import { ISSUE_COLUMNS, ALWAYS_ON, type IssueColumn } from './columns';
+import { isOperatorAllowed } from './filterCatalogHelpers';
+import {
+  CELL_FILTER_VALUES, addCellCondition, cellCondition, cellFilterHint, type CellFilterMode, type CellValue,
+} from './cellFilter';
+import { CellFilterMenu } from './CellFilterMenu';
 import { saveBlob } from './saveBlob';
 
 /** The builder's wrapper: what the summary's toggle opens and closes. */
@@ -115,6 +120,36 @@ export default function IssueList() {
   const shown = data ?? lastGoodData;
   // THIS filter's count: a placeholder (or the last good page after a 400) belongs to another one.
   const count = data && !isPlaceholderData ? data.totalCount : undefined;
+
+  // Click-to-filter. One limit hint for every cell (the tree is the same for all of them); the
+  // builder opens so the user sees what the click added. Page 1 follows from the tree changing.
+  const cellHint = catalog ? cellFilterHint(tree, catalog) : undefined;
+  const filterByCell = (field: string, value: CellValue, mode: CellFilterMode) => {
+    setTree(addCellCondition(tree, cellCondition(field, value, mode)));
+    setExpanded(true);
+  };
+  /** A filterable cell (a filter field this catalog still has) carries its ⋯ menu; any other is the plain render. */
+  const renderCell = (col: IssueColumn, item: IssueListItem) => {
+    const read = CELL_FILTER_VALUES[col.id];
+    if (!catalog || !read || !knownFields?.has(col.id)) return col.render(item);
+    const value = read(item);
+    const hintFor = (mode: CellFilterMode) =>
+      cellHint ?? (isOperatorAllowed(catalog, col.id, cellCondition(col.id, value, mode).op)
+        ? undefined
+        : `Not available for ${col.header}`);
+    return (
+      <span className="inline-flex items-center gap-1">
+        {col.render(item)}
+        <CellFilterMenu
+          column={col.header}
+          value={value}
+          includeHint={hintFor('include')}
+          excludeHint={hintFor('exclude')}
+          onPick={(mode) => filterByCell(col.id, value, mode)}
+        />
+      </span>
+    );
+  };
 
   const exportCsv = useMutation({
     mutationFn: () => exportIssuesCsv(id, { filter, sortBy, sortDescending, columns }),
@@ -246,11 +281,11 @@ export default function IssueList() {
             </THead>
             <TBody>
               {shown.items.map((item) => (
-                <TR key={item.jiraIssueId}>
+                <TR key={item.jiraIssueId} className="group">
                   {visibleColumns.map((col) => (
                     <TD key={col.id}>
-                      {/* Key is the only cell with behaviour of its own: it links to the issue.
-                          Everything else is the catalog's plain render. */}
+                      {/* Key links to the issue; a filterable column carries its ⋯ menu (renderCell);
+                          everything else is the catalog's plain render. */}
                       {col.id === ALWAYS_ON ? (
                         <Link
                           to={`/projects/${id}/issues/${encodeURIComponent(item.jiraIssueId)}`}
@@ -258,7 +293,7 @@ export default function IssueList() {
                         >
                           {item.jiraKey}
                         </Link>
-                      ) : col.render(item)}
+                      ) : renderCell(col, item)}
                     </TD>
                   ))}
                 </TR>
