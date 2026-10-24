@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { hashKey, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '../../api/errors';
 import { getIssueJql, type JqlRequest, type JqlResult } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
@@ -15,6 +15,11 @@ interface JqlActionsProps {
   projectId: string;
   /** The list's pruned filter and sort — exactly what the issue query is sent. */
   request: JqlRequest;
+  /**
+   * The list is holding its own query (the catalog or the default view has not settled), so the
+   * filter is not yet the one it will show: nothing is fetched and the buttons are disabled.
+   */
+  disabled?: boolean;
 }
 
 /**
@@ -26,17 +31,25 @@ interface JqlActionsProps {
  * finds it ready — which matters for Open in Jira, because a tab opened long after the click is what
  * popup blockers block.
  */
-export function JqlActions({ projectId, request }: JqlActionsProps) {
+export function JqlActions({ projectId, request, disabled = false }: JqlActionsProps) {
   const queryClient = useQueryClient();
+  const queryKey = queryKeys.issueJql(projectId, request);
   const options = {
-    queryKey: queryKeys.issueJql(projectId, request),
+    queryKey,
     queryFn: () => getIssueJql(projectId, request),
     staleTime: 30_000,
   };
   // Only watches the cache, for THIS filter: an earlier filter's differences are never shown.
   const { data } = useQuery({ ...options, enabled: false });
 
-  const [error, setError] = useState<string | null>(null);
+  // An error is about the filter it was asked for, so it carries that request's key: a new filter
+  // drops it (set during render — React re-renders at once), and a request that fails only after
+  // the filter changed never shows its message beside the new one.
+  const requestHash = hashKey(queryKey);
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
+  if (failure && failure.key !== requestHash) setFailure(null);
+  const error = failure?.key === requestHash ? failure.message : null;
+  const fail = (message: string) => setFailure({ key: requestHash, message });
   const [copied, setCopied] = useState(false);
   const [manualCopy, setManualCopy] = useState<string | null>(null);
   const [showWarnings, setShowWarnings] = useState(false);
@@ -48,15 +61,16 @@ export function JqlActions({ projectId, request }: JqlActionsProps) {
   }, [copied]);
 
   const prefetch = () => {
-    void queryClient.prefetchQuery(options);
+    if (!disabled) void queryClient.prefetchQuery(options);
   };
 
   async function load(): Promise<JqlResult | undefined> {
-    setError(null);
+    if (disabled) return undefined;
+    setFailure(null);
     try {
       return await queryClient.fetchQuery(options);
     } catch (e) {
-      setError(e instanceof ApiError ? e.title : 'Could not build the JQL.');
+      fail(e instanceof ApiError ? e.title : 'Could not build the JQL.');
       return undefined;
     }
   }
@@ -79,7 +93,7 @@ export function JqlActions({ projectId, request }: JqlActionsProps) {
     const result = await load();
     if (!result) return;
     if (!isWebUrl(result.url)) {
-      setError('The Jira link is not a web address.');
+      fail('The Jira link is not a web address.');
       return;
     }
     window.open(result.url, '_blank', 'noopener,noreferrer');
@@ -89,10 +103,10 @@ export function JqlActions({ projectId, request }: JqlActionsProps) {
 
   return (
     <>
-      <Button type="button" variant="secondary" onMouseEnter={prefetch} onFocus={prefetch} onClick={() => void copy()}>
+      <Button type="button" variant="secondary" disabled={disabled} onMouseEnter={prefetch} onFocus={prefetch} onClick={() => void copy()}>
         Copy JQL
       </Button>
-      <Button type="button" variant="secondary" onMouseEnter={prefetch} onFocus={prefetch} onClick={() => void openInJira()}>
+      <Button type="button" variant="secondary" disabled={disabled} onMouseEnter={prefetch} onFocus={prefetch} onClick={() => void openInJira()}>
         Open in Jira
       </Button>
       {differences > 0 && (

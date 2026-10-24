@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -122,6 +122,50 @@ describe('JqlActions', () => {
     await user.click(screen.getByRole('button', { name: 'Copy JQL' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent("Unknown field 'bogus'.");
+  });
+
+  it('drops the error once the filter changes: it belonged to the old one', async () => {
+    server.use(http.post('/api/projects/p1/issues/jql', () =>
+      HttpResponse.json({ title: "Unknown field 'bogus'." }, { status: 400 })));
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const ui = (request: JqlRequest) => (
+      <QueryClientProvider client={queryClient}>
+        <JqlActions projectId="p1" request={request} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui(REQUEST));
+
+    await user.click(screen.getByRole('button', { name: 'Copy JQL' }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+    rerender(ui({ ...REQUEST, sortDescending: false }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('asks for nothing while the list holds its query, and its buttons say so', async () => {
+    const bodies = mockJql();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const ui = (disabled: boolean) => (
+      <QueryClientProvider client={queryClient}>
+        <JqlActions projectId="p1" request={REQUEST} disabled={disabled} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui(true));
+
+    for (const name of ['Copy JQL', 'Open in Jira']) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeDisabled();
+      fireEvent.mouseEnter(button);
+      fireEvent.focus(button);
+      fireEvent.click(button);
+    }
+    // Long enough for a request to have gone out had any been started.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(bodies).toEqual([]);
+
+    rerender(ui(false));
+    expect(screen.getByRole('button', { name: 'Copy JQL' })).toBeEnabled();
   });
 });
 

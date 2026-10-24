@@ -225,7 +225,7 @@ export default function IssueList() {
           >
             Export CSV
           </Button>
-          <JqlActions projectId={id} request={jqlRequest} />
+          <JqlActions projectId={id} request={jqlRequest} disabled={catalogPending || savedViews.holdQuery} />
         </div>
       </div>
 

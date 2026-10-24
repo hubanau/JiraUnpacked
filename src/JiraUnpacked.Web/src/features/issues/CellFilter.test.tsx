@@ -3,12 +3,16 @@ import userEvent, { type UserEvent } from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/setup';
 import IssueList from './IssueList';
 import type { IssueListItem } from '../../api/issues';
 import { FILTER_CATALOG } from '../../test/filterCatalogFixture';
 import { noSavedViews } from '../../test/viewsFixture';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const ROW: IssueListItem = {
   jiraIssueId: '10001', jiraKey: 'ACME-1', summary: 'Login fails', status: 'Open', statusCategory: 'To Do',
@@ -165,6 +169,81 @@ describe('click-to-filter', () => {
     await waitFor(() => expect(bodies.at(-1)?.filter).toEqual({
       logic: 'And', conditions: [{ field: 'status', op: 'Eq', value: 'Open' }],
     }));
+  });
+
+  it('puts focus back on the ⋯ button after a keyboard pick', async () => {
+    const { bodies, user } = setup();
+    const trigger = await screen.findByRole('button', { name: 'Filter by Status Open' });
+    trigger.focus();
+
+    await user.keyboard('{Enter}');
+    await user.tab();
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => expect(bodies.at(-1)?.filter).toEqual({
+      logic: 'And', conditions: [{ field: 'status', op: 'Eq', value: 'Open' }],
+    }));
+    expect(screen.getByRole('button', { name: 'Filter by Status Open' })).toHaveFocus();
+  });
+
+  it('closes when focus leaves it', async () => {
+    const { user } = setup();
+    const trigger = await screen.findByRole('button', { name: 'Filter by Status Open' });
+    trigger.focus();
+
+    await user.keyboard('{Enter}');
+    await user.tab();   // Filter to
+    await user.tab();   // Exclude
+    expect(screen.getByRole('group', { name: 'Filter by Status' })).toBeInTheDocument();
+    await user.tab();   // out of the menu
+
+    expect(screen.queryByRole('group', { name: 'Filter by Status' })).not.toBeInTheDocument();
+  });
+
+  it('keeps its Escape to itself, so no other layer closes too', async () => {
+    const { user } = setup();
+    const trigger = await screen.findByRole('button', { name: 'Filter by Status Open' });
+    const outer = vi.fn();
+    document.addEventListener('keydown', outer);
+    try {
+      trigger.focus();
+      await user.keyboard('{Enter}');
+      await user.tab();
+      await user.keyboard('{Escape}');
+
+      expect(screen.queryByRole('group', { name: 'Filter by Status' })).not.toBeInTheDocument();
+      expect(outer).not.toHaveBeenCalledWith(expect.objectContaining({ key: 'Escape' }));
+    } finally {
+      document.removeEventListener('keydown', outer);
+    }
+  });
+
+  it('is fixed to the viewport beside its button, flipping up when there is no room below', async () => {
+    const { user } = setup();
+    const trigger = await screen.findByRole('button', { name: 'Filter by Status Open' });
+    const rect = (top: number, left: number, width: number, height: number) =>
+      ({ top, left, width, height, bottom: top + height, right: left + width, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+    let triggerTop = 100;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this === trigger) return rect(triggerTop, 200, 20, 20);
+      if (this.getAttribute('role') === 'group') return rect(0, 0, 150, 80);
+      return rect(0, 0, 0, 0);
+    });
+
+    // Room below (the viewport is 768 high): just under the button.
+    await user.click(trigger);
+    const below = screen.getByRole('group', { name: 'Filter by Status' });
+    expect(below.style.position).toBe('fixed');
+    expect(below.style.top).toBe('124px');
+    expect(below.style.left).toBe('200px');
+    // Still inside the table's overflow-x-auto wrapper — fixed, so the wrapper cannot clip it.
+    expect(below.closest('.overflow-x-auto')).not.toBeNull();
+    await user.click(trigger);
+
+    // A bottom row: above the button instead.
+    triggerTop = 700;
+    await user.click(trigger);
+    expect(screen.getByRole('group', { name: 'Filter by Status' }).style.top).toBe('616px');
   });
 
   it('starts the filtered list on page 1', async () => {
