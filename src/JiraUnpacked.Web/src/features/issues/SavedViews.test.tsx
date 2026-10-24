@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { server } from '../../test/setup';
 import { FILTER_CATALOG } from '../../test/filterCatalogFixture';
 import { mockViewsApi, savedView } from '../../test/viewsFixture';
+import { expandFilter } from '../../test/expandFilter';
 import { queryKeys } from '../../api/queryKeys';
 import IssueList from './IssueList';
 import { DEFAULT_COLUMNS } from './useListState';
@@ -684,6 +685,7 @@ describe('saved views — the default view and stale links', () => {
     renderList();
     await screen.findByRole('button', { name: 'Views: My backlog' });
 
+    await expandFilter();
     await user.click(screen.getByRole('button', { name: 'Clear all' }));
     expect(await screen.findByRole('button', { name: 'Views: My backlog • modified' })).toBeInTheDocument();
     expect(urlParams().has('filter')).toBe(false);
@@ -778,6 +780,7 @@ describe('saved views — the default view and stale links', () => {
     await waitFor(() => expect(urlParams().has('view')).toBe(false));
     expect(urlParams().get('sortBy')).toBe('summary');
     expect(await screen.findByRole('button', { name: 'Views' })).toBeInTheDocument();
+    await expandFilter();
     expect(screen.getByLabelText('Value for condition 1')).toHaveValue('crash');
   });
 });

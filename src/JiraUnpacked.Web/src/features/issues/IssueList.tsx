@@ -9,12 +9,17 @@ import type { SavedView } from '../../api/views';
 import { Button, EmptyState, Spinner, Table, TBody, TD, TH, THead, TR } from '../../ui';
 import { FilterBuilder, useFilterCatalog } from './FilterBuilder';
 import { useListState } from './useListState';
-import { pruneTree } from './filterTree';
+import { isEmptyTree, pruneTree } from './filterTree';
+import { describeFilter } from './describeFilter';
+import { FilterSummary } from './FilterSummary';
 import { ColumnChooser } from './ColumnChooser';
 import { ViewsMenu } from './ViewsMenu';
 import { useSavedViews } from './useSavedViews';
 import { ISSUE_COLUMNS, ALWAYS_ON } from './columns';
 import { saveBlob } from './saveBlob';
+
+/** The builder's wrapper: what the summary's toggle opens and closes. */
+const BUILDER_ID = 'issue-filter-builder';
 
 export default function IssueList() {
   // Route always supplies :id here (see App.tsx); the '' fallback only
@@ -45,6 +50,15 @@ export default function IssueList() {
   );
   const savedViews = useSavedViews(id, { viewId, hasListState, applyParams, setViewId }, snapshot);
 
+  // Whether the builder is open. Decided ONCE, in the render where the list knows what it opened
+  // with — the saved-views gate has settled, so a default view counts as loaded on mount: a link
+  // or view that brings a filter reads as a sentence first; anything else opens the builder.
+  // After that it is the user's (Collapse / Edit filter). Component state on purpose: not the URL,
+  // not storage. Set during render (React re-renders at once), as useListState does with its tree.
+  const [expanded, setExpanded] = useState<boolean | null>(null);
+  if (expanded === null && !savedViews.holdQuery) setExpanded(isEmptyTree(tree));
+  const builderOpen = expanded ?? isEmptyTree(tree);
+
   // A view is a new list: start it on page 1 even when only its sort differs from what was shown.
   const openView = (view: SavedView) => {
     setPage(1);
@@ -61,6 +75,8 @@ export default function IssueList() {
   // What the server sees: the tree without disabled parts, unfinished rows or retired fields
   // (see pruneTree). Undefined = no filter — never an empty group, which the server refuses.
   const filter = useMemo(() => pruneTree(tree, knownFields), [tree, knownFields]);
+  // The sentence reads the very object the request carries: it says what is applied.
+  const sentence = useMemo(() => describeFilter(filter), [filter]);
 
   const paging = { page, pageSize: DEFAULT_PAGE_SIZE, sortBy, sortDescending };
   const request: IssueFilterRequest = filter ? { filter, ...paging } : paging;
@@ -91,6 +107,8 @@ export default function IssueList() {
   }, [data]);
 
   const shown = data ?? lastGoodData;
+  // THIS filter's count: a placeholder (or the last good page after a 400) belongs to another one.
+  const count = data && !isPlaceholderData ? data.totalCount : undefined;
 
   const exportCsv = useMutation({
     mutationFn: () => exportIssuesCsv(id, { filter, sortBy, sortDescending, columns }),
@@ -132,8 +150,20 @@ export default function IssueList() {
       )}
 
       <div className="flex items-start justify-between gap-4">
-        <div className="flex-1">
-          <FilterBuilder projectId={id} tree={tree} onChange={setTree} />
+        <div className="flex flex-1 flex-col gap-3">
+          <FilterSummary
+            sentence={sentence}
+            count={count}
+            expanded={builderOpen}
+            controls={BUILDER_ID}
+            onToggle={() => setExpanded(!builderOpen)}
+          />
+          {/* Collapsed means unmounted: nothing of the builder runs, not even its value lists. */}
+          {builderOpen && (
+            <div id={BUILDER_ID}>
+              <FilterBuilder projectId={id} tree={tree} onChange={setTree} />
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <ViewsMenu
