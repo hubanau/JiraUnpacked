@@ -246,6 +246,29 @@ export const getHistoryValues = (projectId: string, field: string, kind: History
   apiFetch<HistoryValueList>(
     `/api/projects/${projectId}/history-values?field=${encodeURIComponent(field)}&kind=${kind}`);
 
+/** What POST /issues/jql takes: the list's pruned filter (absent = none) and its sort. */
+export interface JqlRequest {
+  filter?: FilterGroup;
+  sortBy: string;
+  sortDescending: boolean;
+}
+
+/** One way the JQL differs from the filter: a part left out, an approximation, a sort JQL cannot do. */
+export interface JqlWarning {
+  message: string;
+}
+
+/** The filter as JQL, a link that opens it in this project's Jira, and every difference from the filter. */
+export interface JqlResult {
+  jql: string;
+  url: string;
+  warnings: JqlWarning[];
+}
+
+/** The same 404s and 400s as the issue query: the server checks the filter with the same compiler first. */
+export const getIssueJql = (projectId: string, request: JqlRequest) =>
+  apiFetch<JqlResult>(`/api/projects/${projectId}/issues/jql`, { method: 'POST', body: request });
+
 export interface ExportView {
   /** The pruned tree the list was queried with; undefined = no filter. */
   filter?: FilterGroup;

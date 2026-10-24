@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ApiError } from '../../api/errors';
 import { DEFAULT_PAGE_SIZE, exportIssuesCsv, queryIssues } from '../../api/issues';
-import type { IssueFilterRequest, IssueListItem, PagedResult } from '../../api/issues';
+import type { IssueFilterRequest, IssueListItem, JqlRequest, PagedResult } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
 import type { SavedView } from '../../api/views';
 import { Button, EmptyState, Spinner, Table, TBody, TD, TH, THead, TR } from '../../ui';
@@ -12,6 +12,7 @@ import { useListState } from './useListState';
 import { isEmptyTree, pruneTree } from './filterTree';
 import { describeFilter } from './describeFilter';
 import { FilterSummary } from './FilterSummary';
+import { JqlActions } from './JqlActions';
 import { ColumnChooser } from './ColumnChooser';
 import { ViewsMenu } from './ViewsMenu';
 import { useSavedViews } from './useSavedViews';
@@ -77,6 +78,11 @@ export default function IssueList() {
   const filter = useMemo(() => pruneTree(tree, knownFields), [tree, knownFields]);
   // The sentence reads the very object the request carries: it says what is applied.
   const sentence = useMemo(() => describeFilter(filter), [filter]);
+  // What Copy JQL / Open in Jira translate: the very filter and sort the list is queried with.
+  const jqlRequest: JqlRequest = useMemo(
+    () => (filter ? { filter, sortBy, sortDescending } : { sortBy, sortDescending }),
+    [filter, sortBy, sortDescending],
+  );
 
   const paging = { page, pageSize: DEFAULT_PAGE_SIZE, sortBy, sortDescending };
   const request: IssueFilterRequest = filter ? { filter, ...paging } : paging;
@@ -165,7 +171,7 @@ export default function IssueList() {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <ViewsMenu
             projectId={id}
             views={savedViews.views}
@@ -184,6 +190,7 @@ export default function IssueList() {
           >
             Export CSV
           </Button>
+          <JqlActions projectId={id} request={jqlRequest} />
         </div>
       </div>
 
