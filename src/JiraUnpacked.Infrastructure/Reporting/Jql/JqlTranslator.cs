@@ -114,6 +114,7 @@ public sealed partial class JqlTranslator
         "summary" => Summary(c, run),
         "jiraKey" => Key(c),
         "parent" => Parent(c),
+        "history" => History(c, run),
         _ => Clause.Out($"JQL has no field for '{c.Field}'"),
     };
 
