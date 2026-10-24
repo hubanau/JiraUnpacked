@@ -138,7 +138,7 @@ describe('ColumnChooser', () => {
     await screen.findByRole('columnheader', { name: /category/i });
     // Table order, not URL order; no arrows — the default sort (updatedAt) is not shown here.
     expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Key', 'Status', 'Category']);
-    expect(screen.getByRole('cell', { name: 'To Do' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: /^To Do/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /sort by category/i }));
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ sortBy: 'statusCategory' }));

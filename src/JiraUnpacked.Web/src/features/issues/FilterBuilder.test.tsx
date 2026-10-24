@@ -12,6 +12,7 @@ import type { FilterCondition } from '../../api/issues';
 import { FILTER_CATALOG as CATALOG } from '../../test/filterCatalogFixture';
 import { emptyRoot, type EditorGroup } from './filterTree';
 import { noSavedViews } from '../../test/viewsFixture';
+import { expandFilter } from '../../test/expandFilter';
 
 /**
  * The conditions the SPA actually sent, whichever envelope carried them.
@@ -509,6 +510,7 @@ describe('FilterBuilder logic toggle', () => {
     const user = userEvent.setup();
 
     renderIssueListAt(`/projects/p1/issues?filter=${ONE_CONDITION}`);
+    await expandFilter();
     await screen.findByLabelText(/match/i);
 
     await user.selectOptions(screen.getByLabelText(/match/i), 'Or');
@@ -564,6 +566,7 @@ describe('FilterBuilder logic toggle', () => {
 
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ filter: { logic: 'Or' } }));
 
+    await expandFilter();
     await user.selectOptions(await screen.findByLabelText(/match/i), 'And');
 
     await waitFor(() => {
@@ -621,6 +624,7 @@ describe('value picker', () => {
     mockValues(['Backlog', 'In Progress']);
 
     renderIssueListAt(`/projects/p1/issues?filter=${STATUS_CONDITION}`);
+    await expandFilter();
 
     // Re-queried inside waitFor: the control is REPLACED when the list arrives, so a node
     // captured beforehand stays an <input> however long the test waits.
@@ -635,6 +639,7 @@ describe('value picker', () => {
     mockEmptyPage();
 
     renderIssueListAt(`/projects/p1/issues?filter=${SUMMARY_CONDITION}`);
+    await expandFilter();
 
     const control = await screen.findByLabelText(/value for condition 1/i);
     expect(control.tagName).toBe('INPUT');
@@ -648,6 +653,7 @@ describe('value picker', () => {
     server.use(http.get('/api/projects/p1/filter-values', () => new HttpResponse(null, { status: 500 })));
 
     renderIssueListAt(`/projects/p1/issues?filter=${STATUS_CONDITION}`);
+    await expandFilter();
 
     const control = await screen.findByLabelText(/value for condition 1/i);
     expect(control.tagName).toBe('INPUT');
@@ -665,6 +671,7 @@ describe('value picker', () => {
 
     const isNull = encodeURIComponent('[{"field":"status","op":"IsNull"}]');
     renderIssueListAt(`/projects/p1/issues?filter=${isNull}`);
+    await expandFilter();
 
     await screen.findByLabelText(/field for condition 1/i);
     expect(asked).toBe(0);
@@ -691,6 +698,7 @@ describe('nested groups', () => {
 
     await waitFor(() => expect(bodies.at(-1)?.filter).toEqual(tree));
 
+    await expandFilter();
     await user.click(await screen.findByRole('button', { name: 'Disable condition 2.1' }));
 
     await waitFor(() => expect(bodies.at(-1)?.filter).toEqual({

@@ -16,12 +16,15 @@ public sealed class IssuesController : ControllerBase
     private readonly IIssueQueryService _issues;
     private readonly IFilterValueService _filterValues;
     private readonly IHistoryValueService _history;
+    private readonly IIssueJqlService _jql;
 
-    public IssuesController(IIssueQueryService issues, IFilterValueService filterValues, IHistoryValueService history)
+    public IssuesController(
+        IIssueQueryService issues, IFilterValueService filterValues, IHistoryValueService history, IIssueJqlService jql)
     {
         _issues = issues;
         _filterValues = filterValues;
         _history = history;
+        _jql = jql;
     }
 
     [HttpGet("api/projects/{projectId:guid}/issues")]
@@ -45,6 +48,20 @@ public sealed class IssuesController : ControllerBase
         if (result.Error is not null)
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: result.Error);
         return result.Result is null ? NotFound() : Ok(result.Result);
+    }
+
+    /// <summary>
+    /// The list's filter as JQL, with a link that opens it in the project's Jira and every way the
+    /// JQL differs from the filter. The same 404s and 400s as the query: the filter is checked by
+    /// the same compiler first.
+    /// </summary>
+    [HttpPost("api/projects/{projectId:guid}/issues/jql")]
+    public async Task<IActionResult> Jql(Guid projectId, IssueJqlRequest request, CancellationToken ct = default)
+    {
+        var result = await _jql.BuildAsync(projectId, request, ct);
+        if (result.Error is not null)
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: result.Error);
+        return result.View is null ? NotFound() : Ok(result.View);
     }
 
     /// <summary>
