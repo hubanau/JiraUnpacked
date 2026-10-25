@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ApiError } from '../../api/errors';
 import { DEFAULT_PAGE_SIZE, exportIssuesCsv, queryIssues } from '../../api/issues';
-import type { IssueFilterRequest, IssueListItem, JqlRequest, PagedResult } from '../../api/issues';
+import type { FilterCondition, IssueFilterRequest, IssueListItem, JqlRequest, PagedResult } from '../../api/issues';
 import { queryKeys } from '../../api/queryKeys';
 import type { SavedView } from '../../api/views';
 import { Button, EmptyState, Spinner, Table, TBody, TD, TH, THead, TR } from '../../ui';
@@ -23,6 +23,8 @@ import {
 } from './cellFilter';
 import { CellFilterMenu } from './CellFilterMenu';
 import { saveBlob } from './saveBlob';
+import { DEFAULT_CHART } from './useListState';
+import { ChartPanel } from './charts/ChartPanel';
 
 /** The builder's wrapper: what the summary's toggle opens and closes. */
 const BUILDER_ID = 'issue-filter-builder';
@@ -36,7 +38,7 @@ export default function IssueList() {
   // a link and survives reload and Back, neither of which useState does.
   const {
     tree, setTree, columns, setColumns, sortBy, sortDescending, setSort,
-    viewId, hasListState, applyParams, setViewId,
+    viewId, hasListState, applyParams, setViewId, chart, setChart,
   } = useListState();
 
   const [page, setPage] = useState(1);
@@ -124,10 +126,12 @@ export default function IssueList() {
   // Click-to-filter. One limit hint for every cell (the tree is the same for all of them); the
   // builder opens so the user sees what the click added. Page 1 follows from the tree changing.
   const cellHint = catalog ? cellFilterHint(tree, catalog) : undefined;
-  const filterByCell = (field: string, value: CellValue, mode: CellFilterMode) => {
-    setTree(addCellCondition(tree, cellCondition(field, value, mode)));
+  const addCondition = (condition: FilterCondition) => {
+    setTree(addCellCondition(tree, condition));
     setExpanded(true);
   };
+  const filterByCell = (field: string, value: CellValue, mode: CellFilterMode) =>
+    addCondition(cellCondition(field, value, mode));
   /** A filterable cell (a filter field this catalog still has) carries its ⋯ menu; any other is the plain render. */
   const renderCell = (col: IssueColumn, item: IssueListItem) => {
     const read = CELL_FILTER_VALUES[col.id];
@@ -220,6 +224,13 @@ export default function IssueList() {
           <ColumnChooser selected={columns} onChange={setColumns} />
           <Button
             variant="secondary"
+            aria-pressed={chart !== null}
+            onClick={() => setChart(chart ? null : DEFAULT_CHART)}
+          >
+            Chart
+          </Button>
+          <Button
+            variant="secondary"
             loading={exportCsv.isPending}
             onClick={() => exportCsv.mutate()}
           >
@@ -229,6 +240,8 @@ export default function IssueList() {
         </div>
       </div>
 
+      <div className={chart ? 'grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_380px]' : ''}>
+      <div className="flex min-w-0 flex-col gap-4">
       {showEmpty && !filter && (
         <EmptyState
           title="No issues yet"
@@ -324,6 +337,25 @@ export default function IssueList() {
           </div>
         </>
       )}
+      </div>
+
+      {/* Beside the table on a wide screen; above it on a narrow one, where it would otherwise
+          sit below a whole page of rows. */}
+      {chart && (
+        <div className="order-first lg:order-none">
+          <ChartPanel
+            projectId={id}
+            filter={filter}
+            enabled={!catalogPending && !savedViews.holdQuery}
+            chart={chart}
+            onChange={setChart}
+            onClose={() => setChart(null)}
+            onPick={addCondition}
+            pickHint={cellHint}
+          />
+        </div>
+      )}
+      </div>
     </div>
   );
 }
