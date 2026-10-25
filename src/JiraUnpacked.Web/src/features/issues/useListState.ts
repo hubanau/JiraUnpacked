@@ -1,5 +1,6 @@
 import { startTransition, useCallback, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import type { ChartGroupBy } from '../../api/issues';
 import { parseFilterParam, toUrlJson, type EditorGroup } from './filterTree';
 
 export const DEFAULT_SORT = 'updatedAt';
@@ -11,6 +12,38 @@ export const DEFAULT_COLUMNS = [
 
 /** How many of this hook's own recent writes it recognises when the URL catches up with them. */
 const REMEMBERED_WRITES = 20;
+
+export type ChartMeasure = 'issues' | 'points';
+export type ChartType = 'bar' | 'donut' | 'table';
+
+/** The chart beside the list: what it groups by, what it measures, how it draws. */
+export interface ChartState {
+  groupBy: ChartGroupBy;
+  measure: ChartMeasure;
+  type: ChartType;
+}
+
+export const DEFAULT_CHART: ChartState = { groupBy: 'status', measure: 'issues', type: 'bar' };
+
+const CHART_GROUP_BYS: readonly ChartGroupBy[] = [
+  'status', 'statusCategory', 'issueType', 'priority', 'assignee', 'sprint', 'team',
+  'storyPoints', 'createdAt', 'updatedAt',
+];
+
+/**
+ * The chart's URL params. Deliberately NOT in LIST_PARAMS: a chart is how you look at a list,
+ * not part of it — saved views neither store nor compare it, and a link carrying only a chart
+ * still lets the default view open. Every write still goes through this hook's patch, so a chart
+ * write and a list write in the same tick cannot overwrite each other.
+ */
+function readChart(groupBy: string | null, measure: string | null, type: string | null): ChartState | null {
+  if (groupBy === null) return null;
+  return {
+    groupBy: CHART_GROUP_BYS.includes(groupBy as ChartGroupBy) ? groupBy as ChartGroupBy : DEFAULT_CHART.groupBy,
+    measure: measure === 'points' ? 'points' : 'issues',
+    type: type === 'donut' || type === 'table' ? type : 'bar',
+  };
+}
 
 /** Every URL param that is part of the list's view. A URL with none of them is a bare list. */
 export const LIST_PARAMS = ['filter', 'logic', 'sortBy', 'sortDesc', 'cols', 'view'] as const;
@@ -190,6 +223,21 @@ export function useListState() {
     cols: next.join(',') === DEFAULT_COLUMNS.join(',') ? null : next.join(','),
   }), [patch]);
 
+  const setChart = useCallback((next: ChartState | null) => patch(next === null
+    ? { chart: null, chartMeasure: null, chartType: null }
+    : {
+      chart: next.groupBy,
+      chartMeasure: next.measure === 'issues' ? null : next.measure,
+      chartType: next.type === 'bar' ? null : next.type,
+    }), [patch]);
+
+  // Kept by identity across renders that did not touch the chart's params, like `columns`.
+  const [chartParam, measureParam, typeParam] = [params.get('chart'), params.get('chartMeasure'), params.get('chartType')];
+  const chart = useMemo(
+    () => readChart(chartParam, measureParam, typeParam),
+    [chartParam, measureParam, typeParam],
+  );
+
   const columnsParam = params.get('cols');
   const columns = useMemo(
     () => columnsParam?.split(',').filter(Boolean) ?? DEFAULT_COLUMNS,
@@ -212,5 +260,9 @@ export function useListState() {
 
     setSort,
     setColumns,
+
+    /** The chart beside the list, or null when it is closed. */
+    chart,
+    setChart,
   };
 }

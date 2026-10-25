@@ -1,7 +1,7 @@
 import { renderHook, act } from '@testing-library/react';
 import { MemoryRouter, useNavigate, useSearchParams } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
-import { useListState, type ListParams } from './useListState';
+import { DEFAULT_CHART, useListState, type ListParams } from './useListState';
 import { emptyRoot, newId, type EditorGroup } from './filterTree';
 
 const wrap = (initial: string) =>
@@ -418,5 +418,65 @@ describe('useListState — fix round 1', () => {
     // duplicate entry, this Back would only land on the first (identical) applied entry instead.
     expect(result.current.state.viewId).toBeNull();
     expect(result.current.params.has('filter')).toBe(false);
+  });
+});
+
+describe('useListState — chart', () => {
+  it('is closed on a URL without chart=', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    expect(result.current.state.chart).toBeNull();
+  });
+
+  it('round-trips the chart, writing defaults as absent params', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => result.current.state.setChart(DEFAULT_CHART));
+    expect(result.current.params.toString()).toBe('chart=status');
+    expect(result.current.state.chart).toEqual(DEFAULT_CHART);
+
+    act(() => result.current.state.setChart({ groupBy: 'team', measure: 'points', type: 'donut' }));
+    expect(result.current.params.get('chart')).toBe('team');
+    expect(result.current.params.get('chartMeasure')).toBe('points');
+    expect(result.current.params.get('chartType')).toBe('donut');
+    expect(result.current.state.chart).toEqual({ groupBy: 'team', measure: 'points', type: 'donut' });
+
+    act(() => result.current.state.setChart(null));
+    expect(result.current.params.toString()).toBe('');
+  });
+
+  it('falls back to the defaults for values it does not know', () => {
+    const { result } = renderHook(useProbe, {
+      wrapper: wrap('/projects/p1/issues?chart=summary&chartMeasure=hours&chartType=radar'),
+    });
+
+    expect(result.current.state.chart).toEqual(DEFAULT_CHART);
+  });
+
+  it('keeps both a chart write and a filter write made in the same tick', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues') });
+
+    act(() => {
+      result.current.state.setChart({ ...DEFAULT_CHART, groupBy: 'team' });
+      result.current.state.setTree(ONE_ROW);
+    });
+
+    expect(result.current.params.get('chart')).toBe('team');
+    expect(result.current.params.has('filter')).toBe(true);
+  });
+
+  it('is not list state: a chart alone still lets a default view open', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues?chart=team') });
+
+    expect(result.current.state.hasListState).toBe(false);
+  });
+
+  it('survives opening a saved view', () => {
+    const { result } = renderHook(useProbe, { wrapper: wrap('/projects/p1/issues?chart=team&chartType=table') });
+
+    act(() => result.current.state.applyParams(
+      { filter: null, sortBy: 'createdAt', sortDesc: null, cols: null, view: 'v1' }, { replace: false }));
+
+    expect(result.current.state.chart).toEqual({ groupBy: 'team', measure: 'issues', type: 'table' });
   });
 });
