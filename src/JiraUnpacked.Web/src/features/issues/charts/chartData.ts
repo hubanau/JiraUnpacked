@@ -108,3 +108,18 @@ export function formatCompact(n: number): string {
   if (Math.abs(n) >= 1_000) return scaled(n / 1_000, 'K');
   return trim(n);
 }
+
+/** What every chart view takes. `pickHint` set = the filter is at a limit: clicks are off, the hint says why. */
+export interface ChartViewProps {
+  chart: IssueChart;
+  measure: ChartMeasure;
+  onPick: (key: string | null) => void;
+  pickHint?: string;
+}
+
+/** A measure's value as text: thousands separated, points to one decimal at most. */
+export const formatValue = (n: number): string => n.toLocaleString(undefined, { maximumFractionDigits: 1 });
+
+/** The chosen measure's total over every matched issue. */
+export const totalOf = (chart: IssueChart, measure: ChartMeasure): number =>
+  measure === 'points' ? chart.totalStoryPoints : chart.totalIssues;
