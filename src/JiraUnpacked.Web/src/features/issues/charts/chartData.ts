@@ -43,15 +43,18 @@ export interface ChartSlice {
 }
 
 export const OTHER_LABEL = 'Other';
+/** A timeline's folded part is its oldest months: "Other" would not say which ones. */
+export const EARLIER_LABEL = 'Earlier';
 
-const otherSlice = (value: number): ChartSlice => ({ key: null, label: OTHER_LABEL, value, group: null });
+const otherSlice = (value: number, label = OTHER_LABEL): ChartSlice => ({ key: null, label, value, group: null });
 
 /**
  * At most `n` ranked groups plus one Other holding the rest and anything the server already left
  * out (so the slices always add up to the total). A timeline is not ranked: it keeps its order
- * and every month up to 3n, folding only its oldest part into a leading Other beyond that.
+ * and its newest `timelineCap` keys, folding the oldest part into a leading slice — "Earlier"
+ * for months. Bars can show a long timeline (3n); a donut has a colour for only n slices.
  */
-export function topN(chart: IssueChart, measure: ChartMeasure, n: number): ChartSlice[] {
+export function topN(chart: IssueChart, measure: ChartMeasure, n: number, timelineCap = n * 3): ChartSlice[] {
   const toSlice = (group: ChartGroup): ChartSlice => ({
     key: group.key, label: groupLabel(chart.groupBy, group.key), value: measureOf(group, measure), group,
   });
@@ -59,11 +62,11 @@ export function topN(chart: IssueChart, measure: ChartMeasure, n: number): Chart
   const sum = (groups: ChartGroup[]) => groups.reduce((total, g) => total + measureOf(g, measure), 0);
 
   if (isKeyOrdered(chart.groupBy)) {
-    const cap = n * 3;
-    const cut = Math.max(0, chart.groups.length - cap);
+    const cut = Math.max(0, chart.groups.length - timelineCap);
     const rest = sum(chart.groups.slice(0, cut)) + serverOther;
     const shown = chart.groups.slice(cut).map(toSlice);
-    return rest > 0 ? [otherSlice(rest), ...shown] : shown;
+    const label = chart.groupBy === 'storyPoints' ? OTHER_LABEL : EARLIER_LABEL;
+    return rest > 0 ? [otherSlice(rest, label), ...shown] : shown;
   }
 
   const sorted = sortGroups(chart.groups, chart.groupBy, measure);

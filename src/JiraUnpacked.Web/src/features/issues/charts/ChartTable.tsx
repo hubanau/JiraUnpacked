@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import type { ChartGroup } from '../../../api/issues';
 import { Table, TBody, TD, TH, THead, TR } from '../../../ui';
-import { formatValue, groupLabel, measureOf, sortGroups, totalOf, type ChartViewProps } from './chartData';
+import {
+  formatValue, groupLabel, isKeyOrdered, measureOf, sortGroups, totalOf, type ChartViewProps,
+} from './chartData';
 
 type Column = 'value' | 'issues' | 'points' | 'share';
 
@@ -24,9 +26,15 @@ export function ChartTable({ chart, measure, onPick, pickHint }: ChartViewProps)
   const label = (g: ChartGroup) => groupLabel(chart.groupBy, g.key);
 
   let rows = sortGroups(chart.groups, chart.groupBy, measure);
+  // A month or a number sorts by what it means ("Jan" before "Apr", 8 before 10): the server's
+  // own key order, which is exactly that. A name sorts as text.
+  const position = new Map(chart.groups.map((g, i) => [g, i]));
+  const byValue = isKeyOrdered(chart.groupBy)
+    ? (a: ChartGroup, b: ChartGroup) => position.get(a)! - position.get(b)!
+    : (a: ChartGroup, b: ChartGroup) => label(a).localeCompare(label(b));
   if (sort) {
     const by: Record<Column, (a: ChartGroup, b: ChartGroup) => number> = {
-      value: (a, b) => label(a).localeCompare(label(b)),
+      value: byValue,
       issues: (a, b) => a.issues - b.issues,
       points: (a, b) => a.storyPoints - b.storyPoints,
       share: (a, b) => measureOf(a, measure) - measureOf(b, measure),

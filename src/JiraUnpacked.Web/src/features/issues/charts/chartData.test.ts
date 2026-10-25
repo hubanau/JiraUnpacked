@@ -70,9 +70,27 @@ describe('topN', () => {
     const slices = topN(chartOf(months, { groupBy: 'createdAt' }), 'issues', 10);
 
     expect(slices).toHaveLength(31);
-    expect(slices[0]).toMatchObject({ label: 'Other', value: 2 });
+    expect(slices[0]).toMatchObject({ label: 'Earlier', value: 2, group: null });
     expect(slices[1].key).toBe('2024-03');
     expect(slices[30].key).toBe('2026-08');
+  });
+});
+
+describe('topN — a short timeline', () => {
+  it('keeps only the newest months when told to, folding the rest into Earlier', () => {
+    const months = Array.from({ length: 12 }, (_, i) => g(`2026-${String(i + 1).padStart(2, '0')}`, i + 1, 0));
+    const slices = topN(chartOf(months, { groupBy: 'createdAt' }), 'issues', 8, 8);
+
+    expect(slices.map((s) => s.label)).toEqual([
+      'Earlier', 'May 2026', 'Jun 2026', 'Jul 2026', 'Aug 2026', 'Sep 2026', 'Oct 2026', 'Nov 2026', 'Dec 2026',
+    ]);
+    expect(slices[0].value).toBe(1 + 2 + 3 + 4);
+  });
+
+  it('calls the folded part of a Points scale Other, not Earlier', () => {
+    const points = Array.from({ length: 4 }, (_, i) => g(String(i + 1), 1, i + 1));
+
+    expect(topN(chartOf(points, { groupBy: 'storyPoints' }), 'issues', 2, 2)[0].label).toBe('Other');
   });
 });
 

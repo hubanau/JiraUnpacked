@@ -49,6 +49,26 @@ describe('ChartBars', () => {
   });
 });
 
+const months: IssueChart = {
+  ...chartFixture,
+  groupBy: 'createdAt',
+  groups: Array.from({ length: 12 }, (_, i): ChartGroup => ({
+    key: `2026-${String(i + 1).padStart(2, '0')}`, issues: 10 + i, storyPoints: 0,
+  })),
+};
+
+describe('ChartBars — scale', () => {
+  it('draws no bar for Other, so a large Other cannot flatten the real values', () => {
+    const big: IssueChart = { ...months, truncated: true, other: { groups: 50, issues: 5000, storyPoints: 0 } };
+    render(<ChartBars chart={big} measure="issues" onPick={vi.fn()} />);
+
+    expect(screen.getAllByTestId('bar')).toHaveLength(12);
+    expect(screen.getByText('Earlier')).toBeInTheDocument();
+    expect(screen.getByText('5,000')).toBeInTheDocument();
+    expect(screen.getAllByTestId('bar').at(-1)).toHaveStyle({ width: '100%' });
+  });
+});
+
 describe('ChartDonut', () => {
   it('puts the total and the measure in the centre', () => {
     render(<ChartDonut chart={chartFixture} measure="issues" onPick={vi.fn()} />);
@@ -68,6 +88,28 @@ describe('ChartDonut', () => {
 
     await userEvent.click(within(legend).getByRole('button', { name: /^Filter to team0/ }));
     expect(onPick).toHaveBeenCalledWith('team0');
+  });
+
+  it('gives a long timeline at most 8 coloured slices, the oldest folded into Earlier', () => {
+    render(<ChartDonut chart={months} measure="issues" onPick={vi.fn()} />);
+
+    const items = within(screen.getByRole('list', { name: 'Legend' })).getAllByRole('listitem');
+    expect(items).toHaveLength(9);
+    expect(items[0]).toHaveTextContent('Earlier');
+    const swatches = items.map((li) => (li.querySelector('[aria-hidden="true"]') as HTMLElement).style.background);
+    expect(swatches).toEqual([
+      'var(--ju-chart-other)',
+      ...Array.from({ length: 8 }, (_, i) => `var(--ju-chart-${i + 1})`),
+    ]);
+  });
+
+  it('colours values by their position among values: (Empty) does not use up a colour', () => {
+    const emptyFirst: IssueChart = { ...chartFixture, groups: [{ key: null, issues: 9, storyPoints: 0 }, ...chartFixture.groups.slice(0, 2)] };
+    render(<ChartDonut chart={emptyFirst} measure="issues" onPick={vi.fn()} />);
+
+    const swatches = within(screen.getByRole('list', { name: 'Legend' })).getAllByRole('listitem')
+      .map((li) => (li.querySelector('[aria-hidden="true"]') as HTMLElement).style.background);
+    expect(swatches).toEqual(['var(--ju-chart-other)', 'var(--ju-chart-1)', 'var(--ju-chart-2)']);
   });
 
   it('shows points in the centre for the points measure', () => {
@@ -98,6 +140,15 @@ describe('ChartTable', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Sort by Story points' }));
     expect(firstValue()).not.toBe('In Progress');
+  });
+
+  it('sorts a timeline by Value in time order, not alphabetically', async () => {
+    render(<ChartTable chart={months} measure="issues" onPick={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Sort by Value' }));
+
+    const values = screen.getAllByRole('row').slice(1).map((r) => within(r).getAllByRole('cell')[0].textContent);
+    expect(values.slice(0, 3)).toEqual(['Jan 2026', 'Feb 2026', 'Mar 2026']);
   });
 
   it('adds an Other row for groups the server left out', () => {

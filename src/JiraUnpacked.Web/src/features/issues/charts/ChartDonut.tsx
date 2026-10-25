@@ -26,9 +26,16 @@ function segment(a0: number, a1: number): string {
   return `M${x0} ${y0} A${OUTER} ${OUTER} 0 ${large} 1 ${x1} ${y1} L${x2} ${y2} A${INNER} ${INNER} 0 ${large} 0 ${x3} ${y3} Z`;
 }
 
-/** Categorical slots in fixed order; Other and (Empty) are not values of their own, so grey. */
-const colorOf = (s: ChartSlice, index: number) =>
-  s.group && s.key !== null ? `var(--ju-chart-${index + 1})` : 'var(--ju-chart-other)';
+const isValue = (s: ChartSlice) => s.group !== null && s.key !== null;
+
+/**
+ * Categorical slots in fixed order, counted among the VALUES only: Other, Earlier and (Empty) are
+ * grey and use up no slot, so at most SLICES values ever ask for one of the eight colours.
+ */
+function colorsOf(slices: ChartSlice[]): string[] {
+  let slot = 0;
+  return slices.map((s) => (isValue(s) ? `var(--ju-chart-${++slot})` : 'var(--ju-chart-other)'));
+}
 
 const keyOf = (s: ChartSlice) => (s.group ? `g:${s.key}` : 'other');
 
@@ -38,7 +45,9 @@ const keyOf = (s: ChartSlice) => (s.group ? `g:${s.key}` : 'other');
  * SVG is a picture of the same numbers.
  */
 export function ChartDonut({ chart, measure, onPick, pickHint }: ChartViewProps) {
-  const slices = topN(chart, measure, SLICES);
+  // A timeline keeps its newest SLICES months: past eight there is no colour left to give.
+  const slices = topN(chart, measure, SLICES, SLICES);
+  const colors = colorsOf(slices);
   const total = totalOf(chart, measure);
   const word = measure === 'points' ? 'Points' : 'Issues';
 
@@ -68,7 +77,7 @@ export function ChartDonut({ chart, measure, onPick, pickHint }: ChartViewProps)
           const [lx, ly] = point((OUTER + INNER) / 2, (a0 + a1) / 2);
           return (
             <g key={keyOf(s)} aria-hidden="true">
-              <path d={segment(a0, a1)} fill={colorOf(s, i)} stroke="var(--ju-surface)" strokeWidth={2}>
+              <path d={segment(a0, a1)} fill={colors[i]} stroke="var(--ju-surface)" strokeWidth={2}>
                 <title>{`${s.label}: ${formatValue(s.value)} (${pct(share)})`}</title>
               </path>
               {share >= LABEL_MIN_SHARE && (
@@ -95,7 +104,7 @@ export function ChartDonut({ chart, measure, onPick, pickHint }: ChartViewProps)
         {arcs.map(({ s, i, share }) => {
           const content = (
             <>
-              <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: colorOf(s, i) }} aria-hidden="true" />
+              <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: colors[i] }} aria-hidden="true" />
               <span className="flex-1 truncate text-left">{s.label}</span>
               <span className="tabular-nums">{formatValue(s.value)}</span>
               <span className="w-10 text-right tabular-nums text-[var(--ju-muted)]">{pct(share)}</span>

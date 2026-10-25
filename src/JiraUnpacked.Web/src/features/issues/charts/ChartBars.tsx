@@ -5,25 +5,26 @@ import { formatValue, topN, type ChartSlice, type ChartViewProps } from './chart
 const BARS = 10;
 
 /**
- * Horizontal bars, largest first (a timeline in its own order). One series, so one colour; Other
- * is grey and, not being a value, not clickable. The number beside each bar carries the value —
- * the bar itself is decorative, as in BarRow.
+ * Horizontal bars, largest first (a timeline in its own order). One series, so one colour. Other
+ * is not a value: it is not clickable and draws no bar — it is often larger than every value
+ * (all the months before the last 30, say), and scaling to it would flatten the bars that matter.
+ * The number beside each bar carries the value; the bar itself is decorative, as in BarRow.
  */
 export function ChartBars({ chart, measure, onPick, pickHint }: ChartViewProps) {
   const slices = topN(chart, measure, BARS);
-  const max = Math.max(0, ...slices.map((s) => s.value));
+  const max = Math.max(0, ...slices.filter((s) => s.group).map((s) => s.value));
 
   const row = (s: ChartSlice) => (
     <>
       <span className="w-32 shrink-0 truncate text-left text-sm">{s.label}</span>
       <span className="h-3 flex-1" aria-hidden="true">
-        <span
-          className="block h-3 rounded-r"
-          style={{
-            width: `${barPercent(s.value, max)}%`,
-            background: s.group ? 'var(--ju-chart-1)' : 'var(--ju-chart-other)',
-          }}
-        />
+        {s.group && (
+          <span
+            data-testid="bar"
+            className="block h-3 rounded-r"
+            style={{ width: `${barPercent(s.value, max)}%`, background: 'var(--ju-chart-1)' }}
+          />
+        )}
       </span>
       <span className="w-16 shrink-0 text-right text-sm tabular-nums">{formatValue(s.value)}</span>
     </>
