@@ -269,6 +269,45 @@ export interface JqlResult {
 export const getIssueJql = (projectId: string, request: JqlRequest) =>
   apiFetch<JqlResult>(`/api/projects/${projectId}/issues/jql`, { method: 'POST', body: request });
 
+/** The fields a chart can group by: the dictionary fields, Points (each value) and the two dates (by UTC month). */
+export type ChartGroupBy =
+  | 'status' | 'statusCategory' | 'issueType' | 'priority' | 'assignee' | 'sprint' | 'team'
+  | 'storyPoints' | 'createdAt' | 'updatedAt';
+
+/**
+ * One value and the filtered issues carrying it. `key` is the name (a number as text for Points,
+ * "yyyy-MM" for a month); null is the (Empty) group. Issues without points add 0 to `storyPoints`.
+ */
+export interface ChartGroup {
+  key: string | null;
+  issues: number;
+  storyPoints: number;
+}
+
+/**
+ * The list's filtered issues grouped by one field. Both measures come back for every group, so
+ * switching between them never refetches. When `truncated`, `other` sums the groups left out.
+ */
+export interface IssueChart {
+  groupBy: ChartGroupBy;
+  totalIssues: number;
+  totalStoryPoints: number;
+  issuesWithoutPoints: number;
+  groups: ChartGroup[];
+  truncated: boolean;
+  other: { groups: number; issues: number; storyPoints: number } | null;
+}
+
+/** What POST /issues/chart takes: the list's pruned filter (absent = none) and the field to group by. */
+export interface IssueChartRequest {
+  filter?: FilterGroup;
+  groupBy: ChartGroupBy;
+}
+
+/** The same 404s and 400s as the issue query, plus a 400 for a field that cannot be charted. */
+export const getIssueChart = (projectId: string, request: IssueChartRequest) =>
+  apiFetch<IssueChart>(`/api/projects/${projectId}/issues/chart`, { method: 'POST', body: request });
+
 export interface ExportView {
   /** The pruned tree the list was queried with; undefined = no filter. */
   filter?: FilterGroup;

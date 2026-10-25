@@ -43,6 +43,21 @@
   --ju-radius-sm: 6px;
   --ju-radius: 8px;
   --ju-radius-lg: 12px;
+
+  /* Chart categories, in this fixed order — the order is what keeps neighbouring slices apart
+     for colour-blind readers (validated light on #ffffff and dark on #121a2a). Assigned by
+     position, never cycled: a ninth value folds into Other. Three light steps sit under 3:1 on
+     white, so a chart using them always shows its values as text (legend or table). */
+  --ju-chart-1: #2a78d6;
+  --ju-chart-2: #eb6834;
+  --ju-chart-3: #1baf7a;
+  --ju-chart-4: #eda100;
+  --ju-chart-5: #e87ba4;
+  --ju-chart-6: #008300;
+  --ju-chart-7: #6250d6;
+  --ju-chart-8: #e34948;
+  /* Other and (Empty): not a value of their own, so not a hue of their own. */
+  --ju-chart-other: #a8b1bf;
 }
 
 .dark {
@@ -68,6 +83,17 @@
   --ju-success-soft: #10251a;
   --ju-warning: #fbbf24;
   --ju-warning-soft: #2a2110;
+
+  /* The same eight hues, stepped for the dark surface (all >= 3:1 on it). */
+  --ju-chart-1: #3987e5;
+  --ju-chart-2: #d95926;
+  --ju-chart-3: #199e70;
+  --ju-chart-4: #c98500;
+  --ju-chart-5: #d55181;
+  --ju-chart-6: #008300;
+  --ju-chart-7: #9085e9;
+  --ju-chart-8: #e66767;
+  --ju-chart-other: #5b6578;
 
   /* Shadows do almost nothing on a dark page — borders carry the separation. */
   --ju-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
