@@ -107,6 +107,7 @@ public static class DependencyInjection
         services.AddScoped<IDerivationService, DerivationService>();
         services.AddScoped<IIssueQueryService, IssueQueryService>();
         services.AddScoped<IFilterValueService, FilterValueService>();
+        services.AddScoped<IIssueChartService, IssueChartService>();
         services.AddScoped<IHistoryValueService, HistoryValueService>();
         services.AddScoped<IIssueJqlService, JiraUnpacked.Infrastructure.Reporting.Jql.IssueJqlService>();
         services.AddScoped<JiraUnpacked.Infrastructure.Reporting.Jql.JqlTranslator>();
