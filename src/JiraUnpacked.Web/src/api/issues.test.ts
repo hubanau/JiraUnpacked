@@ -1,7 +1,8 @@
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../test/setup';
-import { getHistoryValues, getIssueDetail, queryIssues } from './issues';
+import { getHistoryValues, getIssueChart, getIssueDetail, queryIssues } from './issues';
+import { chartFixture } from '../test/chartFixture';
 import { queryKeys } from './queryKeys';
 
 const emptyPage = { items: [], page: 1, pageSize: 50, totalCount: 0 };
@@ -86,5 +87,30 @@ describe('issue query keys', () => {
 
   it('nests the detail key under the project', () => {
     expect(queryKeys.issueDetail('p1', 'i1')).toEqual(['projects', 'p1', 'issues', 'i1']);
+  });
+});
+
+describe('getIssueChart', () => {
+  it('POSTs the filter and groupBy to the chart endpoint', async () => {
+    let body: unknown = null;
+    server.use(http.post('/api/projects/p1/issues/chart', async ({ request }) => {
+      body = await request.json();
+      return HttpResponse.json(chartFixture);
+    }));
+
+    const chart = await getIssueChart('p1', {
+      filter: { logic: 'And', conditions: [{ field: 'status', op: 'Eq', value: 'Done' }] }, groupBy: 'team',
+    });
+
+    expect(body).toEqual({
+      filter: { logic: 'And', conditions: [{ field: 'status', op: 'Eq', value: 'Done' }] }, groupBy: 'team',
+    });
+    expect(chart.totalIssues).toBe(11);
+  });
+
+  it('keys a chart by project, filter and groupBy', () => {
+    expect(queryKeys.issueChart('p1', { groupBy: 'team' }))
+      .not.toEqual(queryKeys.issueChart('p1', { groupBy: 'status' }));
+    expect(queryKeys.issueChart('p1', { groupBy: 'team' })[2]).toBe('chart');
   });
 });
