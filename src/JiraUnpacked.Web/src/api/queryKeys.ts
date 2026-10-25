@@ -21,6 +21,10 @@ export const queryKeys = {
   // different cache entry rather than silently reusing the previous results.
   issues: (projectId: string, request: unknown) =>
     ['projects', projectId, 'issues', JSON.stringify(request ?? {})] as const,
+  // Its own segment, not under 'issues': nothing that refreshes the list should drop it, and its
+  // request (filter + sort) is part of the key, so one filter's JQL never answers for another.
+  issueJql: (projectId: string, request: unknown) =>
+    ['projects', projectId, 'jql', JSON.stringify(request ?? {})] as const,
   issueDetail: (projectId: string, jiraIssueId: string) =>
     ['projects', projectId, 'issues', jiraIssueId] as const,
   storyCounts: (projectId: string) => ['projects', projectId, 'metrics', 'story-counts'] as const,

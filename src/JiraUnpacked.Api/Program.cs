@@ -131,10 +131,17 @@ JiraUnpacked.Api.Security.ProductionConfigGate.ThrowIfInvalid(
     builder.Configuration.GetConnectionString("Default"),
     builder.Configuration.GetConnectionString("Reader"));
 
-// Seed configured Admin accounts before serving requests (idempotent; FR-A3).
+// Seed configured Admin accounts before serving requests (idempotent; FR-A3). The first query
+// of the process, so it is the one that waits out a database still coming up. A scope per
+// attempt, so a retry never inherits entities a failed attempt left tracked.
+await JiraUnpacked.Api.StartupDatabaseRetry.RunAsync(async () =>
+{
+    using var seedScope = app.Services.CreateScope();
+    await seedScope.ServiceProvider.GetRequiredService<AdminSeeder>().SeedAsync();
+}, app.Logger);
+
 using (var scope = app.Services.CreateScope())
 {
-    await scope.ServiceProvider.GetRequiredService<AdminSeeder>().SeedAsync();
 
     // Rewrite any Jira token still in the pre-envelope format. Idempotent, and a no-op after
     // the first run. Deliberately non-fatal: failing to re-wrap a token is not a reason to

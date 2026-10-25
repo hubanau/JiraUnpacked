@@ -52,8 +52,8 @@ public sealed partial class IssueFilterTranslator
 
     private static readonly Regex DateOnlyShape = new(@"^\d{4}-\d{2}-\d{2}\z", RegexOptions.CultureInvariant);
 
-    /// <summary>An ISO-8601 date or timestamp, read as UTC like every other date here.</summary>
-    private static bool TryReadDate(JsonElement v, out DateTime value, out bool dateOnly)
+    /// <summary>An ISO-8601 date or timestamp, read as UTC like every other date here. Internal: the JQL translator reads dates through it, so the two cannot drift.</summary>
+    internal static bool TryReadDate(JsonElement v, out DateTime value, out bool dateOnly)
     {
         value = default; dateOnly = false;
         if (v.ValueKind != JsonValueKind.String) return false;
@@ -80,7 +80,7 @@ public sealed partial class IssueFilterTranslator
     /// [from, to] as ISO-8601 dates or timestamps (UTC), either absent. A date-only `to` means
     /// "through that day" (DateRangeTest adds the day); `from` after the effective end is refused.
     /// </summary>
-    private static string? ReadDateRange(
+    internal static string? ReadDateRange(
         JsonElement? fromEl, JsonElement? toEl, string what, string where,
         out DateTime? from, out DateTime? to, out bool toDateOnly)
     {
