@@ -17,14 +17,17 @@ public sealed class IssuesController : ControllerBase
     private readonly IFilterValueService _filterValues;
     private readonly IHistoryValueService _history;
     private readonly IIssueJqlService _jql;
+    private readonly IIssueChartService _chart;
 
     public IssuesController(
-        IIssueQueryService issues, IFilterValueService filterValues, IHistoryValueService history, IIssueJqlService jql)
+        IIssueQueryService issues, IFilterValueService filterValues, IHistoryValueService history,
+        IIssueJqlService jql, IIssueChartService chart)
     {
         _issues = issues;
         _filterValues = filterValues;
         _history = history;
         _jql = jql;
+        _chart = chart;
     }
 
     [HttpGet("api/projects/{projectId:guid}/issues")]
@@ -62,6 +65,20 @@ public sealed class IssuesController : ControllerBase
         if (result.Error is not null)
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: result.Error);
         return result.View is null ? NotFound() : Ok(result.View);
+    }
+
+    /// <summary>
+    /// The list's filtered issues grouped by one field, with counts and story points per group —
+    /// the list's chart. The same 404s and 400s as the query: the filter is checked by the same
+    /// compiler, and an unchartable field is a 400 naming the ones that can be charted.
+    /// </summary>
+    [HttpPost("api/projects/{projectId:guid}/issues/chart")]
+    public async Task<IActionResult> Chart(Guid projectId, IssueChartRequest request, CancellationToken ct = default)
+    {
+        var result = await _chart.BuildAsync(projectId, request, ct);
+        if (result.Error is not null)
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: result.Error);
+        return result.Chart is null ? NotFound() : Ok(result.Chart);
     }
 
     /// <summary>

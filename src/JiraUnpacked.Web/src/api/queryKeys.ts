@@ -25,6 +25,9 @@ export const queryKeys = {
   // request (filter + sort) is part of the key, so one filter's JQL never answers for another.
   issueJql: (projectId: string, request: unknown) =>
     ['projects', projectId, 'jql', JSON.stringify(request ?? {})] as const,
+  // Its own segment, like issueJql. No measure in it: the response carries both.
+  issueChart: (projectId: string, request: unknown) =>
+    ['projects', projectId, 'chart', JSON.stringify(request ?? {})] as const,
   issueDetail: (projectId: string, jiraIssueId: string) =>
     ['projects', projectId, 'issues', jiraIssueId] as const,
   storyCounts: (projectId: string) => ['projects', projectId, 'metrics', 'story-counts'] as const,
