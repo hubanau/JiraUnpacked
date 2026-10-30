@@ -148,8 +148,8 @@ path stays a JSON 404 rather than becoming HTML with a 200.
 | Connections | `POST`, `GET` (list and one), `PATCH {id}` (rotate the API token, optionally the email), `DELETE {id}`, plus live Jira reads for fields, projects and statuses |
 | Projects | `POST connections/{id}/projects`, `GET` (per connection and one), `PATCH {id}` (`syncIntervalMinutes` and/or `syncPaused`), `DELETE {id}`; field mappings, status semantics, issue-type classes, queries |
 | Sync | `POST sync · rederive`, `GET sync-runs` |
-| Issues | `GET issues`, `GET issues/{id}`, `POST issues/query` (the filter builder) |
-| Filters | `GET filter-catalog`, and saved per-project filters (CRUD) |
+| Issues | `GET issues`, `GET issues/{id}`, `POST issues/query` (the filter builder), `GET issues/export.csv`, `POST issues/jql` (the filter as JQL + an Open-in-Jira link), `POST issues/chart` (the filtered issues grouped by one field) |
+| Filters | `GET filter-catalog`, `GET filter-values` and `history-fields` / `history-values` (the pickers' value lists, with counts), and saved per-project views (CRUD) |
 | Reports | four metrics and the gap-checks, each with a `GET` (whole project) and a `POST` that takes a filter |
 
 **Deleting** a connection removes its projects, everything synced for them and the connection's
@@ -180,6 +180,33 @@ within 60 seconds of the last code.
 A rejected **Jira** credential is **502**, never 401 — 401 means only that your own session
 ended. Filter input never reaches a SQL string: it is compiled to an expression tree over a
 closed field catalog, with values as constants and `ILIKE` wildcards escaped.
+
+## The issue list
+
+Everything on the list is one filter, and everything about the view lives in the URL — a filtered,
+sorted, charted list is a link you can share, and it survives reload and Back.
+
+- **Filter builder.** Conditions on status, category, type, priority, assignee, sprint, team,
+  points, parent, summary, key and dates, combined in **All/Any groups up to three levels deep**.
+  Pickers list the values this project actually has, with counts and an explicit **(Empty)**.
+  `is not` / `none of` never match an empty field. Dates take fixed ranges, **in the last N
+  hours/days/weeks/months** and named periods (this week, last quarter… in a chosen time zone);
+  sprints take **smart values** (active, future, open, closed). Parts can be switched off without
+  deleting them.
+- **History conditions** over the changelog: a field **was** a value, **changed** (from / to / by
+  / during), or changed **N times**.
+- **Readable.** A one-sentence summary of the filter sits above the builder, which collapses.
+  **Copy JQL** / **Open in Jira** translate the filter to JQL and list every way the JQL differs
+  (parts JQL cannot express are named, never silently dropped). The ⋯ on a table cell filters to
+  or excludes that value.
+- **Saved views** store filter, columns and sort per project; one can be the **default** that
+  opens on a bare URL. **Export CSV** downloads the current view (up to 50,000 rows).
+- **Chart.** The Chart button opens a panel beside the table: group the filtered issues by status,
+  category, type, priority, assignee, sprint, team, points or created/updated **month** (UTC),
+  measure **issues or story points**, and draw a **bar** chart (top 10 + Other), a **donut**
+  (top 8 + Other, total in the centre) or a **table** of every value. The chart always describes
+  exactly the issues the list matches, and clicking a bar, slice or row narrows the list to it.
+  The chart is part of the URL but not of saved views.
 
 ## How a sync behaves
 
@@ -265,7 +292,10 @@ docker compose exec postgres pg_dump -U jiraunpacked jiraunpacked > backup.sql
 ```
 
 **Upgrading** is `git pull && docker compose up -d --build`. Migrations run automatically, as
-the owner role, before the new app starts.
+the owner role, before the new app starts. A sync runs *inside* the api container, so a redeploy
+kills any sync in progress — check first that none is `Running` (the project page shows it), and
+save `docker logs jiraunpacked-api` to a file if a recent failure is still unexplained: recreating
+the container discards its log.
 
 ## Project board
 
